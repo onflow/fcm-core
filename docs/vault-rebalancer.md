@@ -7,11 +7,12 @@ A Cadence resource that pokes a single Solidity function on an interval via [`Fl
 
 ## What we require from the EVM contract
 
-- **The maintenance function (`rebalance()` or equivalent) is idempotent and self-guarding** — it inspects vault state and either acts or no-ops.
+- **`rebalance()` is idempotent and self-guarding** — it inspects vault state and either acts or no-ops.
 - **Internal errors revert the EVM transaction cleanly.** `coa.call` surfaces them as `EVM.Result`, not a Cadence panic.
-- **Solvency does not depend on the rebalancer firing.** Insolvency-critical actions take permissionless paths: emergency deleverage triggers above a hard-LTV ceiling, and liquidations are Morpho-driven and external. If a future change makes solvency depend on tick liveness, the Medium-priority choice and the no-supervisor decision must be revisited.
+- **The COA's EVM-side authority is narrow** — restricted to invoking `rebalance()` only (no admin or fund-movement entrypoints). This bounds the blast radius of an admin-compromised Config rewrite to liveness impact.
+- **Solvency does not depend on the rebalancer firing.** Insolvency-critical actions take permissionless paths: emergency deleverage triggers above a hard-LTV ceiling, and liquidations are Morpho-driven and external. If a future change makes solvency depend on tick liveness, the Medium-priority choice must be revisited.
 
-## Rebalancer resource
+## Design
 
 One Cadence resource, owned by an admin account.
 
@@ -28,14 +29,13 @@ One Cadence resource, owned by an admin account.
 
 | Failure | Observable | Recovery |
 | :--- | :--- | :--- |
-| EVM call fails, transient (slippage, momentary state, out-of-gas) | Event with EVM error code | Next tick retries automatically; persistent OOG requires operator to raise EVM `gasLimit` via `Configure` |
-| EVM call reverts, sustained (role revoked EVM-side, persistent Solidity-side condition) | Event repeats N ticks in a row | Operator addresses EVM-side condition (restore role, resolve Solidity state) |
+| EVM call fails, transient (slippage, momentary state, out-of-gas) | Event with EVM error code | Next tick retries automatically; persistent OOG requires admin to raise EVM `gasLimit` via `Configure` |
+| EVM call fails, sustained (role revoked EVM-side, persistent Solidity-side condition) | Event repeats N ticks in a row | Admin addresses EVM-side condition (restore role, resolve Solidity state) |
 | Fee vault depletion (Cadence scheduling fees) | Per-tick fee-balance in event; absence of scheduled events triggers alert | Admin tops up; signs tx to re-invoke self-reschedule |
 | COA FLOW depletion (EVM-side gas) | Per-tick COA balance in event; EVM calls fail with insufficient-balance error | Admin tops up the COA |
-| Cadence-side OOE (effort margin too tight) | Absence of expected events for the scheduled tx; rebalancer stops ticking | Operator re-invokes self-reschedule; retune effort margin if recurring |
-| COA capability stale / revoked / backing-resource swapped | Absence of EVM-side execution | Operator redeploys |
+| Cadence-side OOE (effort margin too tight) | Absence of expected events for the scheduled tx; rebalancer stops ticking | Admin re-invokes self-reschedule; retune effort margin if recurring |
 
-Each row degrades liveness only; admin-gated recovery restores ticking. Off-chain monitoring of tick freshness, fee-vault balance, and COA balance is a hard prerequisite.
+All failures are liveness-only (no solvency impact). Off-chain monitoring of tick freshness, per-tick EVM result status, fee-vault balance, and COA balance is required for reliable operation.
 
 ---
 
@@ -45,6 +45,6 @@ Possible evolutions of this design — none load-bearing for v0.2:
 
 - **Config hardening.** Multisig/timelock on the `Configure` entitlement, or partial-to-full immutability of Config; fully-immutable redeploy-only may require self-replenishing funding to be practical.
 - **Self-replenishing funding.** Fee top-ups sourced from a vault-level fee buffer or treasury sweep rather than admin out-of-band top-ups.
-- **Off-chain keeper backup.** A second caller of the EVM maintenance function.
+- **Off-chain keeper backup.** A second caller of `rebalance()`.
 
-If business logic ever moves to Cadence, the failure model fundamentally changes. The principle worth preserving: split scheduling and business logic into separate scheduled transactions, so a panic in the work doesn't take down the rescheduler. Onflow's [`FlowCron`](https://github.com/onflow/flow-cron) implements this pattern.
+If business logic ever moves to Cadence, the failure model fundamentally changes. The principle worth preserving: split scheduling and business logic into separate scheduled transactions, so a panic in the work doesn't take down the rescheduling loop.
