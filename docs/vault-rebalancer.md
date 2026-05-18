@@ -19,7 +19,7 @@ One Cadence resource, owned by an admin account.
 - Holds a `Capability<auth(EVM.Call) &EVM.CadenceOwnedAccount>` — the EVM caller identity used to invoke `rebalance()`.
 - Holds a `Config` value: target EVM address, calldata, EVM gas limit, scheduler priority, scheduled-tx execution effort, tick interval. Mutable via an admin-entitlement-gated `Configure` setter that replaces the whole Config.
 - On each tick: `coa.call(...)` against the EVM contract; emit one event for the EVM-side outcome; self-reschedule via `FlowTransactionScheduler.schedule(...)` with the same parameters.
-- Self-rescheduling failures (insufficient FLOW, capability invalid) emit a typed event and exit. The self-reschedule entry point is gated by an admin-held entitlement; no public scheduling surface is exposed.
+- Self-rescheduling failures (insufficient FLOW, invalid capability) emit an event and halt the loop. The restart entry point is permissionless and idempotent — anyone can resume scheduling once the underlying condition is resolved.
 
 **Scheduler priority.** The rebalancer uses Medium: it defers under slot contention but never rejects at submission. The tick interval is sized to absorb worst-case deferral.
 
