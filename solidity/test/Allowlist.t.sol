@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Allowlist} from "../src/access/Allowlist.sol";
 import {IAllowlist} from "../src/access/IAllowlist.sol";
 
@@ -136,5 +137,63 @@ contract AllowlistTest is Test {
         vm.expectRevert(Allowlist.ZeroAddress.selector);
         vm.prank(owner);
         allowlist.allowBatch(batch);
+    }
+
+    function test_OnlyOwnerCanAllow() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker)
+        );
+        vm.prank(attacker);
+        allowlist.allow(alice);
+    }
+
+    function test_OnlyOwnerCanDisallow() public {
+        vm.prank(owner);
+        allowlist.allow(alice);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker)
+        );
+        vm.prank(attacker);
+        allowlist.disallow(alice);
+    }
+
+    function test_OnlyOwnerCanAllowBatch() public {
+        address[] memory batch = new address[](1);
+        batch[0] = alice;
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker)
+        );
+        vm.prank(attacker);
+        allowlist.allowBatch(batch);
+    }
+
+    function test_OnlyOwnerCanDisallowBatch() public {
+        address[] memory batch = new address[](1);
+        batch[0] = alice;
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker)
+        );
+        vm.prank(attacker);
+        allowlist.disallowBatch(batch);
+    }
+
+    function test_TransferOwnershipMovesAdmin() public {
+        address newOwner = address(0xCAFE);
+
+        vm.prank(owner);
+        allowlist.transferOwnership(newOwner);
+
+        // Old owner can no longer admin.
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, owner));
+        vm.prank(owner);
+        allowlist.allow(alice);
+
+        // New owner can.
+        vm.prank(newOwner);
+        allowlist.allow(alice);
+        assertTrue(allowlist.isAllowed(alice));
     }
 }
