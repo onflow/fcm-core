@@ -69,4 +69,25 @@ contract AllowlistTest is Test {
         assertEq(logs.length, 0);
         assertFalse(allowlist.isAllowed(address(0)));
     }
+
+    function test_AllowIdempotent_NoEmitOnDuplicate() public {
+        vm.prank(owner);
+        allowlist.allow(alice);
+
+        vm.recordLogs();
+        vm.prank(owner);
+        allowlist.allow(alice); // already allowed
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 0);
+        assertTrue(allowlist.isAllowed(alice));
+    }
+
+    function test_DisallowIdempotent_NoEmitOnAbsent() public {
+        vm.recordLogs();
+        vm.prank(owner);
+        allowlist.disallow(alice); // never added
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 0);
+        assertFalse(allowlist.isAllowed(alice));
+    }
 }
