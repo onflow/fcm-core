@@ -22,4 +22,35 @@ contract AllowlistTest is Test {
         assertFalse(allowlist.isAllowed(alice));
         assertFalse(allowlist.isAllowed(address(0)));
     }
+
+    function test_AllowAddsToList() public {
+        vm.prank(owner);
+        allowlist.allow(alice);
+        assertTrue(allowlist.isAllowed(alice));
+    }
+
+    function test_AllowEmitsEvent() public {
+        vm.expectEmit(true, true, true, true, address(allowlist));
+        emit IAllowlist.AddressAllowed(alice);
+        vm.prank(owner);
+        allowlist.allow(alice);
+    }
+
+    function test_DisallowRemovesFromList() public {
+        vm.startPrank(owner);
+        allowlist.allow(alice);
+        allowlist.disallow(alice);
+        vm.stopPrank();
+        assertFalse(allowlist.isAllowed(alice));
+    }
+
+    function test_DisallowEmitsEvent() public {
+        vm.prank(owner);
+        allowlist.allow(alice);
+
+        vm.expectEmit(true, true, true, true, address(allowlist));
+        emit IAllowlist.AddressDisallowed(alice);
+        vm.prank(owner);
+        allowlist.disallow(alice);
+    }
 }

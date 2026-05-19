@@ -18,4 +18,26 @@ contract Allowlist is IAllowlist, Ownable {
     function isAllowed(address account) external view returns (bool) {
         return _allowed[account];
     }
+
+    function allow(address account) external onlyOwner {
+        _allow(account);
+    }
+
+    function disallow(address account) external onlyOwner {
+        _disallow(account);
+    }
+
+    function _allow(address account) internal {
+        if (!_allowed[account]) {
+            _allowed[account] = true;
+            emit AddressAllowed(account);
+        }
+    }
+
+    function _disallow(address account) internal {
+        if (_allowed[account]) {
+            _allowed[account] = false;
+            emit AddressDisallowed(account);
+        }
+    }
 }
