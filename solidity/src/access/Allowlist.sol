@@ -29,6 +29,18 @@ contract Allowlist is IAllowlist, Ownable {
         _disallow(account);
     }
 
+    function allowBatch(address[] calldata accounts) external onlyOwner {
+        for (uint256 i = 0; i < accounts.length; ++i) {
+            _allow(accounts[i]);
+        }
+    }
+
+    function disallowBatch(address[] calldata accounts) external onlyOwner {
+        for (uint256 i = 0; i < accounts.length; ++i) {
+            _disallow(accounts[i]);
+        }
+    }
+
     function _allow(address account) internal {
         if (account == address(0)) revert ZeroAddress();
         if (!_allowed[account]) {

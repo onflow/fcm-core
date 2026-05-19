@@ -90,4 +90,51 @@ contract AllowlistTest is Test {
         assertEq(logs.length, 0);
         assertFalse(allowlist.isAllowed(alice));
     }
+
+    function test_AllowBatch() public {
+        // Pre-seed one address so the batch contains a mix of new and existing.
+        vm.prank(owner);
+        allowlist.allow(alice);
+
+        address[] memory batch = new address[](3);
+        batch[0] = alice; // already allowed
+        batch[1] = bob;
+        batch[2] = carol;
+
+        vm.prank(owner);
+        allowlist.allowBatch(batch);
+
+        assertTrue(allowlist.isAllowed(alice));
+        assertTrue(allowlist.isAllowed(bob));
+        assertTrue(allowlist.isAllowed(carol));
+    }
+
+    function test_DisallowBatch() public {
+        vm.startPrank(owner);
+        allowlist.allow(alice);
+        allowlist.allow(bob);
+        vm.stopPrank();
+
+        address[] memory batch = new address[](3);
+        batch[0] = alice;
+        batch[1] = bob;
+        batch[2] = carol; // never added
+
+        vm.prank(owner);
+        allowlist.disallowBatch(batch);
+
+        assertFalse(allowlist.isAllowed(alice));
+        assertFalse(allowlist.isAllowed(bob));
+        assertFalse(allowlist.isAllowed(carol));
+    }
+
+    function test_AllowBatchRevertsOnZeroAddress() public {
+        address[] memory batch = new address[](2);
+        batch[0] = alice;
+        batch[1] = address(0);
+
+        vm.expectRevert(Allowlist.ZeroAddress.selector);
+        vm.prank(owner);
+        allowlist.allowBatch(batch);
+    }
 }
