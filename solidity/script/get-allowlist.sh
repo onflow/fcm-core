@@ -13,43 +13,50 @@
 set -euo pipefail
 
 DEFAULT_RPC_URL="https://mainnet.evm.nodes.onflow.org"
+DEFAULT_BLOCKSCOUT_URL="https://evm.flow.com"
 
 usage() {
     cat <<EOF
 Usage: get-allowlist.sh --address <allowlist> [options]
 
 Required:
-  --address <addr>      Allowlist contract address
+  --address <addr>          Allowlist contract address
 
 Options:
-  --rpc-url <url>       JSON-RPC endpoint (default: ${DEFAULT_RPC_URL})
-  --from-block <n>      Start block (default: contract deployment block)
-  --to-block <n>        End block (default: latest)
-  --json                Emit a JSON array (default: one address per line)
-  -h, --help            Show this help
+  --rpc-url <url>           JSON-RPC endpoint (default: ${DEFAULT_RPC_URL})
+  --blockscout-url <url>    Blockscout instance for fast deploy-block lookup
+                            (default: ${DEFAULT_BLOCKSCOUT_URL})
+                            Pass empty string to skip Blockscout and use RPC binary search.
+  --from-block <n>          Start block (default: contract deployment block)
+  --to-block <n>            End block (default: latest)
+  --json                    Emit a JSON array (default: one address per line)
+  -h, --help                Show this help
 
 Examples:
   get-allowlist.sh --address 0xABC...
   get-allowlist.sh --address 0xABC... --json
-  get-allowlist.sh --address 0xABC... --rpc-url https://testnet.evm.nodes.onflow.org
+  get-allowlist.sh --address 0xABC... --rpc-url https://testnet.evm.nodes.onflow.org \\
+                                       --blockscout-url ""
 EOF
 }
 
 ADDRESS=""
 RPC_URL="$DEFAULT_RPC_URL"
+BLOCKSCOUT_URL="$DEFAULT_BLOCKSCOUT_URL"
 FROM_BLOCK=""
 TO_BLOCK="latest"
 JSON_OUTPUT="false"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --address)    ADDRESS="$2";       shift 2 ;;
-        --rpc-url)    RPC_URL="$2";       shift 2 ;;
-        --from-block) FROM_BLOCK="$2";    shift 2 ;;
-        --to-block)   TO_BLOCK="$2";      shift 2 ;;
-        --json)       JSON_OUTPUT="true"; shift ;;
-        -h|--help)    usage; exit 0 ;;
-        *)            echo "Unknown argument: $1" >&2; usage >&2; exit 1 ;;
+        --address)        ADDRESS="$2";        shift 2 ;;
+        --rpc-url)        RPC_URL="$2";        shift 2 ;;
+        --blockscout-url) BLOCKSCOUT_URL="$2"; shift 2 ;;
+        --from-block)     FROM_BLOCK="$2";     shift 2 ;;
+        --to-block)       TO_BLOCK="$2";       shift 2 ;;
+        --json)           JSON_OUTPUT="true";  shift ;;
+        -h|--help)        usage; exit 0 ;;
+        *)                echo "Unknown argument: $1" >&2; usage >&2; exit 1 ;;
     esac
 done
 
@@ -59,16 +66,46 @@ if [[ -z "$ADDRESS" ]]; then
     exit 1
 fi
 
-for cmd in cast jq awk sort; do
+for cmd in cast jq awk sort curl; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "Error: required command '$cmd' not found in PATH" >&2
         exit 1
     fi
 done
 
+# Look up the deploy block via Blockscout's address endpoint (2 HTTP calls).
+# Echoes the block number on success, returns non-zero on any failure.
+find_deploy_block_via_blockscout() {
+    local addr="$1"
+    local blockscout="$2"
+    local rpc="$3"
+    local tx_hash block
+
+    tx_hash=$(curl -fsSL "${blockscout%/}/api/v2/addresses/$addr" 2>/dev/null \
+        | jq -r '.creation_tx_hash // empty')
+
+    if [[ -z "$tx_hash" || "$tx_hash" == "null" ]]; then
+        return 1
+    fi
+
+    block=$(cast tx "$tx_hash" --rpc-url "$rpc" --json 2>/dev/null \
+        | jq -r '.blockNumber // empty')
+
+    if [[ -z "$block" || "$block" == "null" ]]; then
+        return 1
+    fi
+
+    # Normalize hex to decimal if the RPC returned hex.
+    if [[ "$block" =~ ^0[xX] ]]; then
+        block=$(printf "%d" "$block")
+    fi
+
+    echo "$block"
+}
+
 # Binary-search for the smallest block N where eth_getCode(addr, N) != "0x".
-# That's the deployment block. Assumes code monotonicity (no SELFDESTRUCT).
-find_deploy_block() {
+# Fallback when Blockscout is unavailable. Assumes code monotonicity (no SELFDESTRUCT).
+find_deploy_block_via_rpc() {
     local addr="$1"
     local rpc="$2"
     local latest lo hi mid code
@@ -96,8 +133,16 @@ find_deploy_block() {
 }
 
 if [[ -z "$FROM_BLOCK" ]]; then
-    FROM_BLOCK=$(find_deploy_block "$ADDRESS" "$RPC_URL")
-    echo "[info] auto-detected deployment block: $FROM_BLOCK" >&2
+    if [[ -n "$BLOCKSCOUT_URL" ]] \
+        && FROM_BLOCK=$(find_deploy_block_via_blockscout "$ADDRESS" "$BLOCKSCOUT_URL" "$RPC_URL"); then
+        echo "[info] deployment block (Blockscout): $FROM_BLOCK" >&2
+    else
+        if [[ -n "$BLOCKSCOUT_URL" ]]; then
+            echo "[warn] Blockscout lookup failed; falling back to RPC binary search" >&2
+        fi
+        FROM_BLOCK=$(find_deploy_block_via_rpc "$ADDRESS" "$RPC_URL")
+        echo "[info] deployment block (RPC binary search): $FROM_BLOCK" >&2
+    fi
 fi
 
 # Fetch logs for one event signature and emit tab-separated records:
