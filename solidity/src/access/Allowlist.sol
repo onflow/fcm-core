@@ -12,6 +12,8 @@ import {IAllowlist} from "./IAllowlist.sol";
 contract Allowlist is IAllowlist, Ownable {
     mapping(address account => bool) private _allowed;
 
+    error ZeroAddress();
+
     constructor(address initialOwner) Ownable(initialOwner) {}
 
     /// @inheritdoc IAllowlist
@@ -28,6 +30,7 @@ contract Allowlist is IAllowlist, Ownable {
     }
 
     function _allow(address account) internal {
+        if (account == address(0)) revert ZeroAddress();
         if (!_allowed[account]) {
             _allowed[account] = true;
             emit AddressAllowed(account);
