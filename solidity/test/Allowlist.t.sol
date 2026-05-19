@@ -196,4 +196,28 @@ contract AllowlistTest is Test {
         allowlist.allow(alice);
         assertTrue(allowlist.isAllowed(alice));
     }
+
+    function testFuzz_AllowDisallowRoundtrip(address account) public {
+        vm.assume(account != address(0));
+
+        assertFalse(allowlist.isAllowed(account));
+
+        vm.startPrank(owner);
+
+        allowlist.allow(account);
+        assertTrue(allowlist.isAllowed(account));
+
+        // Idempotent re-allow.
+        allowlist.allow(account);
+        assertTrue(allowlist.isAllowed(account));
+
+        allowlist.disallow(account);
+        assertFalse(allowlist.isAllowed(account));
+
+        // Idempotent re-disallow.
+        allowlist.disallow(account);
+        assertFalse(allowlist.isAllowed(account));
+
+        vm.stopPrank();
+    }
 }
