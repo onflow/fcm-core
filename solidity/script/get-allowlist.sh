@@ -12,29 +12,31 @@
 
 set -euo pipefail
 
+DEFAULT_RPC_URL="https://mainnet.evm.nodes.onflow.org"
+
 usage() {
-    cat <<'EOF'
-Usage: get-allowlist.sh --address <allowlist> --rpc-url <url> [options]
+    cat <<EOF
+Usage: get-allowlist.sh --address <allowlist> [options]
 
 Required:
   --address <addr>      Allowlist contract address
-  --rpc-url <url>       JSON-RPC endpoint
 
 Options:
+  --rpc-url <url>       JSON-RPC endpoint (default: ${DEFAULT_RPC_URL})
   --from-block <n>      Start block (default: 0)
   --to-block <n>        End block (default: latest)
   --json                Emit a JSON array (default: one address per line)
   -h, --help            Show this help
 
 Examples:
-  get-allowlist.sh --address 0xABC... --rpc-url "$RPC_URL"
-  get-allowlist.sh --address 0xABC... --rpc-url "$RPC_URL" --json
-  get-allowlist.sh --address 0xABC... --rpc-url "$RPC_URL" --from-block 1000000
+  get-allowlist.sh --address 0xABC...
+  get-allowlist.sh --address 0xABC... --json
+  get-allowlist.sh --address 0xABC... --rpc-url https://testnet.evm.nodes.onflow.org
 EOF
 }
 
 ADDRESS=""
-RPC_URL=""
+RPC_URL="$DEFAULT_RPC_URL"
 FROM_BLOCK="0"
 TO_BLOCK="latest"
 JSON_OUTPUT="false"
@@ -51,8 +53,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "$ADDRESS" || -z "$RPC_URL" ]]; then
-    echo "Error: --address and --rpc-url are required" >&2
+if [[ -z "$ADDRESS" ]]; then
+    echo "Error: --address is required" >&2
     usage >&2
     exit 1
 fi
