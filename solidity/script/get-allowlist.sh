@@ -82,7 +82,7 @@ find_deploy_block_via_blockscout() {
     local tx_hash block
 
     tx_hash=$(curl -fsSL "${blockscout%/}/api/v2/addresses/$addr" 2>/dev/null \
-        | jq -r '.creation_tx_hash // empty')
+        | jq -r '.creation_transaction_hash // .creation_tx_hash // empty')
 
     if [[ -z "$tx_hash" || "$tx_hash" == "null" ]]; then
         return 1
