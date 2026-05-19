@@ -23,7 +23,7 @@ Required:
 
 Options:
   --rpc-url <url>       JSON-RPC endpoint (default: ${DEFAULT_RPC_URL})
-  --from-block <n>      Start block (default: 0)
+  --from-block <n>      Start block (default: contract deployment block)
   --to-block <n>        End block (default: latest)
   --json                Emit a JSON array (default: one address per line)
   -h, --help            Show this help
@@ -37,7 +37,7 @@ EOF
 
 ADDRESS=""
 RPC_URL="$DEFAULT_RPC_URL"
-FROM_BLOCK="0"
+FROM_BLOCK=""
 TO_BLOCK="latest"
 JSON_OUTPUT="false"
 
@@ -65,6 +65,40 @@ for cmd in cast jq awk sort; do
         exit 1
     fi
 done
+
+# Binary-search for the smallest block N where eth_getCode(addr, N) != "0x".
+# That's the deployment block. Assumes code monotonicity (no SELFDESTRUCT).
+find_deploy_block() {
+    local addr="$1"
+    local rpc="$2"
+    local latest lo hi mid code
+
+    latest=$(cast block-number --rpc-url "$rpc")
+    code=$(cast code "$addr" --block "$latest" --rpc-url "$rpc")
+    if [[ "$code" == "0x" || -z "$code" ]]; then
+        echo "Error: no contract code at $addr (checked block $latest)" >&2
+        return 1
+    fi
+
+    lo=0
+    hi="$latest"
+    while (( lo < hi )); do
+        mid=$(( (lo + hi) / 2 ))
+        code=$(cast code "$addr" --block "$mid" --rpc-url "$rpc")
+        if [[ "$code" == "0x" || -z "$code" ]]; then
+            lo=$(( mid + 1 ))
+        else
+            hi=$mid
+        fi
+    done
+
+    echo "$lo"
+}
+
+if [[ -z "$FROM_BLOCK" ]]; then
+    FROM_BLOCK=$(find_deploy_block "$ADDRESS" "$RPC_URL")
+    echo "[info] auto-detected deployment block: $FROM_BLOCK" >&2
+fi
 
 # Fetch logs for one event signature and emit tab-separated records:
 #   <blockNumber>\t<logIndex>\t<label>\t<address>
