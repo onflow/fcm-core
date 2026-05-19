@@ -41,6 +41,7 @@ contract AllowlistTest is Test {
     function test_DisallowRemovesFromList() public {
         vm.startPrank(owner);
         allowlist.allow(alice);
+        assertTrue(allowlist.isAllowed(alice));
         allowlist.disallow(alice);
         vm.stopPrank();
         assertFalse(allowlist.isAllowed(alice));
