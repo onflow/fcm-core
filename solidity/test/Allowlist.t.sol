@@ -10,8 +10,8 @@ import {IAllowlist} from "../src/access/IAllowlist.sol";
 contract AllowlistTest is Test {
     Allowlist internal allowlist;
 
-    address internal owner = address(0xA11CE);
-    address internal alice = address(0xA1);
+    address internal owner = address(0x12345);
+    address internal alice = address(0xA11CE);
     address internal bob = address(0xB0B);
     address internal carol = address(0xCA401);
     address internal attacker = address(0xBAD);
