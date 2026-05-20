@@ -12,6 +12,7 @@ import {IAllowlist} from "./IAllowlist.sol";
 contract Allowlist is IAllowlist, Ownable {
     mapping(address account => bool) private _allowed;
 
+    /// @dev The zero address cannot be allow-listed. (Disallowing the zero address is a no-op.)
     error ZeroAddress();
 
     constructor(address initialOwner) Ownable(initialOwner) {}
