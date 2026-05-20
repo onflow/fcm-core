@@ -2,24 +2,41 @@
 pragma solidity ^0.8.20;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IAllowlist} from "./IAllowlist.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {IAllowlistEnumerable} from "./IAllowlistEnumerable.sol";
 
 /// @title Allowlist
-/// @notice Mapping-backed allowlist of addresses, administered by a single owner.
+/// @notice Enumerable allowlist of addresses, administered by a single owner.
 /// @dev Idempotent edits: re-adding an existing entry (or removing an absent
 ///      one) does not revert and does not emit. Matches OpenZeppelin
 ///      `_grantRole` semantics.
-contract Allowlist is IAllowlist, Ownable {
-    mapping(address account => bool) private _allowed;
+contract Allowlist is IAllowlistEnumerable, Ownable {
+    using EnumerableSet for EnumerableSet.AddressSet;
+
+    EnumerableSet.AddressSet private _allowed;
 
     /// @dev The zero address cannot be allow-listed. (Disallowing the zero address is a no-op.)
     error ZeroAddress();
 
     constructor(address initialOwner) Ownable(initialOwner) {}
 
-    /// @inheritdoc IAllowlist
     function isAllowed(address account) external view returns (bool) {
-        return _allowed[account];
+        return _allowed.contains(account);
+    }
+
+    /// @inheritdoc IAllowlistEnumerable
+    function length() external view returns (uint256) {
+        return _allowed.length();
+    }
+
+    /// @inheritdoc IAllowlistEnumerable
+    function addressAt(uint256 index) external view returns (address) {
+        return _allowed.at(index);
+    }
+
+    /// @inheritdoc IAllowlistEnumerable
+    function values() external view returns (address[] memory) {
+        return _allowed.values();
     }
 
     function allow(address account) external onlyOwner {
@@ -44,15 +61,13 @@ contract Allowlist is IAllowlist, Ownable {
 
     function _allow(address account) internal {
         if (account == address(0)) revert ZeroAddress();
-        if (!_allowed[account]) {
-            _allowed[account] = true;
+        if (_allowed.add(account)) {
             emit AddressAllowed(account);
         }
     }
 
     function _disallow(address account) internal {
-        if (_allowed[account]) {
-            _allowed[account] = false;
+        if (_allowed.remove(account)) {
             emit AddressDisallowed(account);
         }
     }

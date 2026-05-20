@@ -239,4 +239,72 @@ contract AllowlistTest is Test {
 
         vm.stopPrank();
     }
+
+    /// @notice length() reflects the current number of allowed addresses.
+    function test_LengthReflectsAddsAndRemoves() public {
+        assertEq(allowlist.length(), 0);
+
+        vm.startPrank(owner);
+        allowlist.allow(alice);
+        assertEq(allowlist.length(), 1);
+        allowlist.allow(bob);
+        assertEq(allowlist.length(), 2);
+        allowlist.allow(alice); // idempotent: no length change
+        assertEq(allowlist.length(), 2);
+        allowlist.disallow(alice);
+        assertEq(allowlist.length(), 1);
+        allowlist.disallow(carol); // absent: no length change
+        assertEq(allowlist.length(), 1);
+        vm.stopPrank();
+    }
+
+    /// @notice addressAt(index) returns an allowed entry; index in [0, length()).
+    function test_AddressAtReturnsAllowedAddress() public {
+        vm.startPrank(owner);
+        allowlist.allow(alice);
+        allowlist.allow(bob);
+        vm.stopPrank();
+
+        address first = allowlist.addressAt(0);
+        address second = allowlist.addressAt(1);
+        // Order is implementation-defined; both must be allowed and distinct.
+        assertTrue(first == alice || first == bob);
+        assertTrue(second == alice || second == bob);
+        assertTrue(first != second);
+    }
+
+    /// @notice addressAt() reverts when index >= length().
+    function test_AddressAtRevertsOnOutOfBounds() public {
+        vm.expectRevert();
+        allowlist.addressAt(0);
+
+        vm.prank(owner);
+        allowlist.allow(alice);
+
+        vm.expectRevert();
+        allowlist.addressAt(1);
+    }
+
+    /// @notice values() returns the full set of allowed addresses (order unspecified).
+    function test_ValuesReturnsFullSet() public {
+        vm.startPrank(owner);
+        allowlist.allow(alice);
+        allowlist.allow(bob);
+        allowlist.allow(carol);
+        allowlist.disallow(bob);
+        vm.stopPrank();
+
+        address[] memory all = allowlist.values();
+        assertEq(all.length, 2);
+
+        bool foundAlice;
+        bool foundCarol;
+        for (uint256 i = 0; i < all.length; ++i) {
+            if (all[i] == alice) foundAlice = true;
+            if (all[i] == carol) foundCarol = true;
+            assertTrue(all[i] != bob);
+        }
+        assertTrue(foundAlice);
+        assertTrue(foundCarol);
+    }
 }
