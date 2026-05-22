@@ -5,12 +5,14 @@
 
 A Cadence resource that pokes a single Solidity function on an interval via [`FlowTransactionScheduler`](https://github.com/onflow/flips/blob/main/protocol/20250609-scheduled-transactions.md) (FLIP 330).
 
+## Assumptions
+
+- **EVM-side errors don't panic the scheduled tx.** `coa.call` surfaces revert/OOG as a non-successful `EVM.Result`, never as a Cadence panic. The failure model rests on this — without it, an EVM revert would abort the scheduled tx before it can self-reschedule, killing the chain.
+
 ## What we require from the EVM contract
 
 - **`rebalance()` is idempotent and self-guarding** — it inspects vault state and either acts or no-ops.
-- **Internal errors revert the EVM transaction cleanly.** `coa.call` surfaces them as `EVM.Result`, not a Cadence panic.
 - **The COA's EVM-side authority is narrow** — restricted to invoking `rebalance()` only (no admin or fund-movement entrypoints). This bounds the blast radius of an admin-compromised config rewrite to liveness impact.
-- **Solvency does not depend on the rebalancer firing.** Insolvency-critical actions take permissionless paths: emergency deleverage triggers above a hard-LTV ceiling, and liquidations are Morpho-driven and external. If a future change makes solvency depend on tick liveness, the Medium-priority choice must be revisited.
 
 ## Design
 
@@ -35,7 +37,7 @@ One Cadence resource per EVM target, owned by an admin account. Stored at a dete
 | COA FLOW depletion (EVM-side gas) | Tick events repeat with non-zero EVM error code; off-chain balance script catches drift earlier | Anyone can send FLOW to the COA (permissionless, from either Cadence or EVM) |
 | Cadence-side OOE (effort margin too tight) | Absence of expected events for the scheduled tx; rebalancer stops ticking | Admin re-invokes self-reschedule; retune effort margin if recurring |
 
-All failures are liveness-only (no solvency impact). Off-chain monitoring of tick freshness, per-tick EVM result status, fee-vault balance, and COA balance is required for reliable operation.
+No failure causes immediate solvency loss, but extended outage drifts LTV; under adverse price movement this can lead to Morpho liquidation.
 
 ---
 
