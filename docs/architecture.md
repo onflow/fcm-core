@@ -239,7 +239,21 @@ See [explanation from OpenZeppelin](https://docs.openzeppelin.com/contracts/5.x/
 
 Our implementation is safe from this attack because we inherit from the OpenZeppelin ERC4626 base contract, which implements a virtual share mitigation. See [here](https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L22-L47) for guidance on extending this mitigation.
 
-### ...
+### Re-entrancy Attack
+For each external function, how does it protect against re-entrancy?
+
+### Sandwich Attack
+An attacker manipulates AMM prices before and after our swap to capture part of the value of our swap. 
+- The primary mitigation is a slippage limit, which limits how much slippage we will accept on each trade. This doesn't prevent the attack, but does limit how much value can be extracted per trade.
+- Flow as the underlying platform provides some protection. There is no system akin to [MEV-Boost](https://github.com/flashbots/mev-boost), which systematizes MEV extraction. No individual node in Flow can deterministically dictate transaction ordering. Attackers need to send many transactions, hope some are placed in the desired order, and be able to revert operations on those that are not in the desired order. Still possible, but more complex and expensive.
+
+If an attacker is able to invoke a function which performs a swap (that isn't swapping their funds), then the sandwich attack becomes much more dangerous (eg. a permissionless `rebalance` function).
+- The attacker can reliably order their operations by structuring the "full sandwich" as one transaction.
+- The attack is repeatable.
+
+### Oracle Manipulation
+
+## Dust Strategy (TODO)
 
 ## References / Prior Art
 
