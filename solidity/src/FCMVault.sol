@@ -26,6 +26,10 @@ contract FCMVault is ERC4626, AccessControlEnumerable {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
 
+    function deposit(uint256 assets, address receiver) public override returns (uint256) {
+        return super.deposit(assets, receiver);
+    }
+
     /// @inheritdoc IERC4626
     function maxDeposit(address receiver) public view override returns (uint256) {
         if (!hasRole(ALLOWED_ROLE, receiver)) return 0;
