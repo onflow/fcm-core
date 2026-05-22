@@ -25,7 +25,7 @@ In general, the inner vault may be any ERC4626-compliant vault. As an example, J
 **NAV Reporting:** We must assume that the NAV (share price) reported by the vault may be out of date on the order of days.
 
 ## Deposit Flow
-### AMM-Mediated Deposit
+### A. AMM-Mediated Deposit
 We swap debt tokens (InnerAsset) to InnerShares via an AMM. Our ability to satisfy deposits is dependent on available liquidity in the AMM pool. 
 
 ```mermaid
@@ -41,6 +41,7 @@ sequenceDiagram
   
       Outer->>Lender: supply (outerAsset)
       Lender-->>Outer: borrow (innerAsset)
+      Note over Lender,Outer: Always supply all deposits. <br />Borrow amount limited by LTV.
 
       Outer->>Dex: swap (innerAsset → innerShare)
       Dex-->>Outer: innerShare
@@ -49,7 +50,7 @@ sequenceDiagram
       deactivate Outer
 ```
 
-### Direct Deposit
+### B. Direct Deposit
 We deposit debt tokens (InnerAsset) to InnerShares via the inner vault's `deposit` function. Our ability to satisfy deposits is dependent on the vault's deposit capacity ([`maxDeposit`](https://ethereum.org/developers/docs/standards/tokens/erc-4626/#maxdeposit))
 ```mermaid
 sequenceDiagram
@@ -64,6 +65,7 @@ sequenceDiagram
 
     Outer->>Lender: supply (outerAsset)
     Lender-->>Outer: borrow (innerAsset)
+    Note over Lender,Outer: Always supply all deposits. <br />Borrow amount limited by LTV.
 
     Outer->>Inner: deposit (innerAsset)
     activate Inner
@@ -74,13 +76,12 @@ sequenceDiagram
     deactivate Outer
 ```
 
-In Step 2/3 above:
-- We always supply all deposited collateral, regardless of LTV
-- We choose the amount of debt to borrow based on LTV after supply
-
 ## Withdrawal Flow 
+There are several ways to implement withdrawals, enumerated below. The main differences are:
+1. Source of liquidity risk (inner vault vs AMM).
+2. Ability to withdraw full amount when LTV is near limit. In option C, the flashloan enables always repaying the full debt amount first. In options A/B, we may be unable to do this (depending on LTV). See [below](#ltv-limit-edge-case) for details.
 
-### AMM-Mediated Withdrawal
+### A. AMM-Mediated Withdrawal
 ```mermaid
 sequenceDiagram
       autonumber
@@ -94,6 +95,7 @@ sequenceDiagram
 
       Outer->>Dex: swap (innerShare → innerAsset)
       Dex-->>Outer: innerAsset
+      Note over Outer,Dex: We realize market price, not NAV<br /> (NAV may be higher or lower)
 
       Outer->>Lender: repay (innerAsset)
       Lender-->>Outer: withdraw collateral (outerAsset)
@@ -106,17 +108,14 @@ sequenceDiagram
 ```
 
 #### Pros
-  - Simplest control flow — no flashloan callback, no inner-vault dependency.
-  - Works with any yield token that has a liquid DEX pool (no 4626 needed).
-  - Atomic — yield is always sellable in-block.
+  - No inner vault liquidity risk
 
 #### Cons
-  - Requires repaying debt before withdrawing collateral → reverts if the yield→debt swap underdelivers and the intermediate HF would dip below 1.
-  - Pays DEX fees + slippage on the full yield slice every redeem.
+  - Requires repaying debt before withdrawing collateral. Reverts if the yield→debt swap underdelivers and the intermediate HF would dip below 1.
+  - Pays DEX fees/slippage
   - Pool liquidity risk: thin yield/debt pool degrades or blocks large redeems.
-  - Realizes market price, not NAV — large slices suffer price impact. 
 
-### Direct Withdrawal
+### B. Direct Withdrawal
 ```mermaid
 sequenceDiagram
      autonumber
@@ -145,14 +144,12 @@ sequenceDiagram
 
 #### Pros
   - Redeems yield at NAV — no LP fee, no slippage on the yield leg.
-  - Independent of DEX liquidity for the yield asset.
-  - Simple flow when the inner vault is liquid.
+  - Independent on AMM liquidity for the yield asset.
 
 #### Cons
-  - Requires the inner vault to honor synchronous redeems; queued/cooldown/idle-capped vaults break the unwind.
-  - All-or-nothing on inner liquidity — partial fills can revert mid-tx.
+  - Dependent on available liquidity in inner vault.
 
-### Flash Loan Path
+### C. Flash Loan Path
 ```mermaid
 sequenceDiagram
       autonumber
@@ -182,25 +179,65 @@ sequenceDiagram
 ```
 
 #### Pros
-  - Deterministic unwind at any HF — debt is cleared before collateral moves, so HF
-  only improves mid-tx.
-  - Clean pro-rata accounting: redeeming user bears exactly their own yield loss;
-  remaining LPs untouched.
+  - Deterministic unwind at any HF — debt is cleared before collateral moves
 
- #### Cons
+#### Cons
   - Most complex: callback-based reentry, encoded calldata, extra Morpho roundtrip.
-  - Pays flashloan fee where applicable (0 on Morpho Blue, nonzero elsewhere).
   - Larger attack surface — callback must validate msg.sender and decode data correctly.
-  - Still depends on the DEX for the yield sale and reconcile legs (inherits AMM-path's liquidity/slippage risks for those swaps).
+  - Still depends on DEX for the yield sale and reconcile legs (liquidity, fees/slippage)
+
+#### LTV Limit Edge Case
+```mermaid
+sequenceDiagram
+      autonumber
+      actor User
+      participant Outer as Outer ERC4626 Vault
+      participant Lender as Lending Protocol
+      participant Dex as AMM
+  
+      Note over Lender: Initial: HF ≈ 1 (LTV near LLTV)<br/>In options A/B, if our recovered outerAsset is < debt<br />then we can't repay full debt amount.
+
+      User->>Outer: redeem(outerShare)
+      activate Outer
+
+      Lender-->>Outer: flashloan (innerAsset)
+      Note over Outer,Lender: Vault holds enough debt-token to repay in full<br/>without touching the position
+
+      Outer->>Lender: repay full debtSlice (innerAsset)
+      Note over Lender: HF improves (debt ↓, coll unchanged)<br/>Position is over-collateralized
+
+      Lender-->>Outer: withdraw collSlice (outerAsset)
+      Note over Lender: Always succeeds because we just repaid full debt slice
+
+      Outer->>Dex: sell yieldSlice → innerAsset
+      Dex-->>Outer: innerAsset (may be < flash loan amount)
+
+      alt surplus (yield sale ≥ flash)
+          Outer->>Dex: swap surplus innerAsset → outerAsset
+          Dex-->>Outer: extra outerAsset (user bonus)
+      else deficit (yield sale < flash)
+          Outer->>Dex: swap some collSlice → innerAsset
+          Dex-->>Outer: innerAsset (covers deficit)
+          Note over Outer: User absorbs their own<br/>yield shortfall at market price
+      end
+
+      Outer->>Lender: repay flashloan (innerAsset)
+
+      Outer-->>User: outerAsset
+      deactivate Outer
+```
 
 ## Rebalancing
 See **TODO LINK TO REBALANCING SPEC**
+
+## Custom Behaviour
+See [here](https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L50-L68) for guidance on how to safely extend the base ERC4626 contract.
 
 ## Security
 ### Donation/Inflation Attack
 See [explanation from OpenZeppelin](https://docs.openzeppelin.com/contracts/5.x/erc4626#security-concern-inflation-attack).
 
-Our implementation is safe from this attack because **TODO link to code**.
+Our implementation is safe from this attack because we inherit from the OpenZeppelin ERC4626 base contract, which implements a virtual share mitigation. See [here](https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L22-L47) for guidance on extending this mitigation.
 
 ### ...
 
