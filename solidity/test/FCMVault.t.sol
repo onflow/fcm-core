@@ -100,17 +100,6 @@ contract FCMVaultTest is Test {
         vault.grantRole(role, alice);
     }
 
-    /// @notice AccessControlEnumerable exposes member enumeration.
-    function test_EnumeratesAllowedMembers() public {
-        _allow(alice);
-        _allow(bob);
-        bytes32 role = vault.ALLOWED_ROLE();
-        assertEq(vault.getRoleMemberCount(role), 2);
-        address m0 = vault.getRoleMember(role, 0);
-        address m1 = vault.getRoleMember(role, 1);
-        assertTrue((m0 == alice && m1 == bob) || (m0 == bob && m1 == alice));
-    }
-
     // ---------------------------------------------------------------------
     // Deposit gating
     // ---------------------------------------------------------------------

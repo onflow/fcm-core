@@ -4,9 +4,7 @@ pragma solidity ^0.8.20;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC4626, IERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
-import {
-    AccessControlEnumerable
-} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 /// @title FCMVault
@@ -14,7 +12,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 ///         Holders of `ALLOWED_ROLE` may deposit, hold, and transfer shares.
 ///         Burns (withdrawals/redeems) are always permitted so a removed holder
 ///         can still exit.
-contract FCMVault is ERC4626, AccessControlEnumerable {
+contract FCMVault is ERC4626, AccessControl {
     /// @notice Members of this role may deposit assets, hold shares, and
     ///         transfer shares.
     bytes32 public constant ALLOWED_ROLE = keccak256("ALLOWED_ROLE");
