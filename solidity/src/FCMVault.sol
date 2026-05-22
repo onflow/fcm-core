@@ -10,21 +10,14 @@ import {
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 /// @title FCMVault
-/// @notice ERC-4626 vault for Flow Credit Markets, with role-gated participation
-///         during the private beta. Holders of `ALLOWED_ROLE` may deposit, hold,
-///         and transfer shares. Burns (withdrawals/redeems) are always permitted
-///         so a removed holder can still exit.
+/// @notice ERC-4626 vault for Flow Credit Markets, with role-gated participation.
+///         Holders of `ALLOWED_ROLE` may deposit, hold, and transfer shares.
+///         Burns (withdrawals/redeems) are always permitted so a removed holder
+///         can still exit.
 contract FCMVault is ERC4626, AccessControlEnumerable {
     /// @notice Members of this role may deposit assets, hold shares, and
-    ///         transfer shares (subject to `gatingEnabled`).
+    ///         transfer shares.
     bytes32 public constant ALLOWED_ROLE = keccak256("ALLOWED_ROLE");
-
-    /// @notice When false, the role gating is bypassed and the vault behaves
-    ///         as a permissionless ERC-4626. Designed for the GA transition.
-    bool public gatingEnabled = true;
-
-    /// @notice Emitted when `gatingEnabled` is toggled by the admin.
-    event GatingEnabledSet(bool enabled);
 
     constructor(string memory name, string memory symbol, IERC20 asset_, address admin)
         ERC20(name, symbol)
@@ -33,22 +26,15 @@ contract FCMVault is ERC4626, AccessControlEnumerable {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
 
-    /// @notice Enable or disable allowlist gating. Intended for the GA flip:
-    ///         set to `false` once the private beta ends.
-    function setGatingEnabled(bool enabled) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        gatingEnabled = enabled;
-        emit GatingEnabledSet(enabled);
-    }
-
     /// @inheritdoc IERC4626
     function maxDeposit(address receiver) public view override returns (uint256) {
-        if (gatingEnabled && !hasRole(ALLOWED_ROLE, receiver)) return 0;
+        if (!hasRole(ALLOWED_ROLE, receiver)) return 0;
         return super.maxDeposit(receiver);
     }
 
     /// @inheritdoc IERC4626
     function maxMint(address receiver) public view override returns (uint256) {
-        if (gatingEnabled && !hasRole(ALLOWED_ROLE, receiver)) return 0;
+        if (!hasRole(ALLOWED_ROLE, receiver)) return 0;
         return super.maxMint(receiver);
     }
 
@@ -58,7 +44,7 @@ contract FCMVault is ERC4626, AccessControlEnumerable {
     ///      - Burn (`to == 0`): always allowed, preserving the exit path for
     ///        de-allowlisted holders.
     function _update(address from, address to, uint256 value) internal override {
-        if (gatingEnabled && to != address(0)) {
+        if (to != address(0)) {
             if (!hasRole(ALLOWED_ROLE, to)) {
                 revert IAccessControl.AccessControlUnauthorizedAccount(to, ALLOWED_ROLE);
             }

@@ -69,11 +69,6 @@ contract FCMVaultTest is Test {
         assertFalse(vault.hasRole(vault.ALLOWED_ROLE(), alice));
     }
 
-    /// @notice Gating is on by default — must be explicitly disabled for GA.
-    function test_GatingEnabledByDefault() public view {
-        assertTrue(vault.gatingEnabled());
-    }
-
     // ---------------------------------------------------------------------
     // Role administration
     // ---------------------------------------------------------------------
@@ -120,7 +115,7 @@ contract FCMVaultTest is Test {
     // Deposit gating
     // ---------------------------------------------------------------------
 
-    /// @notice maxDeposit returns 0 for a non-allowlisted receiver while gating is on.
+    /// @notice maxDeposit returns 0 for a non-allowlisted receiver.
     function test_MaxDepositZeroForNonAllowlisted() public view {
         assertEq(vault.maxDeposit(alice), 0);
     }
@@ -246,65 +241,5 @@ contract FCMVaultTest is Test {
         assertEq(assetsBack, DEPOSIT_AMOUNT);
         assertEq(vault.balanceOf(alice), 0);
         assertEq(asset.balanceOf(alice), DEPOSIT_AMOUNT);
-    }
-
-    // ---------------------------------------------------------------------
-    // gatingEnabled toggle
-    // ---------------------------------------------------------------------
-
-    /// @notice Admin can disable gating; the vault then accepts any depositor.
-    function test_GatingDisabledAllowsAnyDeposit() public {
-        vm.prank(admin);
-        vault.setGatingEnabled(false);
-
-        _fund(alice, DEPOSIT_AMOUNT);
-
-        vm.prank(alice);
-        uint256 shares = vault.deposit(DEPOSIT_AMOUNT, alice);
-
-        assertGt(shares, 0);
-        assertEq(vault.balanceOf(alice), shares);
-    }
-
-    /// @notice With gating disabled, maxDeposit no longer returns 0 for non-allowlisted.
-    function test_GatingDisabledMaxDepositNonZero() public {
-        vm.prank(admin);
-        vault.setGatingEnabled(false);
-        assertGt(vault.maxDeposit(alice), 0);
-    }
-
-    /// @notice With gating disabled, share transfers between any holders succeed.
-    function test_GatingDisabledAllowsAnyTransfer() public {
-        vm.prank(admin);
-        vault.setGatingEnabled(false);
-
-        _fund(alice, DEPOSIT_AMOUNT);
-        vm.prank(alice);
-        uint256 shares = vault.deposit(DEPOSIT_AMOUNT, alice);
-
-        vm.prank(alice);
-        vault.transfer(bob, shares);
-        assertEq(vault.balanceOf(bob), shares);
-    }
-
-    /// @notice setGatingEnabled emits GatingEnabledSet.
-    function test_SetGatingEnabledEmitsEvent() public {
-        vm.expectEmit(true, true, true, true, address(vault));
-        emit FCMVault.GatingEnabledSet(false);
-        vm.prank(admin);
-        vault.setGatingEnabled(false);
-    }
-
-    /// @notice Non-admin cannot toggle gating.
-    function test_NonAdminCannotSetGatingEnabled() public {
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                stranger,
-                vault.DEFAULT_ADMIN_ROLE()
-            )
-        );
-        vm.prank(stranger);
-        vault.setGatingEnabled(false);
     }
 }
