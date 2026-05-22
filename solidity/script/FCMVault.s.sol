@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.19;
 
 import {Script, console} from "forge-std/Script.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {FCMVault} from "../src/FCMVault.sol";
 
 contract FCMVaultScript is Script {
@@ -11,8 +10,7 @@ contract FCMVaultScript is Script {
     function run() public {
         vm.startBroadcast();
 
-        IERC20 asset = IERC20(vm.envAddress("ASSET"));
-        vault = new FCMVault("Flow Credit Markets Vault", "fcmV", asset);
+        vault = new FCMVault(vm.envAddress("MARKET_ORACLE"), vm.envAddress("YIELD_ORACLE"));
 
         console.log("FCMVault deployed to:", address(vault));
 
