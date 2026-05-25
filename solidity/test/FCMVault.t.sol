@@ -121,4 +121,169 @@ contract FCMVaultTest is Test {
         vm.expectRevert();
         vault.deposit(amount, user);
     }
+
+    // ---- redeem tests ------------------------------------------------------
+
+    /// @dev Helper: deposit `amount` WETH on behalf of `who` and return shares.
+    function _depositFor(address who, uint256 amount) internal returns (uint256 shares) {
+        MockERC20(address(WETH)).mint(who, amount);
+        vm.startPrank(who);
+        WETH.approve(address(vault), amount);
+        shares = vault.deposit(amount, who);
+        vm.stopPrank();
+    }
+
+    /// @notice Round-trip: deposit 1 WETH then immediately redeem all shares.
+    /// With 1:1 mock swap rates and matching oracle prices, the AMM-mediated
+    /// unwind (FUSDEV->PYUSD0->repay->withdrawCollateral) should return the
+    /// original WETH within rounding tolerance.
+    function test_Redeem_RoundTripReturnsApproximatelyDeposited() public {
+        uint256 amount = 1 ether;
+        uint256 shares = _depositFor(user, amount);
+
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(shares, user, user);
+
+        assertApproxEqAbs(assetsOut, amount, 1, "assetsOut approx deposit");
+        assertEq(WETH.balanceOf(user), assetsOut, "user weth credit");
+        assertEq(vault.balanceOf(user), 0, "shares burned");
+    }
+
+    /// @notice Redeem to a different receiver: shares are burned from the
+    /// owner, WETH is delivered to the receiver, and the owner's WETH
+    /// balance is untouched.
+    function test_Redeem_BurnsSharesAndTransfersToReceiver() public {
+        uint256 amount = 1 ether;
+        uint256 shares = _depositFor(user, amount);
+        address receiver = address(0xBEEF);
+
+        uint256 supplyBefore = vault.totalSupply();
+
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(shares, receiver, user);
+
+        assertEq(vault.balanceOf(user), 0, "owner shares");
+        assertEq(vault.totalSupply(), supplyBefore - shares, "supply decreased");
+        assertEq(WETH.balanceOf(receiver), assetsOut, "receiver weth");
+        assertEq(WETH.balanceOf(user), 0, "owner weth untouched");
+    }
+
+    /// @notice Partial redeem (half of shares) unwinds proportionally — about
+    /// half the collateral, half the debt, and half the FUSDEV position are
+    /// removed; the rest of the position remains intact and healthy.
+    function test_Redeem_PartialRedeemUnwindsProportionalSlice() public {
+        uint256 amount = 2 ether;
+        uint256 shares = _depositFor(user, amount);
+
+        uint256 collateralBefore = WETH.balanceOf(address(MORPHO));
+        uint256 fusdevBefore = FUSDEV.balanceOf(address(vault));
+
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(shares / 2, user, user);
+
+        // ~half of each leg consumed (within 0.1% — virtual-share offset).
+        assertApproxEqRel(WETH.balanceOf(address(MORPHO)), collateralBefore / 2, 1e15, "collateral halved");
+        assertApproxEqRel(FUSDEV.balanceOf(address(vault)), fusdevBefore / 2, 1e15, "fusdev halved");
+        assertApproxEqRel(assetsOut, amount / 2, 1e15, "assetsOut approx half");
+
+        // Remaining shares roughly track the remaining position.
+        assertApproxEqRel(vault.balanceOf(user), shares / 2, 1, "shares halved");
+    }
+
+    /// @notice Two depositors: Alice redeeming her full stake leaves Bob's
+    /// position and share balance materially unaffected.
+    function test_Redeem_TwoDepositorsIndependentRedeem() public {
+        address alice = address(0xA);
+        address bob = address(0xB);
+        uint256 aliceShares = _depositFor(alice, 1 ether);
+        uint256 bobShares = _depositFor(bob, 3 ether);
+
+        uint256 bobSharesBefore = vault.balanceOf(bob);
+
+        vm.prank(alice);
+        uint256 aliceOut = vault.redeem(aliceShares, alice, alice);
+
+        assertApproxEqRel(aliceOut, 1 ether, 1e15, "alice round-trip");
+        assertEq(vault.balanceOf(alice), 0, "alice burned");
+        assertEq(vault.balanceOf(bob), bobSharesBefore, "bob shares untouched");
+        assertEq(bobShares, bobSharesBefore, "bob shares from deposit retained");
+    }
+
+    /// @notice An operator who is not the owner and has no allowance cannot
+    /// redeem on the owner's behalf — call reverts via ERC20 allowance check.
+    function test_Redeem_RevertsIfNotOwnerAndNoAllowance() public {
+        uint256 shares = _depositFor(user, 1 ether);
+        address operator = address(0xCAFE);
+
+        vm.prank(operator);
+        vm.expectRevert();
+        vault.redeem(shares, operator, user);
+    }
+
+    /// @notice When the owner pre-approves an operator for `shares`, the
+    /// operator can redeem and the allowance is consumed exactly.
+    function test_Redeem_SpendsAllowanceWhenOperatorRedeems() public {
+        uint256 shares = _depositFor(user, 1 ether);
+        address operator = address(0xCAFE);
+
+        vm.prank(user);
+        vault.approve(operator, shares);
+
+        vm.prank(operator);
+        uint256 assetsOut = vault.redeem(shares, operator, user);
+
+        assertEq(vault.allowance(user, operator), 0, "allowance spent");
+        assertEq(WETH.balanceOf(operator), assetsOut, "operator paid");
+        assertEq(vault.balanceOf(user), 0, "owner shares burned");
+    }
+
+    /// @notice Yield surplus: mint extra FUSDEV to the vault to simulate
+    /// yield accrual. On redeem, the proportional sale plus the surplus PYUSD0
+    /// reconcile leg push WETH output above the original deposit.
+    function test_Redeem_SurplusPyusdReconciledToWeth() public {
+        uint256 amount = 1 ether;
+        uint256 shares = _depositFor(user, amount);
+
+        // Simulate yield: extra FUSDEV appears in the vault.
+        uint256 fusdevYield = FUSDEV.balanceOf(address(vault)) / 10; // +10%
+        MockERC20(address(FUSDEV)).mint(address(vault), fusdevYield);
+
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(shares, user, user);
+
+        assertGt(assetsOut, amount, "yield captured");
+    }
+
+    /// @notice withdraw(assets) computes shares via previewWithdraw and
+    /// delegates to redeem. The number of shares it burned must equal
+    /// previewWithdraw(assets) computed pre-call.
+    function test_Withdraw_DelegatesToRedeem() public {
+        uint256 amount = 1 ether;
+        _depositFor(user, amount);
+
+        uint256 target = amount / 2;
+        uint256 expectedShares = vault.previewWithdraw(target);
+        uint256 sharesBefore = vault.balanceOf(user);
+
+        vm.prank(user);
+        uint256 sharesBurned = vault.withdraw(target, user, user);
+
+        assertEq(sharesBurned, expectedShares, "shares matches preview");
+        assertEq(vault.balanceOf(user), sharesBefore - expectedShares, "shares burned");
+        assertGt(WETH.balanceOf(user), 0, "user got weth");
+    }
+
+    /// @notice redeem(0) is a no-op: returns 0 with no state change.
+    function test_Redeem_ZeroSharesIsNoop() public {
+        _depositFor(user, 1 ether);
+        uint256 supplyBefore = vault.totalSupply();
+        uint256 sharesBefore = vault.balanceOf(user);
+
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(0, user, user);
+
+        assertEq(assetsOut, 0, "zero out");
+        assertEq(vault.totalSupply(), supplyBefore, "supply unchanged");
+        assertEq(vault.balanceOf(user), sharesBefore, "shares unchanged");
+    }
 }

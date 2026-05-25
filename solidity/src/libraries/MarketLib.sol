@@ -41,6 +41,17 @@ library MarketLib {
         MORPHO.borrow(market, assets, 0, address(this), address(this));
     }
 
+    function repay(MarketParams memory market, uint256 assets)
+        internal
+        returns (uint256 assetsRepaid, uint256 sharesRepaid)
+    {
+        return MORPHO.repay(market, assets, 0, address(this), "");
+    }
+
+    function withdrawCollateral(MarketParams memory market, uint256 assets) internal {
+        MORPHO.withdrawCollateral(market, assets, address(this), address(this));
+    }
+
     // ---- reads ---------------------------------------------------------
 
     function collateral(MarketParams memory market) internal view returns (uint256) {

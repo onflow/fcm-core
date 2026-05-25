@@ -33,6 +33,7 @@ contract FCMVault is ERC4626 {
 
     uint256 public constant MARKET_LLTV = 0.86e18;
     uint24 public constant FEE_YIELD_DEBT = 100; // PYUSD0/FUSDEV pool
+    uint24 public constant FEE_ASSET_DEBT = 3000; // WETH/PYUSD0 pool, used to reconcile redeem surplus
     uint256 public constant HF_UPPER_TARGET = 1.45e18; // 1e18-scaled target HF for deposit sizing
     uint8 internal constant DECIMALS_OFFSET = 6;
 
@@ -104,6 +105,67 @@ contract FCMVault is ERC4626 {
         _mint(receiver, shares);
 
         emit Deposit(msg.sender, receiver, assets, shares);
+    }
+
+    /// @notice Redeem `shares` for the proportional slice of the underlying
+    ///         position. AMM-mediated unwind: sell yield -> repay debt ->
+    ///         withdraw collateral -> reconcile surplus debt token -> pay out.
+    function redeem(
+        uint256 shares,
+        address receiver,
+        address owner
+    ) public override returns (uint256 assets) {
+        if (shares == 0) return 0;
+        if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
+
+        market.accrueInterest();
+        uint256 wethBefore = WETH.balanceOf(address(this));
+
+        _unwindSlice(shares);
+        _burn(owner, shares);
+
+        assets = WETH.balanceOf(address(this)) - wethBefore;
+        WETH.safeTransfer(receiver, assets);
+        emit Withdraw(msg.sender, receiver, owner, assets, shares);
+    }
+
+    /// @dev Unwind a `shares / _totalClaims()` slice of the position:
+    ///      1. Sell proportional FUSDEV for PYUSD0
+    ///      2. Repay proportional PYUSD0 debt (capped at PYUSD0 balance)
+    ///      3. Withdraw proportional WETH collateral
+    ///      4. Reconcile leftover PYUSD0 to WETH
+    function _unwindSlice(uint256 shares) internal {
+        uint256 claims = _totalClaims();
+
+        uint256 yieldOut = FUSDEV.balanceOf(address(this)).mulDiv(shares, claims);
+        if (yieldOut > 0) {
+            SwapLib.swapExactIn(address(FUSDEV), address(PYUSD0), FEE_YIELD_DEBT, yieldOut);
+        }
+
+        uint256 debtTarget = market.debt().mulDiv(shares, claims);
+        uint256 pyusdBal = PYUSD0.balanceOf(address(this));
+        uint256 toRepay = debtTarget < pyusdBal ? debtTarget : pyusdBal;
+        if (toRepay > 0) market.repay(toRepay);
+
+        uint256 collateralOut = market.collateral().mulDiv(shares, claims);
+        if (collateralOut > 0) market.withdrawCollateral(collateralOut);
+
+        uint256 surplus = PYUSD0.balanceOf(address(this));
+        if (surplus > 0) {
+            SwapLib.swapExactIn(address(PYUSD0), address(WETH), FEE_ASSET_DEBT, surplus);
+        }
+    }
+
+    /// @notice Withdraw a target amount of assets by converting to shares via
+    ///         `previewWithdraw` and delegating to `redeem`. The actual WETH
+    ///         delivered may differ from `assets` due to AMM path-dependence.
+    function withdraw(
+        uint256 assets,
+        address receiver,
+        address owner
+    ) public override returns (uint256 shares) {
+        shares = previewWithdraw(assets);
+        redeem(shares, receiver, owner);
     }
 
     /// @dev How much PYUSD0 to borrow against `newAssets` while keeping the
