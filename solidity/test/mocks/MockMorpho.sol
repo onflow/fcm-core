@@ -57,6 +57,17 @@ contract MockMorpho {
         return (assets, newShares);
     }
 
+    /// @notice Mock for Morpho's `repay`. Burns `assets` of the loan token
+    ///         from the caller and decrements the `onBehalf` position's
+    ///         borrow shares plus the market totals.
+    /// @dev    Uses `MockERC20.burn` instead of `transferFrom` so tests don't
+    ///         need to manage Morpho allowances. Mirrors Morpho's share
+    ///         rounding (`assets * (totalShares + VIRTUAL_SHARES) /
+    ///         (totalAssets + VIRTUAL_ASSETS)`, rounded UP) and caps shares
+    ///         burned at the position's outstanding balance — the cap is a
+    ///         mock-only safeguard against rounding overshoot on full repay;
+    ///         real Morpho enforces this via its accounting invariants. The
+    ///         `shares` and `data` parameters are ignored.
     function repay(
         MarketParams memory mp,
         uint256 assets,
@@ -67,9 +78,6 @@ contract MockMorpho {
         Id id = mp.id();
         Market storage m = market[id];
 
-        // Mirror Morpho's share→assets conversion (rounded up against repayer)
-        // and cap shares burned at the position's outstanding balance to avoid
-        // overflow on full repay due to rounding.
         uint256 sharesToBurn = _mulDivUp(
             assets,
             uint256(m.totalBorrowShares) + VIRTUAL_SHARES,
@@ -87,6 +95,15 @@ contract MockMorpho {
         return (assets, sharesToBurn);
     }
 
+    /// @notice Mock for Morpho's `withdrawCollateral`. Decrements the
+    ///         position's collateral balance and transfers the collateral
+    ///         token to `receiver`.
+    /// @dev    The real Morpho enforces post-state health factor ≥ 1 here,
+    ///         rejecting withdrawals that would put the position
+    ///         under-collateralized. This mock skips that check; tests
+    ///         needing HF-bound behavior should drive position state
+    ///         explicitly. Redeem tests don't need it because they repay
+    ///         debt before withdrawing collateral.
     function withdrawCollateral(
         MarketParams memory mp,
         uint256 assets,

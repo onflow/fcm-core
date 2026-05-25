@@ -124,7 +124,12 @@ contract FCMVaultTest is Test {
 
     // ---- redeem tests ------------------------------------------------------
 
-    /// @dev Helper: deposit `amount` WETH on behalf of `who` and return shares.
+    /// @dev    Test helper: mint `amount` of (mock) WETH to `who`, approve
+    ///         the vault, and deposit on their behalf. Used by every redeem
+    ///         test to put the vault into a known leveraged state.
+    /// @param  who     Account that will own the resulting vault shares.
+    /// @param  amount  WETH amount to deposit (in token units).
+    /// @return shares  Vault shares minted to `who`.
     function _depositFor(address who, uint256 amount) internal returns (uint256 shares) {
         MockERC20(address(WETH)).mint(who, amount);
         vm.startPrank(who);

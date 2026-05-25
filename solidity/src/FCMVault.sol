@@ -107,9 +107,46 @@ contract FCMVault is ERC4626 {
         emit Deposit(msg.sender, receiver, assets, shares);
     }
 
-    /// @notice Redeem `shares` for the proportional slice of the underlying
-    ///         position. AMM-mediated unwind: sell yield -> repay debt ->
-    ///         withdraw collateral -> reconcile surplus debt token -> pay out.
+    /// @notice Redeem `shares` of this vault for WETH. The owner's shares
+    ///         are burned, a proportional slice of the underlying leveraged
+    ///         position is unwound through the AMM, and the resulting WETH
+    ///         is delivered to `receiver`.
+    /// @dev    Three-address ERC-4626 semantics: `owner` is whose shares are
+    ///         burned, `receiver` is who the WETH is sent to, `msg.sender`
+    ///         is the caller. When `msg.sender != owner`, an ERC-20
+    ///         allowance from `owner` covering `shares` is consumed inside
+    ///         this call via `_spendAllowance`. This split lets routers and
+    ///         vault wrappers redeem on a user's behalf without a separate
+    ///         transferFrom step.
+    ///
+    ///         Unwind sequence (AMM-mediated, see docs/architecture.md §A).
+    ///         Let `p = shares / _totalClaims()`, the redeemed fraction of
+    ///         the total claim pool (existing supply + virtual-share offset):
+    ///         1. Sell `p × FUSDEV` for PYUSD0 on FlowSwap V3 (yield→debt).
+    ///         2. Repay up to `p × debt` of PYUSD0 to Morpho. Capped at the
+    ///            PYUSD0 received in step 1, so an AMM slip cannot revert
+    ///            the call directly (it surfaces in step 3 instead).
+    ///         3. Withdraw `p × collateral` of WETH from Morpho. Morpho
+    ///            enforces post-state HF ≥ 1; if step 2 under-repaid badly,
+    ///            this step reverts.
+    ///         4. Reconcile any leftover PYUSD0 to WETH on the WETH/PYUSD0
+    ///            pool (handles surplus from yield accrual).
+    ///         5. Burn shares and transfer the new WETH balance to receiver.
+    ///
+    ///         Rounding favors the vault: all proportional slices round
+    ///         down, so residuals accrue to remaining shareholders rather
+    ///         than leaking to the redeemer.
+    ///
+    ///         Reverts if `msg.sender != owner` and allowance is
+    ///         insufficient, or if the post-repay HF would be < 1 (Morpho
+    ///         rejects the collateral withdrawal in step 3). Returns 0
+    ///         immediately when `shares == 0`, with no state change.
+    /// @param  shares    Vault shares to burn.
+    /// @param  receiver  Account to credit with the WETH payout.
+    /// @param  owner     Account whose shares are burned.
+    /// @return assets    WETH actually delivered to `receiver`. May differ
+    ///                   from `previewRedeem(shares)` by AMM fees +
+    ///                   slippage + price drift across the two swap legs.
     function redeem(
         uint256 shares,
         address receiver,
@@ -129,11 +166,29 @@ contract FCMVault is ERC4626 {
         emit Withdraw(msg.sender, receiver, owner, assets, shares);
     }
 
-    /// @dev Unwind a `shares / _totalClaims()` slice of the position:
-    ///      1. Sell proportional FUSDEV for PYUSD0
-    ///      2. Repay proportional PYUSD0 debt (capped at PYUSD0 balance)
-    ///      3. Withdraw proportional WETH collateral
-    ///      4. Reconcile leftover PYUSD0 to WETH
+    /// @dev Unwind a proportional slice of the three legs of the vault's
+    ///      position, sized to `p = shares / _totalClaims()`. Extracted from
+    ///      `redeem` to keep that function under Solidity's stack limit.
+    ///
+    ///      `_totalClaims()` is `totalSupply() + 10**_decimalsOffset()` —
+    ///      the virtual offset is OpenZeppelin's inflation-attack defense.
+    ///      Including it in the denominator means a 100% redeem leaves a
+    ///      tiny non-redeemable residual in each leg (intentional).
+    ///
+    ///      Steps:
+    ///      1. Sell `p × FUSDEV.balanceOf(vault)` for PYUSD0 on the
+    ///         yield/debt pool.
+    ///      2. Repay `min(p × debt, vault PYUSD0 balance)` to Morpho. The
+    ///         min() is a defense: if the AMM under-delivered PYUSD0 (high
+    ///         slippage), capping the repay at the actual balance avoids a
+    ///         transferFrom revert; the consequence surfaces in step 3 via
+    ///         Morpho's HF ≥ 1 check.
+    ///      3. Withdraw `p × collateral` of WETH from Morpho.
+    ///      4. Reconcile any remaining PYUSD0 in the vault to WETH on the
+    ///         asset/debt pool. Non-zero leftover occurs when the yield leg
+    ///         has outgrown the debt leg (vault is profitable) — that
+    ///         profit is converted to the user's payout currency here.
+    /// @param shares Vault shares being redeemed (numerator of `p`).
     function _unwindSlice(uint256 shares) internal {
         uint256 claims = _totalClaims();
 
@@ -156,9 +211,22 @@ contract FCMVault is ERC4626 {
         }
     }
 
-    /// @notice Withdraw a target amount of assets by converting to shares via
-    ///         `previewWithdraw` and delegating to `redeem`. The actual WETH
-    ///         delivered may differ from `assets` due to AMM path-dependence.
+    /// @notice Withdraw approximately `assets` worth of WETH from the vault.
+    /// @dev    Thin wrapper that converts `assets` to a share count via
+    ///         OpenZeppelin's `previewWithdraw` (NAV-based, rounds shares up
+    ///         so the vault is never under-paid) and delegates to `redeem`.
+    ///
+    ///         CAVEAT vs the strict ERC-4626 contract: the spec says
+    ///         `withdraw` should deliver exactly `assets` of the underlying.
+    ///         Because our unwind is path-dependent (two AMM swaps), the
+    ///         WETH actually delivered to `receiver` may differ from
+    ///         `assets` by AMM fees + slippage. Integrators that need exact
+    ///         asset amounts should compose with their own slippage-checked
+    ///         router.
+    /// @param  assets    Target WETH amount used to size the share count.
+    /// @param  receiver  Account to credit with the WETH payout.
+    /// @param  owner     Account whose shares are burned.
+    /// @return shares    Shares burned (`= previewWithdraw(assets)`).
     function withdraw(
         uint256 assets,
         address receiver,

@@ -41,6 +41,24 @@ library MarketLib {
         MORPHO.borrow(market, assets, 0, address(this), address(this));
     }
 
+    /// @notice Repay `assets` units of the loan token to Morpho, reducing
+    ///         this contract's debt on the market.
+    /// @dev    Morpho pulls the loan tokens from the caller via
+    ///         `transferFrom`, so the caller must have approved Morpho in
+    ///         advance (the vault sets max allowance in its constructor).
+    ///
+    ///         Morpho's underlying `repay` takes both `assets` and `shares`
+    ///         arguments; we always pass `shares = 0` and let Morpho convert
+    ///         `assets` to shares internally, rounding shares burned UP
+    ///         (⌈assets * totalShares / totalAssets⌉). Callers should not
+    ///         assume an exact assets↔shares ratio.
+    ///
+    ///         `onBehalf = address(this)` repays this contract's own
+    ///         position; the trailing `""` is Morpho's callback data, unused.
+    /// @param  market  Morpho market parameters identifying the position.
+    /// @param  assets  Amount of loan token to repay, in token units.
+    /// @return assetsRepaid Mirrors `assets` (Morpho's return convention).
+    /// @return sharesRepaid Borrow shares burned by this repayment.
     function repay(MarketParams memory market, uint256 assets)
         internal
         returns (uint256 assetsRepaid, uint256 sharesRepaid)
@@ -48,6 +66,19 @@ library MarketLib {
         return MORPHO.repay(market, assets, 0, address(this), "");
     }
 
+    /// @notice Withdraw `assets` units of the collateral token from this
+    ///         contract's Morpho position back to this contract.
+    /// @dev    Morpho enforces that the withdrawal leaves the position with
+    ///         a health factor ≥ 1; if removing this much collateral would
+    ///         push LTV above LLTV, Morpho reverts. Redeem flows must
+    ///         therefore repay debt first when the position is close to the
+    ///         liquidation threshold.
+    ///
+    ///         Both the `onBehalf` and `receiver` arguments to Morpho are
+    ///         `address(this)`: the collateral belongs to this contract and
+    ///         is returned to this contract (not forwarded to an end user).
+    /// @param  market  Morpho market parameters identifying the position.
+    /// @param  assets  Amount of collateral to withdraw, in token units.
     function withdrawCollateral(MarketParams memory market, uint256 assets) internal {
         MORPHO.withdrawCollateral(market, assets, address(this), address(this));
     }
