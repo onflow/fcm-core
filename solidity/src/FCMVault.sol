@@ -9,9 +9,54 @@ contract FCMVault is ERC4626 {
     constructor(string memory name, string memory symbol, IERC20 asset_)
         ERC20(name, symbol)
         ERC4626(asset_)
-    {}
+    {
+        owner = msg.sender;
+        emit OwnerSet(address(0), msg.sender);
+    }
 
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
         return super.deposit(assets, receiver);
+    }
+
+    /// @notice Admin EOA. Set to the deployer at construction. Can adjust
+    ///         `maxTvl` and transfer ownership.
+    address public owner;
+    event OwnerSet(address indexed previousOwner, address indexed newOwner);
+
+    /// @notice Hand ownership to another address. Pass `address(0)` to renounce.
+    function transferOwnership(address newOwner) external onlyOwner {
+        emit OwnerSet(owner, newOwner);
+        owner = newOwner;
+    }
+
+    error NotOwner();
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    /// @notice TVL limit, denominated in the vault's Asset token. Enforced by
+    ///         the inherited `ERC4626.deposit`, which reverts
+    ///         `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`.
+    ///         Default 0 -> no deposits until admin raises it.
+    uint256 public maxTvl;
+    event MaxTvlSet(uint256 previousMaxTvl, uint256 newMaxTvl);
+
+    /// @notice Set the TVL limit. Default at deploy time is 0 (no deposits).
+    function setMaxTvl(uint256 newMaxTvl) external onlyOwner {
+        emit MaxTvlSet(maxTvl, newMaxTvl);
+        maxTvl = newMaxTvl;
+    }
+
+    /// @notice Remaining headroom under the TVL limit, clamped to 0 when full.
+    function maxDeposit(address) public view override returns (uint256) {
+        uint256 cachedTotalAssets = totalAssets();
+        return maxTvl > cachedTotalAssets ? maxTvl - cachedTotalAssets : 0;
+    }
+
+    /// @notice Mint is disabled in favor of deposit.
+    function maxMint(address) public pure override returns (uint256) {
+        return 0;
     }
 }
