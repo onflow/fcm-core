@@ -40,16 +40,16 @@ contract FCMVaultTest is Test {
         asset.approve(address(vault), amount);
     }
 
-    /// @dev Grant ALLOWED_ROLE to `account`.
+    /// @dev Grant EARLY_ACCESS_ROLE to `account`.
     function _allow(address account) internal {
-        bytes32 role = vault.ALLOWED_ROLE();
+        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
         vault.grantRole(role, account);
     }
 
-    /// @dev Revoke ALLOWED_ROLE from `account`.
+    /// @dev Revoke EARLY_ACCESS_ROLE from `account`.
     function _disallow(address account) internal {
-        bytes32 role = vault.ALLOWED_ROLE();
+        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
         vault.revokeRole(role, account);
     }
@@ -66,29 +66,29 @@ contract FCMVaultTest is Test {
     /// @notice Admin gets DEFAULT_ADMIN_ROLE on construction; no one starts allowlisted.
     function test_InitialRoles() public view {
         assertTrue(vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), admin));
-        assertFalse(vault.hasRole(vault.ALLOWED_ROLE(), alice));
+        assertFalse(vault.hasRole(vault.EARLY_ACCESS_ROLE(), alice));
     }
 
     // ---------------------------------------------------------------------
     // Role administration
     // ---------------------------------------------------------------------
 
-    /// @notice Admin can grant ALLOWED_ROLE; hasRole reflects the grant.
+    /// @notice Admin can grant EARLY_ACCESS_ROLE; hasRole reflects the grant.
     function test_AdminCanGrantRole() public {
         _allow(alice);
-        assertTrue(vault.hasRole(vault.ALLOWED_ROLE(), alice));
+        assertTrue(vault.hasRole(vault.EARLY_ACCESS_ROLE(), alice));
     }
 
-    /// @notice Admin can revoke ALLOWED_ROLE; hasRole reflects the revoke.
+    /// @notice Admin can revoke EARLY_ACCESS_ROLE; hasRole reflects the revoke.
     function test_AdminCanRevokeRole() public {
         _allow(alice);
         _disallow(alice);
-        assertFalse(vault.hasRole(vault.ALLOWED_ROLE(), alice));
+        assertFalse(vault.hasRole(vault.EARLY_ACCESS_ROLE(), alice));
     }
 
-    /// @notice Non-admin cannot grant ALLOWED_ROLE.
+    /// @notice Non-admin cannot grant EARLY_ACCESS_ROLE.
     function test_NonAdminCannotGrantRole() public {
-        bytes32 role = vault.ALLOWED_ROLE();
+        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector,
@@ -178,7 +178,9 @@ contract FCMVaultTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.ALLOWED_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                bob,
+                vault.EARLY_ACCESS_ROLE()
             )
         );
         vm.prank(alice);
@@ -201,7 +203,7 @@ contract FCMVaultTest is Test {
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector,
                 alice,
-                vault.ALLOWED_ROLE()
+                vault.EARLY_ACCESS_ROLE()
             )
         );
         vm.prank(alice);

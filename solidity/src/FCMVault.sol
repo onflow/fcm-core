@@ -9,13 +9,13 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 
 /// @title FCMVault
 /// @notice ERC-4626 vault for Flow Credit Markets, with role-gated participation.
-///         Holders of `ALLOWED_ROLE` may deposit, hold, and transfer shares.
+///         Holders of `EARLY_ACCESS_ROLE` may deposit, hold, and transfer shares.
 ///         Burns (withdrawals/redeems) are always permitted so a removed holder
 ///         can still exit.
 contract FCMVault is ERC4626, AccessControl {
     /// @notice Members of this role may deposit assets, hold shares, and
     ///         transfer shares.
-    bytes32 public constant ALLOWED_ROLE = keccak256("ALLOWED_ROLE");
+    bytes32 public constant EARLY_ACCESS_ROLE = keccak256("EARLY_ACCESS_ROLE");
 
     constructor(string memory name, string memory symbol, IERC20 asset_, address admin)
         ERC20(name, symbol)
@@ -30,13 +30,13 @@ contract FCMVault is ERC4626, AccessControl {
 
     /// @inheritdoc IERC4626
     function maxDeposit(address receiver) public view override returns (uint256) {
-        if (!hasRole(ALLOWED_ROLE, receiver)) return 0;
+        if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
         return super.maxDeposit(receiver);
     }
 
     /// @inheritdoc IERC4626
     function maxMint(address receiver) public view override returns (uint256) {
-        if (!hasRole(ALLOWED_ROLE, receiver)) return 0;
+        if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
         return super.maxMint(receiver);
     }
 
@@ -47,11 +47,11 @@ contract FCMVault is ERC4626, AccessControl {
     ///        de-allowlisted holders.
     function _update(address from, address to, uint256 value) internal override {
         if (to != address(0)) {
-            if (!hasRole(ALLOWED_ROLE, to)) {
-                revert IAccessControl.AccessControlUnauthorizedAccount(to, ALLOWED_ROLE);
+            if (!hasRole(EARLY_ACCESS_ROLE, to)) {
+                revert IAccessControl.AccessControlUnauthorizedAccount(to, EARLY_ACCESS_ROLE);
             }
-            if (from != address(0) && !hasRole(ALLOWED_ROLE, from)) {
-                revert IAccessControl.AccessControlUnauthorizedAccount(from, ALLOWED_ROLE);
+            if (from != address(0) && !hasRole(EARLY_ACCESS_ROLE, from)) {
+                revert IAccessControl.AccessControlUnauthorizedAccount(from, EARLY_ACCESS_ROLE);
             }
         }
         super._update(from, to, value);
