@@ -251,7 +251,7 @@ If an attacker is able to invoke a function which performs a swap (that isn't sw
 - The attacker can reliably order their operations by structuring the "full sandwich" as one transaction.
 - The attack is repeatable.
 
-### Oracle Manipulation
+### Oracle Manipulation (TODO)
 
 ## Dust Strategy (TODO)
 
