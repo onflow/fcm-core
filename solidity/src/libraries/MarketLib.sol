@@ -47,24 +47,24 @@ library MarketLib {
         return uint256(MORPHO.position(market.id(), address(this)).collateral);
     }
 
-/// @notice Returns this contract's current debt in the given Morpho market, denominated in raw loan-token units.
-/// @dev `pos.borrowShares` represents the "debt shares" we owe. Debt shares are an intermediary
-/// representation used to track each borrower's proportional claim on the market's total debt as
-/// interest accrues over time.
-///
-/// `mkt.totalBorrowShares` is the total outstanding "debt shares" across all borrowers, and
-/// `mkt.totalBorrowAssets` is the total outstanding debt denominated in the loan asset. Our debt
-/// in asset terms is therefore `(borrowShares / totalBorrowShares) * totalBorrowAssets`.
-///
-/// For example, if `borrowShares` is 10 and `totalBorrowShares` is 100, we owe 10% of all debt
-/// in the market. If `totalBorrowAssets` is 1000, we owe (10/100) * 1000 = 100 units of the loan
-/// asset.
-///
-/// `VIRTUAL_ASSETS` and `VIRTUAL_SHARES` are Morpho's inflation-attack mitigation: they seed the
-/// share/asset ratio so the first borrower cannot manipulate it. They must be included in every
-/// conversion to match Morpho's internal accounting.
-///
-/// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required.
+    /// @notice Returns this contract's current debt in the given Morpho market, denominated in raw loan-token units.
+    /// @dev `pos.borrowShares` represents the "debt shares" we owe. Debt shares are an intermediary
+    /// representation used to track each borrower's proportional claim on the market's total debt as
+    /// interest accrues over time.
+    ///
+    /// `mkt.totalBorrowShares` is the total outstanding "debt shares" across all borrowers, and
+    /// `mkt.totalBorrowAssets` is the total outstanding debt denominated in the loan asset. Our debt
+    /// in asset terms is therefore `(borrowShares / totalBorrowShares) * totalBorrowAssets`.
+    ///
+    /// For example, if `borrowShares` is 10 and `totalBorrowShares` is 100, we owe 10% of all debt
+    /// in the market. If `totalBorrowAssets` is 1000, we owe (10/100) * 1000 = 100 units of the loan
+    /// asset.
+    ///
+    /// `VIRTUAL_ASSETS` and `VIRTUAL_SHARES` are Morpho's inflation-attack mitigation: they seed the
+    /// share/asset ratio so the first borrower cannot manipulate it. They must be included in every
+    /// conversion to match Morpho's internal accounting.
+    ///
+    /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required.
     function debt(MarketParams memory market) internal view returns (uint256) {
         Position memory pos = MORPHO.position(market.id(), address(this));
         if (pos.borrowShares == 0) return 0;
@@ -124,12 +124,12 @@ library MarketLib {
         return maxBorrow(market).mulDiv(WAD, debtAmount);
     }
 
-    function maxBorrowAtHf(MarketParams memory market, uint256 targetHf)
+    function maxBorrowAtHealthFactor(MarketParams memory market, uint256 targetHealthFactor)
         internal
         view
         returns (uint256)
     {
-        uint256 targetDebt = maxBorrow(market).mulDiv(WAD, targetHf);
+        uint256 targetDebt = maxBorrow(market).mulDiv(WAD, targetHealthFactor);
         uint256 currentDebt = debt(market);
         return targetDebt > currentDebt ? targetDebt - currentDebt : 0;
     }

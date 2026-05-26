@@ -13,54 +13,67 @@ import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketLib} from "./libraries/MarketLib.sol";
 import {SwapLib} from "./libraries/SwapLib.sol";
 
-// ---- Flow EVM mainnet addresses ----------------------------------------
-
-IERC20  constant WETH   = IERC20(0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590);
-IERC20  constant PYUSD0 = IERC20(0x99aF3EeA856556646C98c8B9b2548Fe815240750);
-IERC20  constant FUSDEV = IERC20(0xd069d989e2F44B70c65347d1853C0c67e10a9F8D);
+// Morpho Blue singleton — same address on every EVM chain.
 IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
-address constant MARKET_IRM = 0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546;
 
 /// @title FCMVault
 /// @notice ERC-4626 vault on Morpho Blue. Three-leg leveraged position:
-///         1. Asset leg: WETH supplied as Morpho collateral.
-///         2. Debt leg: PYUSD0 borrowed from that market.
-///         3. Yield leg: FUSDEV bought with the borrowed PYUSD0.
+///         1. Asset leg: collateral token supplied to Morpho.
+///         2. Debt leg: loan token borrowed from the market.
+///         3. Yield leg: yield token bought with the borrowed loan token.
 contract FCMVault is ERC4626 {
     using SafeERC20 for IERC20;
     using Math for uint256;
     using MarketLib for MarketParams;
 
-    uint256 public constant MARKET_LLTV = 0.86e18;
-    uint24 public constant FEE_YIELD_DEBT = 100; // PYUSD0/FUSDEV pool
-    uint256 public constant HF_UPPER_TARGET = 1.45e18; // 1e18-scaled target HF for deposit sizing
-    uint24 public constant FEE_YIELD_DEBT = 100; // PYUSD0/FUSDEV pool
-    uint256 public constant HF_UPPER_TARGET = 1.45e18; // 1e18-scaled target HF for deposit sizing
     // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
     // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     uint8 internal constant DECIMALS_OFFSET = 6;
 
-    MarketParams public market;
+    IERC20 public immutable loanToken;
+    IERC20 public immutable yieldToken;
+    uint24 public immutable feeYieldDebt;
+    uint256 public immutable healthFactorUpperTarget;
     address public immutable yieldOracle;
 
+    MarketParams public market;
+
+    struct InitParams {
+        IERC20 collateral;
+        IERC20 loanToken;
+        IERC20 yieldToken;
+        address marketOracle;
+        address marketIrm;
+        uint256 marketLltv;
+        uint24 feeYieldDebt;
+        uint256 healthFactorUpperTarget;
+        address yieldOracle;
+        string name;
+        string symbol;
+    }
+
     constructor(
-        address marketOracle,
-        address yieldOracle_
-    ) ERC20("Flow Credit Markets WETH", "fcmWETH") ERC4626(WETH) {
+        InitParams memory p
+    ) ERC20(p.name, p.symbol) ERC4626(p.collateral) {
+        loanToken = p.loanToken;
+        yieldToken = p.yieldToken;
+        feeYieldDebt = p.feeYieldDebt;
+        healthFactorUpperTarget = p.healthFactorUpperTarget;
+        yieldOracle = p.yieldOracle;
+
         market = MarketParams({
-            loanToken: address(PYUSD0),
-            collateralToken: address(WETH),
-            oracle: marketOracle,
-            irm: MARKET_IRM,
-            lltv: MARKET_LLTV
+            loanToken: address(p.loanToken),
+            collateralToken: address(p.collateral),
+            oracle: p.marketOracle,
+            irm: p.marketIrm,
+            lltv: p.marketLltv
         });
-        yieldOracle = yieldOracle_;
 
         uint256 maxAllowance = type(uint256).max;
-        WETH.forceApprove(address(MORPHO), maxAllowance);
-        PYUSD0.forceApprove(address(MORPHO), maxAllowance);
-        PYUSD0.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
-        FUSDEV.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
+        p.collateral.forceApprove(address(MORPHO), maxAllowance);
+        p.loanToken.forceApprove(address(MORPHO), maxAllowance);
+        p.loanToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
+        p.yieldToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
     }
 
     // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
@@ -75,7 +88,9 @@ contract FCMVault is ERC4626 {
 
     function totalAssets() public view override returns (uint256) {
         uint256 assetAmount = market.collateral();
-        uint256 yieldInAsset = _yieldToAsset(FUSDEV.balanceOf(address(this)));
+        uint256 yieldInAsset = _yieldToAsset(
+            yieldToken.balanceOf(address(this))
+        );
         uint256 debtInAsset = market.debtToCollateral(market.debt());
         uint256 gross = assetAmount + yieldInAsset;
         if (gross > debtInAsset) {
@@ -92,15 +107,15 @@ contract FCMVault is ERC4626 {
 
         uint256 navBefore = totalAssets();
 
-        WETH.safeTransferFrom(msg.sender, address(this), assets);
+        IERC20(asset()).safeTransferFrom(msg.sender, address(this), assets);
         market.supplyCollateral(assets);
         uint256 toBorrow = _targetBorrowAgainst(assets);
         if (toBorrow > 0) {
             market.borrow(toBorrow);
             SwapLib.swapExactIn(
-                address(PYUSD0),
-                address(FUSDEV),
-                FEE_YIELD_DEBT,
+                address(loanToken),
+                address(yieldToken),
+                feeYieldDebt,
                 toBorrow
             );
         }
@@ -112,21 +127,23 @@ contract FCMVault is ERC4626 {
         emit Deposit(msg.sender, receiver, assets, shares);
     }
 
-    /// @dev How much PYUSD0 to borrow against `newAssets` while keeping the
-    ///      position at `HF_UPPER_TARGET`.
+    /// @dev How much loan token to borrow against `newAssets` while keeping
+    ///      the position at `healthFactorUpperTarget`.
     function _targetBorrowAgainst(
         uint256 newAssets
     ) internal view returns (uint256) {
         if (newAssets == 0) return 0;
         uint256 capFromNewAsset = market.maxBorrowFor(newAssets).mulDiv(
             1e18,
-            HF_UPPER_TARGET
+            healthFactorUpperTarget
         );
-        uint256 capFromTargetDebt = market.maxBorrowAtHf(HF_UPPER_TARGET);
-        return
-            capFromNewAsset < capFromTargetDebt
-                ? capFromNewAsset
-                : capFromTargetDebt;
+        uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(
+            healthFactorUpperTarget
+        );
+        if (capFromNewAsset < capFromTargetDebt) {
+            return capFromNewAsset;
+        }
+        return capFromTargetDebt;
     }
 
     /// @dev Routes yield → debt → asset. The two 1e36 oracle scales cancel.
