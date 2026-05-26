@@ -239,7 +239,7 @@ See [explanation from OpenZeppelin](https://docs.openzeppelin.com/contracts/5.x/
 
 Our implementation is safe from this attack because we inherit from the OpenZeppelin ERC4626 base contract, which implements a virtual share mitigation. See [here](https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L22-L47) for guidance on extending this mitigation.
 
-### Re-entrancy Attack
+### Re-entrancy Attack (TODO)
 For each external function, how does it protect against re-entrancy?
 
 ### Sandwich Attack
