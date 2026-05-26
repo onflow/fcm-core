@@ -34,6 +34,10 @@ contract FCMVault is ERC4626 {
     uint256 public constant MARKET_LLTV = 0.86e18;
     uint24 public constant FEE_YIELD_DEBT = 100; // PYUSD0/FUSDEV pool
     uint256 public constant HF_UPPER_TARGET = 1.45e18; // 1e18-scaled target HF for deposit sizing
+    uint24 public constant FEE_YIELD_DEBT = 100; // PYUSD0/FUSDEV pool
+    uint256 public constant HF_UPPER_TARGET = 1.45e18; // 1e18-scaled target HF for deposit sizing
+    // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
+    // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     uint8 internal constant DECIMALS_OFFSET = 6;
 
     MarketParams public market;
@@ -59,6 +63,8 @@ contract FCMVault is ERC4626 {
         FUSDEV.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
     }
 
+    // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
+    // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     function _decimalsOffset() internal pure override returns (uint8) {
         return DECIMALS_OFFSET;
     }
