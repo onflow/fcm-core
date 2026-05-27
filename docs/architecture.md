@@ -1,0 +1,261 @@
+# FCM Architecture
+
+This repo implements an [ERC4626](https://eips.ethereum.org/EIPS/eip-4626)-compliant vault which implements a levered investment with automated rebalancing.
+
+## Terminology
+- **Asset** - ERC4626 term meaning "the unit of account of this vault". Deposits, withdrawals, and NAV for a vault are denominated in the vault's asset. The asset must be an ERC20 token.
+  - **InnerAsset/OuterAsset** - The asset of the inner vault or outer vault, respective (see below)
+- **Share** - ERC4626 term meaning "a portion of the total assets in this vault". Shares are fungible and are represented as ERC20 tokens. Vault users deposit assets and receive shares.
+  - **InnerShare/OuterShare** - The share of the inner vault or outer vault, respective (see below)
+- **Outer Vault** - The ERC4626 vault implemented in this repository, which borrows against deposits to invest in an inner vault.
+- **Inner Vault** - The ERC4626 vault which the outer vault invests borrowing proceeds in.
+
+## Dependencies
+### Lending Protocol
+[Morpho Blue](https://github.com/morpho-org/morpho-blue)
+
+### Automated Market Maker (AMM)
+[FlowSwap (Uniswap v3)](https://flowswap.io/)
+
+### Inner Vault
+In general, the inner vault may be any ERC4626-compliant vault. As an example, Jon's FUSDEV vault uses [Morpho Vault v2](https://docs.morpho.org/build/earn/concepts/vault-mechanics)
+
+**Liquidity:** We must assume that the inner vault MAY be unable to satisfy any withdrawal requests, at any time (eg. is illiquid). To address this in a general way, we primarily use DEX swaps to acquire/dispose of InnerShares. We then rely on the DEX to provide sufficient liquidity for the shares. 
+
+**NAV Reporting:** We must assume that the NAV (share price) reported by the vault may be out of date on the order of days.
+
+## Deposit Flow
+### A. AMM-Mediated Deposit
+We swap debt tokens (InnerAsset) to InnerShares via an AMM. Our ability to satisfy deposits is dependent on available liquidity in the AMM pool. 
+
+```mermaid
+sequenceDiagram
+      autonumber
+      actor User
+      participant Outer as Outer ERC4626 Vault
+      participant Lender as Lending Protocol
+      participant Dex as AMM
+
+      User->>Outer: deposit(outerAsset)
+      activate Outer
+  
+      Outer->>Lender: supply (outerAsset)
+      Lender-->>Outer: borrow (innerAsset)
+      Note over Lender,Outer: Always supply all deposits. <br />Borrow amount limited by LTV.
+
+      Outer->>Dex: swap (innerAsset → innerShare)
+      Dex-->>Outer: innerShare
+  
+      Outer-->>User: outerShare
+      deactivate Outer
+```
+
+### B. Direct Deposit
+We deposit debt tokens (InnerAsset) to InnerShares via the inner vault's `deposit` function. Our ability to satisfy deposits is dependent on the vault's deposit capacity ([`maxDeposit`](https://ethereum.org/developers/docs/standards/tokens/erc-4626/#maxdeposit))
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Outer as Outer ERC4626 Vault
+    participant Lender as Lending Protocol
+    participant Inner as Inner ERC4626 Vault
+
+    User->>Outer: deposit(outerAsset)
+    activate Outer
+
+    Outer->>Lender: supply (outerAsset)
+    Lender-->>Outer: borrow (innerAsset)
+    Note over Lender,Outer: Always supply all deposits. <br />Borrow amount limited by LTV.
+
+    Outer->>Inner: deposit (innerAsset)
+    activate Inner
+    Inner-->>Outer: innerShare
+    deactivate Inner
+
+    Outer-->>User: outerShare
+    deactivate Outer
+```
+
+## Withdrawal Flow 
+There are several ways to implement withdrawals, enumerated below. The main differences are:
+1. Source of liquidity risk (inner vault vs AMM).
+2. Ability to withdraw full amount when LTV is near limit. In option C, the flashloan enables always repaying the full debt amount first. In options A/B, we may be unable to do this (depending on LTV). See [below](#ltv-limit-edge-case) for details.
+
+### A. AMM-Mediated Withdrawal
+```mermaid
+sequenceDiagram
+      autonumber
+      actor User
+      participant Outer as Outer ERC4626 Vault
+      participant Lender as Lending Protocol
+      participant Dex as AMM
+
+      User->>Outer: redeem(outerShare)
+      activate Outer
+
+      Outer->>Dex: swap (innerShare → innerAsset)
+      Dex-->>Outer: innerAsset
+      Note over Outer,Dex: We realize market price, not NAV<br /> (NAV may be higher or lower)
+
+      Outer->>Lender: repay (innerAsset)
+      Lender-->>Outer: withdraw collateral (outerAsset)
+
+      Outer->>Dex: reconcile surplus (innerAsset → outerAsset)
+      Dex-->>Outer: outerAsset
+
+      Outer-->>User: outerAsset
+      deactivate Outer
+```
+
+#### Pros
+  - No inner vault liquidity risk
+
+#### Cons
+  - Requires repaying debt before withdrawing collateral. Reverts if the yield→debt swap underdelivers and the intermediate HF would dip below 1.
+  - Pays DEX fees/slippage
+  - Pool liquidity risk: thin yield/debt pool degrades or blocks large redeems.
+
+### B. Direct Withdrawal
+```mermaid
+sequenceDiagram
+     autonumber
+     actor User
+     participant Outer as Outer ERC4626 Vault
+     participant Lender as Lending Protocol
+     participant Inner as Inner ERC4626 Vault
+
+     User->>Outer: redeem(outerShare)
+     activate Outer
+ 
+     Outer->>Inner: redeem (innerShare)
+     activate Inner
+     Inner-->>Outer: innerAsset
+     deactivate Inner
+
+     Outer->>Lender: repay (innerAsset)
+     Lender-->>Outer: withdraw collateral (outerAsset)
+
+     Outer->>Dex: reconcile surplus (outerAsset ↔ innerAsset)
+     Dex-->>Outer: innerAsset
+     
+     Outer-->>User: outerAsset
+     deactivate Outer
+```
+
+#### Pros
+  - Redeems yield at NAV — no LP fee, no slippage on the yield leg.
+  - Independent on AMM liquidity for the yield asset.
+
+#### Cons
+  - Dependent on available liquidity in inner vault.
+
+### C. Flash Loan Path
+```mermaid
+sequenceDiagram
+      autonumber
+      actor User
+      participant Outer as Outer ERC4626 Vault
+      participant Lender as Lending Protocol
+      participant Dex as AMM
+
+      User->>Outer: redeem(outerShare)
+      activate Outer
+
+      Lender-->>Outer: flashloan (innerAsset)
+
+      Outer->>Lender: repay (innerAsset)
+      Lender-->>Outer: withdraw collateral (outerAsset)
+
+      Outer->>Dex: swap (yieldAsset → innerAsset)
+      Dex-->>Outer: innerAsset
+
+      Outer->>Dex: reconcile surplus (outerAsset ↔ innerAsset)
+      Dex-->>Outer: innerAsset
+
+      Outer->>Lender: repay flashloan (innerAsset)
+
+      Outer-->>User: outerAsset
+      deactivate Outer
+```
+
+#### Pros
+  - Deterministic unwind at any HF — debt is cleared before collateral moves
+
+#### Cons
+  - Most complex: callback-based reentry, encoded calldata, extra Morpho roundtrip.
+  - Larger attack surface — callback must validate msg.sender and decode data correctly.
+  - Still depends on DEX for the yield sale and reconcile legs (liquidity, fees/slippage)
+
+#### LTV Limit Edge Case
+```mermaid
+sequenceDiagram
+      autonumber
+      actor User
+      participant Outer as Outer ERC4626 Vault
+      participant Lender as Lending Protocol
+      participant Dex as AMM
+  
+      Note over Lender: Initial: HF ≈ 1 (LTV near LLTV)<br/>In options A/B, if our recovered outerAsset is < debt<br />then we can't repay full debt amount.
+
+      User->>Outer: redeem(outerShare)
+      activate Outer
+
+      Lender-->>Outer: flashloan (innerAsset)
+      Note over Outer,Lender: Vault holds enough debt-token to repay in full<br/>without touching the position
+
+      Outer->>Lender: repay full debtSlice (innerAsset)
+      Note over Lender: HF improves (debt ↓, coll unchanged)<br/>Position is over-collateralized
+
+      Lender-->>Outer: withdraw collSlice (outerAsset)
+      Note over Lender: Always succeeds because we just repaid full debt slice
+
+      Outer->>Dex: sell yieldSlice → innerAsset
+      Dex-->>Outer: innerAsset (may be < flash loan amount)
+
+      alt surplus (yield sale ≥ flash)
+          Outer->>Dex: swap surplus innerAsset → outerAsset
+          Dex-->>Outer: extra outerAsset (user bonus)
+      else deficit (yield sale < flash)
+          Outer->>Dex: swap some collSlice → innerAsset
+          Dex-->>Outer: innerAsset (covers deficit)
+          Note over Outer: User absorbs their own<br/>yield shortfall at market price
+      end
+
+      Outer->>Lender: repay flashloan (innerAsset)
+
+      Outer-->>User: outerAsset
+      deactivate Outer
+```
+
+## Rebalancing
+See **TODO LINK TO REBALANCING SPEC**
+
+## Custom Behaviour
+See [here](https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L50-L68) for guidance on how to safely extend the base ERC4626 contract.
+
+## Security
+### Donation/Inflation Attack
+See [explanation from OpenZeppelin](https://docs.openzeppelin.com/contracts/5.x/erc4626#security-concern-inflation-attack).
+
+Our implementation is safe from this attack because we inherit from the OpenZeppelin ERC4626 base contract, which implements a virtual share mitigation. See [here](https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L22-L47) for guidance on extending this mitigation.
+
+### Re-entrancy Attack (TODO)
+For each external function, how does it protect against re-entrancy?
+
+### Sandwich Attack
+An attacker manipulates AMM prices before and after our swap to capture part of the value of our swap. 
+- The primary mitigation is a slippage limit, which limits how much slippage we will accept on each trade. This doesn't prevent the attack, but does limit how much value can be extracted per trade.
+- Flow as the underlying platform provides some protection. There is no system akin to [MEV-Boost](https://github.com/flashbots/mev-boost), which systematizes MEV extraction. No individual node in Flow can deterministically dictate transaction ordering. Attackers need to send many transactions, hope some are placed in the desired order, and be able to revert operations on those that are not in the desired order. Still possible, but more complex and expensive.
+
+If an attacker is able to invoke a function which performs a swap (that isn't swapping their funds), then the sandwich attack becomes much more dangerous (eg. a permissionless `rebalance` function).
+- The attacker can reliably order their operations by structuring the "full sandwich" as one transaction.
+- The attack is repeatable.
+
+### Oracle Manipulation (TODO)
+
+## Dust Strategy (TODO)
+
+## References / Prior Art
+
+- [Patrick's Vault PoC](https://github.com/holyfuchs/fcm-sol-poc)
+- [Schlagonia Morpho Lender Vault](https://github.com/Schlagonia/lender-borrower/blob/morpho/src/MorphoBlueLenderBorrower.sol)
