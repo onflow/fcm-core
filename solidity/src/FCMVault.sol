@@ -40,10 +40,10 @@ contract FCMVault is ERC4626 {
     MarketParams public market;
     address public immutable yieldOracle;
 
-    constructor(
-        address marketOracle,
-        address yieldOracle_
-    ) ERC20("Flow Credit Markets WETH", "fcmWETH") ERC4626(WETH) {
+    constructor(address marketOracle, address yieldOracle_)
+        ERC20("Flow Credit Markets WETH", "fcmWETH")
+        ERC4626(WETH)
+    {
         market = MarketParams({
             loanToken: address(PYUSD0),
             collateralToken: address(WETH),
@@ -79,10 +79,7 @@ contract FCMVault is ERC4626 {
         return 0;
     }
 
-    function deposit(
-        uint256 assets,
-        address receiver
-    ) public override returns (uint256 shares) {
+    function deposit(uint256 assets, address receiver) public override returns (uint256 shares) {
         market.accrueInterest();
 
         uint256 navBefore = totalAssets();
@@ -92,12 +89,7 @@ contract FCMVault is ERC4626 {
         uint256 toBorrow = _targetBorrowAgainst(assets);
         if (toBorrow > 0) {
             market.borrow(toBorrow);
-            SwapLib.swapExactIn(
-                address(PYUSD0),
-                address(FUSDEV),
-                FEE_YIELD_DEBT,
-                toBorrow
-            );
+            SwapLib.swapExactIn(address(PYUSD0), address(FUSDEV), FEE_YIELD_DEBT, toBorrow);
         }
 
         uint256 contributed = totalAssets() - navBefore;
@@ -138,11 +130,11 @@ contract FCMVault is ERC4626 {
     /// @param  receiver  Account to credit with the WETH payout.
     /// @param  owner     Account whose shares are burned.
     /// @return assets    WETH actually delivered to `receiver`.
-    function redeem(
-        uint256 shares,
-        address receiver,
-        address owner
-    ) public override returns (uint256 assets) {
+    function redeem(uint256 shares, address receiver, address owner)
+        public
+        override
+        returns (uint256 assets)
+    {
         if (shares == 0) return 0;
         // If someone besides the owner attempts to redeem, this will:
         // 1. Verify the redeemer's allowance is <= shares.
@@ -199,18 +191,10 @@ contract FCMVault is ERC4626 {
         uint256 claims = _totalClaims();
 
         // yieldOut is the quantity of yield tokens we are selling to satisfy the redemption
-        uint256 yieldOut = FUSDEV.balanceOf(address(this)).mulDiv(
-            shares,
-            claims
-        );
+        uint256 yieldOut = FUSDEV.balanceOf(address(this)).mulDiv(shares, claims);
         uint256 pyusdBefore = PYUSD0.balanceOf(address(this));
         if (yieldOut > 0) {
-            SwapLib.swapExactIn(
-                address(FUSDEV),
-                address(PYUSD0),
-                FEE_YIELD_DEBT,
-                yieldOut
-            );
+            SwapLib.swapExactIn(address(FUSDEV), address(PYUSD0), FEE_YIELD_DEBT, yieldOut);
         }
         uint256 pyusdGot = PYUSD0.balanceOf(address(this)) - pyusdBefore;
 
@@ -223,12 +207,7 @@ contract FCMVault is ERC4626 {
             if (collSlice > 0) market.withdrawCollateral(collSlice);
             uint256 surplus = pyusdGot - debtSlice;
             if (surplus > 0) {
-                SwapLib.swapExactIn(
-                    address(PYUSD0),
-                    address(WETH),
-                    FEE_ASSET_DEBT,
-                    surplus
-                );
+                SwapLib.swapExactIn(address(PYUSD0), address(WETH), FEE_ASSET_DEBT, surplus);
             }
         } else {
             // Case B: yield underperformed; scale debt+collateral by
@@ -241,39 +220,32 @@ contract FCMVault is ERC4626 {
 
     // TODO: reverts
     function withdraw(
-        uint256 /*assets*/,
-        address /*receiver*/,
+        uint256,
+        /*assets*/
+        address,
+        /*receiver*/
         address /*owner*/
-    ) public pure override returns (uint256) {
+    )
+        public
+        pure
+        override
+        returns (uint256)
+    {
         revert("not implemented");
     }
 
     /// @dev How much PYUSD0 to borrow against `newAssets` while keeping the
     ///      position at `HF_UPPER_TARGET`.
-    function _targetBorrowAgainst(
-        uint256 newAssets
-    ) internal view returns (uint256) {
+    function _targetBorrowAgainst(uint256 newAssets) internal view returns (uint256) {
         if (newAssets == 0) return 0;
-        uint256 capFromNewAsset = market.maxBorrowFor(newAssets).mulDiv(
-            1e18,
-            HF_UPPER_TARGET
-        );
+        uint256 capFromNewAsset = market.maxBorrowFor(newAssets).mulDiv(1e18, HF_UPPER_TARGET);
         uint256 capFromTargetDebt = market.maxBorrowAtHf(HF_UPPER_TARGET);
-        return
-            capFromNewAsset < capFromTargetDebt
-                ? capFromNewAsset
-                : capFromTargetDebt;
+        return capFromNewAsset < capFromTargetDebt ? capFromNewAsset : capFromTargetDebt;
     }
 
     /// @dev Routes yield → debt → asset. The two 1e36 oracle scales cancel.
-    function _yieldToAsset(
-        uint256 yieldAmount
-    ) internal view returns (uint256) {
+    function _yieldToAsset(uint256 yieldAmount) internal view returns (uint256) {
         if (yieldAmount == 0) return 0;
-        return
-            yieldAmount.mulDiv(
-                IOracle(yieldOracle).price(),
-                market.oraclePrice()
-            );
+        return yieldAmount.mulDiv(IOracle(yieldOracle).price(), market.oraclePrice());
     }
 }

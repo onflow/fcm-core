@@ -24,9 +24,12 @@ contract MockMorpho {
         market[mp.id()].lastUpdate = uint128(block.timestamp);
     }
 
-    function supplyCollateral(MarketParams memory mp, uint256 assets, address onBehalf, bytes calldata)
-        external
-    {
+    function supplyCollateral(
+        MarketParams memory mp,
+        uint256 assets,
+        address onBehalf,
+        bytes calldata
+    ) external {
         Id id = mp.id();
         position[id][onBehalf].collateral += uint128(assets);
         IERC20(mp.collateralToken).transferFrom(msg.sender, address(this), assets);
@@ -35,7 +38,8 @@ contract MockMorpho {
     function borrow(
         MarketParams memory mp,
         uint256 assets,
-        uint256 /*shares*/,
+        uint256,
+        /*shares*/
         address onBehalf,
         address receiver
     ) external returns (uint256, uint256) {
@@ -71,7 +75,8 @@ contract MockMorpho {
     function repay(
         MarketParams memory mp,
         uint256 assets,
-        uint256 /*shares*/,
+        uint256,
+        /*shares*/
         address onBehalf,
         bytes calldata
     ) external returns (uint256, uint256) {

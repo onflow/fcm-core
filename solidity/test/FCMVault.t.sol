@@ -28,10 +28,7 @@ contract FCMVaultTest is Test {
         vm.etch(address(PYUSD0), erc20Code);
         vm.etch(address(FUSDEV), erc20Code);
         vm.etch(address(MORPHO), address(new MockMorpho()).code);
-        vm.etch(
-            address(SwapLib.SWAP_ROUTER),
-            address(new MockSwapRouter()).code
-        );
+        vm.etch(address(SwapLib.SWAP_ROUTER), address(new MockSwapRouter()).code);
         vm.etch(MARKET_IRM, address(new MockIrm()).code);
 
         marketOracle = new MockOracle(WETH_PRICE);
@@ -70,12 +67,7 @@ contract FCMVaultTest is Test {
 
         // toBorrow = 2000 * 0.86 / 1.45 ≈ 1186.2069 PYUSD0 (1:1 to FUSDEV).
         uint256 expectedBorrow = ((amount * 2000 * 0.86e18) / 1.45e18);
-        assertApproxEqAbs(
-            FUSDEV.balanceOf(address(vault)),
-            expectedBorrow,
-            1,
-            "vault fusdev"
-        );
+        assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), expectedBorrow, 1, "vault fusdev");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "vault pyusd0");
     }
 
@@ -130,10 +122,7 @@ contract FCMVaultTest is Test {
     /// @param  who     Account that will own the resulting vault shares.
     /// @param  amount  WETH amount to deposit (in token units).
     /// @return shares  Vault shares minted to `who`.
-    function _depositFor(
-        address who,
-        uint256 amount
-    ) internal returns (uint256 shares) {
+    function _depositFor(address who, uint256 amount) internal returns (uint256 shares) {
         MockERC20(address(WETH)).mint(who, amount);
         vm.startPrank(who);
         WETH.approve(address(vault), amount);
@@ -171,11 +160,7 @@ contract FCMVaultTest is Test {
         uint256 assetsOut = vault.redeem(shares, receiver, user);
 
         assertEq(vault.balanceOf(user), 0, "owner shares");
-        assertEq(
-            vault.totalSupply(),
-            supplyBefore - shares,
-            "supply decreased"
-        );
+        assertEq(vault.totalSupply(), supplyBefore - shares, "supply decreased");
         assertEq(WETH.balanceOf(receiver), assetsOut, "receiver weth");
         assertEq(WETH.balanceOf(user), 0, "owner weth untouched");
     }
@@ -195,26 +180,13 @@ contract FCMVaultTest is Test {
 
         // ~half of each leg consumed (within 0.1% — virtual-share offset).
         assertApproxEqRel(
-            WETH.balanceOf(address(MORPHO)),
-            collateralBefore / 2,
-            1e15,
-            "collateral halved"
+            WETH.balanceOf(address(MORPHO)), collateralBefore / 2, 1e15, "collateral halved"
         );
-        assertApproxEqRel(
-            FUSDEV.balanceOf(address(vault)),
-            fusdevBefore / 2,
-            1e15,
-            "fusdev halved"
-        );
+        assertApproxEqRel(FUSDEV.balanceOf(address(vault)), fusdevBefore / 2, 1e15, "fusdev halved");
         assertApproxEqRel(assetsOut, amount / 2, 1e15, "assetsOut approx half");
 
         // Remaining shares roughly track the remaining position.
-        assertApproxEqRel(
-            vault.balanceOf(user),
-            shares / 2,
-            1,
-            "shares halved"
-        );
+        assertApproxEqRel(vault.balanceOf(user), shares / 2, 1, "shares halved");
     }
 
     /// @notice Two depositors: Alice redeeming her full stake leaves Bob's
@@ -233,11 +205,7 @@ contract FCMVaultTest is Test {
         assertApproxEqRel(aliceOut, 1 ether, 1e15, "alice round-trip");
         assertEq(vault.balanceOf(alice), 0, "alice burned");
         assertEq(vault.balanceOf(bob), bobSharesBefore, "bob shares untouched");
-        assertEq(
-            bobShares,
-            bobSharesBefore,
-            "bob shares from deposit retained"
-        );
+        assertEq(bobShares, bobSharesBefore, "bob shares from deposit retained");
     }
 
     /// @notice An operator who is not the owner and has no allowance cannot
@@ -302,12 +270,7 @@ contract FCMVaultTest is Test {
         vm.prank(user);
         uint256 assetsOut = vault.redeem(shares, user, user);
 
-        assertApproxEqRel(
-            assetsOut,
-            (amount * 9) / 10,
-            0.01e18,
-            "scaled payout ~k*amount"
-        );
+        assertApproxEqRel(assetsOut, (amount * 9) / 10, 0.01e18, "scaled payout ~k*amount");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no surplus / dust");
         assertEq(vault.balanceOf(user), 0, "shares burned");
     }
