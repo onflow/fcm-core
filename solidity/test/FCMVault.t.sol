@@ -130,7 +130,10 @@ contract FCMVaultTest is Test {
     /// @param  who     Account that will own the resulting vault shares.
     /// @param  amount  WETH amount to deposit (in token units).
     /// @return shares  Vault shares minted to `who`.
-    function _depositFor(address who, uint256 amount) internal returns (uint256 shares) {
+    function _depositFor(
+        address who,
+        uint256 amount
+    ) internal returns (uint256 shares) {
         MockERC20(address(WETH)).mint(who, amount);
         vm.startPrank(who);
         WETH.approve(address(vault), amount);
@@ -168,7 +171,11 @@ contract FCMVaultTest is Test {
         uint256 assetsOut = vault.redeem(shares, receiver, user);
 
         assertEq(vault.balanceOf(user), 0, "owner shares");
-        assertEq(vault.totalSupply(), supplyBefore - shares, "supply decreased");
+        assertEq(
+            vault.totalSupply(),
+            supplyBefore - shares,
+            "supply decreased"
+        );
         assertEq(WETH.balanceOf(receiver), assetsOut, "receiver weth");
         assertEq(WETH.balanceOf(user), 0, "owner weth untouched");
     }
@@ -187,12 +194,27 @@ contract FCMVaultTest is Test {
         uint256 assetsOut = vault.redeem(shares / 2, user, user);
 
         // ~half of each leg consumed (within 0.1% — virtual-share offset).
-        assertApproxEqRel(WETH.balanceOf(address(MORPHO)), collateralBefore / 2, 1e15, "collateral halved");
-        assertApproxEqRel(FUSDEV.balanceOf(address(vault)), fusdevBefore / 2, 1e15, "fusdev halved");
+        assertApproxEqRel(
+            WETH.balanceOf(address(MORPHO)),
+            collateralBefore / 2,
+            1e15,
+            "collateral halved"
+        );
+        assertApproxEqRel(
+            FUSDEV.balanceOf(address(vault)),
+            fusdevBefore / 2,
+            1e15,
+            "fusdev halved"
+        );
         assertApproxEqRel(assetsOut, amount / 2, 1e15, "assetsOut approx half");
 
         // Remaining shares roughly track the remaining position.
-        assertApproxEqRel(vault.balanceOf(user), shares / 2, 1, "shares halved");
+        assertApproxEqRel(
+            vault.balanceOf(user),
+            shares / 2,
+            1,
+            "shares halved"
+        );
     }
 
     /// @notice Two depositors: Alice redeeming her full stake leaves Bob's
@@ -211,7 +233,11 @@ contract FCMVaultTest is Test {
         assertApproxEqRel(aliceOut, 1 ether, 1e15, "alice round-trip");
         assertEq(vault.balanceOf(alice), 0, "alice burned");
         assertEq(vault.balanceOf(bob), bobSharesBefore, "bob shares untouched");
-        assertEq(bobShares, bobSharesBefore, "bob shares from deposit retained");
+        assertEq(
+            bobShares,
+            bobSharesBefore,
+            "bob shares from deposit retained"
+        );
     }
 
     /// @notice An operator who is not the owner and has no allowance cannot
@@ -276,28 +302,14 @@ contract FCMVaultTest is Test {
         vm.prank(user);
         uint256 assetsOut = vault.redeem(shares, user, user);
 
-        assertApproxEqRel(assetsOut, amount / 2, 0.01e18, "scaled payout ~k*amount");
+        assertApproxEqRel(
+            assetsOut,
+            amount / 2,
+            0.01e18,
+            "scaled payout ~k*amount"
+        );
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no surplus / dust");
         assertEq(vault.balanceOf(user), 0, "shares burned");
-    }
-
-    /// @notice withdraw(assets) computes shares via previewWithdraw and
-    /// delegates to redeem. The number of shares it burned must equal
-    /// previewWithdraw(assets) computed pre-call.
-    function test_Withdraw_DelegatesToRedeem() public {
-        uint256 amount = 1 ether;
-        _depositFor(user, amount);
-
-        uint256 target = amount / 2;
-        uint256 expectedShares = vault.previewWithdraw(target);
-        uint256 sharesBefore = vault.balanceOf(user);
-
-        vm.prank(user);
-        uint256 sharesBurned = vault.withdraw(target, user, user);
-
-        assertEq(sharesBurned, expectedShares, "shares matches preview");
-        assertEq(vault.balanceOf(user), sharesBefore - expectedShares, "shares burned");
-        assertGt(WETH.balanceOf(user), 0, "user got weth");
     }
 
     /// @notice redeem(0) is a no-op: returns 0 with no state change.

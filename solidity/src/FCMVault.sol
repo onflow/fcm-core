@@ -160,7 +160,7 @@ contract FCMVault is ERC4626 {
         emit Withdraw(msg.sender, receiver, owner, assets, shares);
     }
 
-    /// @dev Unwind a slice of the three legs of the vault's position,
+    /// @dev Unwind a slice of the vault's position,
     ///      anchored on `p = shares / _totalClaims()` and the realized AMM
     ///      execution price on the yield leg.
     ///
@@ -198,6 +198,7 @@ contract FCMVault is ERC4626 {
     function _unwindSlice(uint256 shares) internal {
         uint256 claims = _totalClaims();
 
+        // yieldOut is the quantity of yield tokens we are selling to satisfy the redemption
         uint256 yieldOut = FUSDEV.balanceOf(address(this)).mulDiv(
             shares,
             claims
@@ -232,7 +233,6 @@ contract FCMVault is ERC4626 {
         } else {
             // Case B: yield underperformed; scale debt+collateral by
             // k = pyusdGot / debtSlice to keep the post-unwind HF flat.
-            // debtSlice > 0 is implied: pyusdGot >= 0 and pyusdGot < debtSlice.
             if (pyusdGot > 0) market.repay(pyusdGot);
             uint256 scaledColl = collSlice.mulDiv(pyusdGot, debtSlice);
             if (scaledColl > 0) market.withdrawCollateral(scaledColl);
