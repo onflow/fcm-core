@@ -259,6 +259,28 @@ contract FCMVaultTest is Test {
         assertGt(assetsOut, amount, "yield captured");
     }
 
+    /// @notice Case B: when the FUSDEV->PYUSD0 swap returns less than the
+    /// pro-rata debt slice, redeem scales BOTH the repay and the collateral
+    /// withdrawal down by k = pyusdGot / debtSlice. The redeemer takes the
+    /// haircut on their payout; remaining collateral stays in the vault.
+    /// Here we induce 50% AMM loss via MockSwapRouter.setFeeBps; the user
+    /// should receive ~half of the round-trip WETH a fair execution would
+    /// have produced, and no PYUSD0 should be left in the vault (Case B
+    /// uses everything received to repay).
+    function test_Redeem_YieldUnderperformsScalesBothLegs() public {
+        uint256 amount = 1 ether;
+        uint256 shares = _depositFor(user, amount);
+
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(5000);
+
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(shares, user, user);
+
+        assertApproxEqRel(assetsOut, amount / 2, 0.01e18, "scaled payout ~k*amount");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no surplus / dust");
+        assertEq(vault.balanceOf(user), 0, "shares burned");
+    }
+
     /// @notice withdraw(assets) computes shares via previewWithdraw and
     /// delegates to redeem. The number of shares it burned must equal
     /// previewWithdraw(assets) computed pre-call.
