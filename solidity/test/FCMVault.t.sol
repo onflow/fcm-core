@@ -289,22 +289,22 @@ contract FCMVaultTest is Test {
     /// pro-rata debt slice, redeem scales BOTH the repay and the collateral
     /// withdrawal down by k = pyusdGot / debtSlice. The redeemer takes the
     /// haircut on their payout; remaining collateral stays in the vault.
-    /// Here we induce 50% AMM loss via MockSwapRouter.setFeeBps; the user
-    /// should receive ~half of the round-trip WETH a fair execution would
-    /// have produced, and no PYUSD0 should be left in the vault (Case B
-    /// uses everything received to repay).
+    /// Here we induce a 10% AMM haircut via MockSwapRouter.setFeeBps, so
+    /// pyusdGot = 0.9 * debtSlice → k = 0.9. The user should receive ~90%
+    /// of the fair-execution round-trip WETH, and no PYUSD0 should be left
+    /// in the vault (Case B uses everything received to repay).
     function test_Redeem_YieldUnderperformsScalesBothLegs() public {
         uint256 amount = 1 ether;
         uint256 shares = _depositFor(user, amount);
 
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(5000);
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(1000);
 
         vm.prank(user);
         uint256 assetsOut = vault.redeem(shares, user, user);
 
         assertApproxEqRel(
             assetsOut,
-            amount / 2,
+            (amount * 9) / 10,
             0.01e18,
             "scaled payout ~k*amount"
         );

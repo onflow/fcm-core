@@ -241,10 +241,10 @@ contract FCMVault is ERC4626 {
 
     // TODO: reverts
     function withdraw(
-        uint256 assets,
-        address receiver,
-        address owner
-    ) public override returns (uint256 shares) {
+        uint256 /*assets*/,
+        address /*receiver*/,
+        address /*owner*/
+    ) public pure override returns (uint256) {
         revert("not implemented");
     }
 
