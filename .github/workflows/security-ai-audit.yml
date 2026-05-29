@@ -1,0 +1,74 @@
+name: Security (AI - Full Audit)
+
+# In-depth AI security audit of the FULL Solidity codebase.
+# Manual trigger for now; add a `schedule:` trigger to run periodically later.
+# Uses claude-code-action with a simple Solidity-security prompt (no skills).
+# Files a GitHub issue summarizing findings.
+# Requires repo secret: ANTHROPIC_API_KEY
+# Skipped automatically if the secret is not configured.
+
+permissions: {}
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ai-audit:
+    name: Claude Full-Codebase Security Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Check for Anthropic API key
+        id: secret
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ANTHROPIC_API_KEY not set; skipping AI audit."
+          fi
+
+      - name: Claude full-codebase security audit
+        if: steps.secret.outputs.present == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+
+            Perform a comprehensive security audit of the FULL Solidity codebase
+            in the `solidity/src/` directory of this Foundry project. Read every
+            contract under `solidity/src/`. Do NOT audit the vendored
+            dependencies under `solidity/lib/`, the tests under `solidity/test/`,
+            or scripts under `solidity/script/` (you may read them for context).
+
+            Emphasize the vault/curator threat model for this codebase:
+            - Fund drainage via arbitrary calldata / unrestricted external calls
+            - Access control and privilege boundaries (curator, owner, roles)
+            - NAV / share-price manipulation and accounting mismatches
+            - Reentrancy and cross-function reentrancy
+            - Withdrawal / deposit timing and first-come-first-serve liquidity attacks
+            - Rounding, precision, and integer over/underflow in share math
+            - Oracle / price manipulation, including flash-loan-assisted
+            - Untested new integration/adapter code paths (e.g. Morpho facets)
+            - Unsafe ERC20 assumptions (fee-on-transfer, missing return values)
+
+            Rate each finding CRITICAL / HIGH / MEDIUM / LOW with the file, line,
+            a concrete exploit scenario, and a recommended fix.
+
+            Create ONE GitHub issue titled "AI Security Audit — <date>" using
+            `gh issue create`, with the findings grouped by severity. Apply the
+            `security` label if it exists. If you find nothing material, still
+            create the issue and say so.
+          claude_args: |
+            --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh label:*)"

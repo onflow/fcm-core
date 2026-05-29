@@ -1,0 +1,95 @@
+name: Security (Static Analysis)
+
+# Non-AI static analysis: Slither, Aderyn, and Solhint.
+# Fast, deterministic, free. Runs on every PR and push to main, plus manual dispatch.
+
+permissions: {}
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  slither:
+    name: Slither
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # upload SARIF to the Security tab
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Run Slither
+        uses: crytic/slither-action@v0.4.2
+        id: slither
+        with:
+          target: solidity/
+          slither-config: solidity/slither.config.json
+          sarif: results.sarif
+          fail-on: none # don't block the build; findings surface in the Security tab
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && steps.slither.outputs.sarif != ''
+        with:
+          sarif_file: ${{ steps.slither.outputs.sarif }}
+          category: slither
+
+  aderyn:
+    name: Aderyn
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    defaults:
+      run:
+        working-directory: solidity
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Aderyn
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/cyfrin/aderyn/releases/latest/download/aderyn-installer.sh | bash
+          echo "$HOME/.cyfrin/bin" >> "$GITHUB_PATH"
+
+      - name: Run Aderyn
+        run: aderyn --output aderyn-report.sarif
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: solidity/aderyn-report.sarif
+          category: aderyn
+
+  solhint:
+    name: Solhint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: solidity
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Solhint
+        run: npm install -g solhint
+
+      - name: Run Solhint
+        run: solhint "src/**/*.sol"

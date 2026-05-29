@@ -1,0 +1,106 @@
+name: Security (AI - Skills Audit, experimental)
+
+# EXPERIMENTAL: full-codebase audit using community Solidity-audit skills.
+# Manual trigger only (workflow_dispatch) — validate cost/quality before scheduling.
+# Vendors the skill repos into .claude/skills/ at runtime so third-party skill
+# code is NOT committed to this repository.
+#
+# Skills used (per the Continuous Security Testing recommendation):
+#   - pashov/skills: solidity-auditor (+ x-ray)
+#   - auditmos/skills
+#   - CDSecurity/cdsecurity-skills: audit-prep
+#   - kadenzipfel/scv-scan
+#
+# Choose which skill to run via the `skill` input.
+# Requires repo secret: ANTHROPIC_API_KEY
+
+permissions: {}
+
+on:
+  workflow_dispatch:
+    inputs:
+      skill:
+        description: "Which audit skill to run"
+        type: choice
+        default: solidity-auditor
+        options:
+          - solidity-auditor
+          - x-ray
+          - audit-prep
+          - scv-scan
+          - auditmos
+
+jobs:
+  ai-skills-audit:
+    name: Claude Skills Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Check for Anthropic API key
+        id: secret
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ANTHROPIC_API_KEY not set; skipping skills audit."
+          fi
+
+      - name: Vendor audit skills into .claude/skills
+        if: steps.secret.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p .claude/skills _skillsrc
+          cd _skillsrc
+          git clone --depth 1 https://github.com/pashov/skills pashov
+          git clone --depth 1 https://github.com/auditmos/skills auditmos
+          git clone --depth 1 https://github.com/CDSecurity/cdsecurity-skills cdsecurity
+          git clone --depth 1 https://github.com/kadenzipfel/scv-scan scv-scan
+          cd ..
+          # pashov: top-level skill dirs
+          cp -R _skillsrc/pashov/solidity-auditor .claude/skills/solidity-auditor
+          cp -R _skillsrc/pashov/x-ray            .claude/skills/x-ray
+          # CDSecurity: audit-prep
+          cp -R _skillsrc/cdsecurity/audit-prep   .claude/skills/audit-prep
+          # scv-scan: repo root is the skill
+          mkdir -p .claude/skills/scv-scan
+          cp -R _skillsrc/scv-scan/SKILL.md _skillsrc/scv-scan/references .claude/skills/scv-scan/
+          # auditmos: many skills under skills/
+          cp -R _skillsrc/auditmos/skills/* .claude/skills/
+          rm -rf _skillsrc
+          echo "Vendored skills:"
+          ls -1 .claude/skills
+
+      - name: Run skill audit
+        if: steps.secret.outputs.present == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+
+            Use the `${{ inputs.skill }}` skill (from .claude/skills/) to audit
+            this Foundry/Solidity project. You MUST actually invoke the skill —
+            do not improvise your own review instead of using it.
+
+            SCOPE: the FULL current codebase under `solidity/src/`. Do NOT audit
+            the vendored dependencies under `solidity/lib/`, tests under
+            `solidity/test/`, or scripts under `solidity/script/`.
+
+            When the skill produces findings, create ONE GitHub issue titled
+            "AI Skills Audit (${{ inputs.skill }}) — <date>" with `gh issue create`,
+            findings grouped by severity, each with file, line, exploit scenario,
+            and recommended fix. Apply the `security` label if it exists.
+          claude_args: |
+            --setting-sources project
+            --allowedTools "Skill,Task,Read,Grep,Glob,Bash(gh issue:*),Bash(gh label:*)"

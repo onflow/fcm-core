@@ -1,0 +1,81 @@
+name: Security (AI - PR Review)
+
+# AI security review scoped to a PR's changes.
+# Manual trigger for now (pass the PR number); switch to an `on: pull_request`
+# trigger to run automatically on every PR later.
+# Uses claude-code-action with a simple Solidity-security prompt (no skills).
+# Requires repo secret: ANTHROPIC_API_KEY
+# Skipped automatically if the secret is not configured.
+
+permissions: {}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review"
+        type: number
+        required: true
+
+jobs:
+  ai-review:
+    name: Claude Solidity Security Review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Check for Anthropic API key
+        id: secret
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ANTHROPIC_API_KEY not set; skipping AI security review."
+          fi
+
+      - name: Claude security review (PR changes)
+        if: steps.secret.outputs.present == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ inputs.pr_number }}
+
+            Use `gh pr diff ${{ inputs.pr_number }}` to fetch the changes, and
+            `gh pr checkout ${{ inputs.pr_number }}` if you need the full file
+            context.
+
+            Perform a security review of THIS PR's CHANGES ONLY (the diff), in a
+            Foundry/Solidity project located in the `solidity/` directory.
+            Do NOT review unchanged code or the vendored dependencies under
+            `solidity/lib/`.
+
+            Focus on smart-contract security, with emphasis on the vault/curator
+            threat model for this codebase:
+            - Fund drainage via arbitrary calldata / unrestricted external calls
+            - Access control and privilege boundaries (curator, owner, roles)
+            - NAV / share-price manipulation and accounting mismatches
+            - Reentrancy and cross-function reentrancy
+            - Withdrawal / deposit timing and first-come-first-serve liquidity attacks
+            - Rounding, precision, and integer over/underflow in share math
+            - Oracle / price manipulation, including flash-loan-assisted
+            - Untested new integration/adapter code paths (e.g. Morpho facets)
+            - Unsafe ERC20 assumptions (fee-on-transfer, missing return values)
+
+            Rate each finding CRITICAL / HIGH / MEDIUM / LOW.
+            Post concrete, actionable findings as inline PR comments with the
+            file and line. If you find nothing material, say so briefly.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checkout:*)"
