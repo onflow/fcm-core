@@ -47,29 +47,28 @@ so AI results stay advisory and should be cross-checked against the static tools
 
 ## Credentials
 
-The AI tier authenticates with a **Claude Code OAuth token** (tied to your
-existing Claude subscription — no separate API billing), fetched from
-**1Password** at run time and injected into the sealed container by reference
-(`-e NAME`, never on the command line). It is never written to disk or kept in
-your shell environment.
+The AI tier authenticates with a **Claude Code OAuth token** (tied to your own
+Claude subscription — no separate API billing). The token is **per-developer**,
+so each person stores their own; there is no shared key. It is fetched at run
+time and injected into the sealed container by reference (`-e NAME`, never on the
+command line), and is never written to disk in the repo or kept in your shell.
 
-One-time team setup:
+One-time setup, per developer (default: macOS Keychain, zero extra tooling):
 
-1. Mint a token: `claude setup-token`.
-2. Store it in your shared 1Password vault. `scan.sh` reads it from
-   `op://Shared/Claude Code OAuth Token/credential` by default — edit
-   `DEFAULT_OP_REF` in `security/scan.sh` to match your real vault/item path
-   (this reference is not a secret and is safe to commit).
-3. Be signed into the 1Password CLI (`op`); the desktop-app integration makes
-   this a Touch-ID prompt.
+```sh
+claude setup-token       # mint a long-lived token tied to your account
+make security-set-token  # paste it once; stored encrypted in your login Keychain
+```
 
-Per-developer: nothing — `make security-ai-*` fetches the token automatically.
+After that, `make security-ai-*` fetches it automatically.
 
-Overrides (precedence, highest first), for power users or CI:
+Credential resolution (precedence, highest first):
 
-- `CLAUDE_CODE_OAUTH_TOKEN` set in the environment → used directly.
-- `ANTHROPIC_API_KEY` set in the environment → used directly.
-- otherwise → fetched from 1Password (`FCM_OP_TOKEN_REF` overrides the path).
+1. `CLAUDE_CODE_OAUTH_TOKEN` in the environment → used directly (CI / power users).
+2. `ANTHROPIC_API_KEY` in the environment → used directly.
+3. **1Password**, *only if* `FCM_OP_TOKEN_REF='op://<your-vault>/<item>/credential'`
+   is set (use your own/Private vault — the token is personal, not shared).
+4. **macOS Keychain** (the default) — what `make security-set-token` writes.
 
 ## Make targets
 
