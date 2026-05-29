@@ -34,7 +34,7 @@ jobs:
           fail-on: none # don't block the build; findings surface in the Security tab
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always() && steps.slither.outputs.sarif != ''
         with:
           sarif_file: ${{ steps.slither.outputs.sarif }}
@@ -65,7 +65,7 @@ jobs:
         run: aderyn --output aderyn-report.sarif
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: solidity/aderyn-report.sarif

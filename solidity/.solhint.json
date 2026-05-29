@@ -5,6 +5,7 @@
     "func-visibility": ["warn", { "ignoreConstructors": true }],
     "not-rely-on-time": "off",
     "no-global-import": "warn",
-    "gas-custom-errors": "off"
+    "gas-custom-errors": "off",
+    "import-path-check": "off"
   }
 }
