@@ -5,6 +5,7 @@ pragma solidity ^0.8.19;
 ///         Compatible with FlowSwap V3's SwapRouter02 on Flow EVM.
 ///         Note: SwapRouter02 drops the `deadline` field that SwapRouter v1 had.
 interface ISwapRouter {
+    // @dev See https://developers.uniswap.org/docs/protocols/v3/guides/swapping/single-hop-swapping for parameter documentation.
     struct ExactInputSingleParams {
         address tokenIn;
         address tokenOut;
@@ -15,6 +16,7 @@ interface ISwapRouter {
         uint160 sqrtPriceLimitX96;
     }
 
+    // @dev See https://developers.uniswap.org/docs/protocols/v3/guides/swapping/single-hop-swapping for parameter documentation.
     struct ExactOutputSingleParams {
         address tokenIn;
         address tokenOut;
