@@ -2,8 +2,9 @@
 # contracts hold real value; findings must stay local.
 /security/reports/
 
-# Vendored audit skills, managed by security/vendor-skills.sh
-/.claude/skills/
+# Local Claude Code state and vendored audit skills (security/vendor-skills.sh).
+# This is a public repo — keep all local Claude artifacts out of it.
+/.claude/
 
 # Aderyn default report locations
 /report.md
