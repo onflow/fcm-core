@@ -1,73 +1,89 @@
 # Security Scanning
 
-Local security scanning for the Solidity codebase, set up per the
+Local, containerized security scanning for the Solidity codebase, set up per the
 [Continuous Security Testing/Auditing](https://www.notion.so/3521aee1232480958886c3666758b9f0)
 recommendation. Supplementary to formal audits, not a replacement.
 
-## Why local-only (not CI)
+## Threat model: why local + containerized + pinned
 
-**This repository is public and the contracts hold real value.** Every place a
-GitHub Action could surface findings is public on a public repo:
+This repository is **public** and the contracts **hold real value**, which drives
+two distinct controls:
 
-- Issues, PR comments/reviews, and committed files — public.
-- **Actions run logs and artifacts — public.** Scanners (Slither, Aderyn, and
-  any AI tool) print findings to the job log, which anyone can read.
-- Code scanning alerts are private to write-access users, but PR-context runs
-  surface them as inline check annotations, which are public on the PR.
+1. **No public CI.** Every place a GitHub Action surfaces output is public on a
+   public repo — issues, PR comments, **Actions logs, and artifacts**. Scanners
+   print findings to the log, so running them in CI would leak live, unfixed
+   vulnerabilities. All scanning runs locally; reports go to `security/reports/`
+   (gitignored) and are never committed or posted.
 
-There is no way to make a single workflow's logs private on a public repo, so
-running these scans in CI would risk leaking a live vulnerability and causing
-users to lose funds. Instead, every scan runs **locally**, and all output goes
-to `security/reports/` which is **gitignored** — never committed, never posted.
+2. **The AI skills are an untrusted supply chain.** The community skill repos are
+   third-party and community-writable, and their content is loaded as
+   *instructions* into a tool-enabled agent. Two mitigations:
+   - **Pinning (integrity):** `security/vendor-skills.sh` checks out exact,
+     reviewed commit SHAs and fails closed if a commit is gone — so a poisoned
+     upstream commit can't silently run. Bump a SHA only after reviewing the diff.
+   - **Containment:** every scanner runs inside a locked-down Docker container so
+     a malicious skill can't read host files/secrets or exfiltrate:
+     - **Static tier** (Slither/Aderyn/Solhint): `--network none`, `--cap-drop ALL`,
+       source mounted **read-only**. Fully airtight.
+     - **AI tier** (review/audit/skills/summarize): egress restricted to the
+       **Anthropic API only** (`security/docker/init-firewall.sh`),
+       `ANTHROPIC_API_KEY` is the only secret present, source mounted read-only.
 
-If we later want continuous/automated scanning, the correct place is a **private
-repo** that mirrors the code, where logs and alerts stay private.
-
-## Make targets
-
-| Target | Tool | Notes |
-|--------|------|-------|
-| `make security` | Slither + Aderyn + Solhint | runs all static analyzers |
-| `make security-slither` | Slither | report → `security/reports/slither-report-<timestamp>.txt` |
-| `make security-aderyn` | Aderyn | report → `security/reports/aderyn-report-<timestamp>.md` |
-| `make security-solhint` | Solhint | report → `security/reports/solhint-report-<timestamp>.txt` |
-| `make security-ai-review` | Claude Code | reviews the current branch's changes |
-| `make security-ai-audit` | Claude Code | full-codebase audit |
-| `make security-ai-skills` | Claude Code + skills | `SKILL=<name>` to choose a skill |
-| `make security-ai-summarize` | Claude Code | rolls up all reports by severity to stdout |
+Pinning + container = integrity + containment. Note what containment does **not**
+fix: a poisoned skill can still produce dishonest *output* (e.g. hide a finding),
+so AI results stay advisory and should be cross-checked against the static tools.
 
 ## Prerequisites
 
-Install everything in one shot (idempotent — skips what you already have):
+- **Docker.** Build the pinned toolchain image once:
+  ```sh
+  make security-build
+  ```
+  The image (`security/docker/Dockerfile`) bundles Foundry, Slither, Aderyn,
+  Solhint, and the Claude CLI at pinned versions, with `solc` pre-cached so the
+  static tier compiles with no network.
+- **AI tier only:** an `ANTHROPIC_API_KEY` in your environment. The static tier
+  needs no key. (The container intentionally does not mount your host Claude
+  credentials.)
 
-```sh
-make install-tools
-```
+## Make targets
 
-This installs Foundry (`forge`, needed by Slither/Aderyn to compile), Slither,
-Aderyn, Solhint, and the [Claude Code](https://docs.claude.com/claude-code) CLI
-(`claude`). It relies on having `curl` plus Python (pipx/pip3) and Node/npm
-available; anything it can't install is reported with a link. After installing,
-you may need to add `~/.foundry/bin` and `~/.cyfrin/bin` to your `PATH`.
+| Target | Tier | Notes |
+|--------|------|-------|
+| `make security-build` | — | build the scanner image (run once / after updates) |
+| `make security` | static | Slither + Aderyn + Solhint |
+| `make security-slither` | static | report → `security/reports/slither-report-<ts>.txt` |
+| `make security-aderyn` | static | report → `security/reports/aderyn-report-<ts>.md` |
+| `make security-solhint` | static | report → `security/reports/solhint-report-<ts>.txt` |
+| `make security-ai-review` | AI | reviews current branch changes (needs key) |
+| `make security-ai-audit` | AI | full-codebase audit (needs key) |
+| `make security-ai-skills` | AI | `SKILL=<name>`; vendors pinned skills, then audits (needs key) |
+| `make security-ai-summarize` | AI | rolls up all reports by severity to stdout (needs key) |
 
-## How the AI scans work
+## How it fits together
 
-- Prompts live in `security/prompts/` (`review-changes.md`, `full-audit.md`,
-  `skills-audit.md`) and encode the vault/curator threat model.
-- `security/run-ai.sh` runs Claude headlessly with a **read-only tool
-  allowlist** (no `gh`, no git writes, no file writes) and pipes the report to a
-  gitignored file. The prompts also explicitly forbid creating issues/comments
-  or writing findings into tracked files.
-- `security/run-skills.sh` vendors community audit skills into `.claude/skills/`
-  (gitignored, managed by `security/vendor-skills.sh`) and runs the chosen one:
-  `solidity-auditor` / `x-ray` (pashov), `audit-prep` (CDSecurity), `scv-scan`
-  (kadenzipfel), or an `auditmos` skill.
+- **Prompts** live in `security/prompts/` and encode the vault/curator threat
+  model. They forbid creating issues/comments or writing findings to tracked files.
+- **`security/scan.sh`** is the single dispatcher: it builds the image on demand
+  and runs each tool with the right isolation flags (static = no network, AI =
+  API-only egress + key).
+- **`security/docker/`** holds the `Dockerfile`, the two entrypoints
+  (`entry-static.sh`, `entry-ai.sh`), and the egress allowlist
+  (`init-firewall.sh`).
+- **`security/vendor-skills.sh`** clones the pinned skill SHAs on the host, into a
+  gitignored `.claude/skills/`, which is mounted read-only into the sealed
+  container (so the container needs no GitHub egress).
 
 ## Reports
 
-All reports are written under `security/reports/` (gitignored). **Do not commit
-or share these files** — they may describe live, unfixed vulnerabilities. AI is
-non-deterministic; consider running an audit more than once and cross-checking.
+All reports are written under `security/reports/` (gitignored). **Do not commit or
+share these files** — they may describe live, unfixed vulnerabilities. AI is
+non-deterministic; run audits more than once and cross-check.
+
+## Updating a skill
+
+Review the upstream diff, then update the corresponding `*_SHA` in
+`security/vendor-skills.sh`. Never point at a floating branch.
 
 ## Config files (safe to commit)
 
