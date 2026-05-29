@@ -37,15 +37,17 @@ repo** that mirrors the code, where logs and alerts stay private.
 
 ## Prerequisites
 
-Static analyzers (install locally):
+Install everything in one shot (idempotent — skips what you already have):
 
 ```sh
-pipx install slither-analyzer        # https://github.com/crytic/slither
-curl -L https://github.com/cyfrin/aderyn/releases/latest/download/aderyn-installer.sh | bash
-# solhint runs via npx, no install needed
+make install-tools
 ```
 
-AI tools: the [Claude Code](https://docs.claude.com/claude-code) CLI (`claude`).
+This installs Foundry (`forge`, needed by Slither/Aderyn to compile), Slither,
+Aderyn, Solhint, and the [Claude Code](https://docs.claude.com/claude-code) CLI
+(`claude`). It relies on having `curl` plus Python (pipx/pip3) and Node/npm
+available; anything it can't install is reported with a link. After installing,
+you may need to add `~/.foundry/bin` and `~/.cyfrin/bin` to your `PATH`.
 
 ## How the AI scans work
 
