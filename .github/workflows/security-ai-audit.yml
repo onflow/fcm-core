@@ -19,6 +19,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      security-events: write # upload AI findings to code scanning
       id-token: write
     steps:
       - uses: actions/checkout@v5
@@ -70,5 +71,26 @@ jobs:
             `gh issue create`, with the findings grouped by severity. Apply the
             `security` label if it exists. If you find nothing material, still
             create the issue and say so.
+
+            ALSO write every finding to a JSON file named `ai-findings.json` at
+            the repository root, as a JSON array. Each element MUST be:
+              {
+                "file": "<repo-relative path, e.g. solidity/src/FCMVault.sol>",
+                "startLine": <integer, 1-based>,
+                "severity": "critical" | "high" | "medium" | "low",
+                "ruleId": "<short-slug, e.g. arbitrary-call-drainage>",
+                "title": "<short finding title>",
+                "description": "<detail and recommended fix>"
+              }
+            Write an empty array `[]` if there are no findings. This file feeds
+            the GitHub code scanning upload, so it must be valid JSON.
           claude_args: |
-            --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh label:*)"
+            --allowedTools "Write,Read,Grep,Glob,Bash(gh issue:*),Bash(gh label:*)"
+
+      - name: Upload AI findings to code scanning
+        if: always() && steps.secret.outputs.present == 'true'
+        continue-on-error: true # don't fail the job if code scanning is unavailable
+        uses: ./.github/actions/ai-findings-to-sarif
+        with:
+          category: claude-ai-audit
+          tool-name: Claude Security Audit

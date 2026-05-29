@@ -46,6 +46,16 @@ etc.).
 
 - **PR Review** scopes the review to the PR diff and posts inline comments.
 - **Full Audit** reads all of `solidity/src/` and files a summary GitHub issue.
+
+In addition to comments/issues, every AI workflow writes its findings to
+`ai-findings.json` and uploads them to **code scanning** (Security tab), the same
+place Slither and Aderyn report — so AI findings get inline PR annotations,
+triage, and auto-close. The conversion + upload is shared via the local
+composite action `.github/actions/ai-findings-to-sarif` (Claude emits a simple
+findings JSON; `jq` converts it to SARIF). Each tool uses a distinct code
+scanning `category` (`claude-ai-pr`, `claude-ai-audit`, `claude-ai-skills`,
+`slither`, `aderyn`). The upload step is `continue-on-error`, so a repo without
+code scanning enabled won't fail the job.
 - **Skills Audit** (experimental, manual) vendors community audit skills into
   `.claude/skills/` at runtime (so third-party code isn't committed) and runs a
   chosen skill: `solidity-auditor`/`x-ray` (pashov), `audit-prep` (CDSecurity),

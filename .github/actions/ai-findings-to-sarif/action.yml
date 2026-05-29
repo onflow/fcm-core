@@ -1,0 +1,87 @@
+name: AI findings to SARIF
+description: >
+  Convert a Claude AI security-findings JSON file to SARIF 2.1.0 and upload it
+  to GitHub code scanning. Produces an empty (but valid) SARIF run when there
+  are no findings so stale alerts are cleared.
+
+inputs:
+  findings-file:
+    description: Path to the findings JSON file Claude wrote (a JSON array).
+    required: false
+    default: ai-findings.json
+  sarif-file:
+    description: Path to write the generated SARIF file to.
+    required: false
+    default: ai-findings.sarif
+  category:
+    description: Code scanning category (keeps tools' results in separate buckets).
+    required: true
+  tool-name:
+    description: Tool name shown in the code scanning UI.
+    required: false
+    default: Claude Security Review
+
+runs:
+  using: composite
+  steps:
+    - name: Convert findings to SARIF
+      shell: bash
+      env:
+        FINDINGS: ${{ inputs.findings-file }}
+        SARIF: ${{ inputs.sarif-file }}
+        TOOL_NAME: ${{ inputs.tool-name }}
+      run: |
+        set -euo pipefail
+        if [ -f "$FINDINGS" ] && jq -e 'type=="array"' "$FINDINGS" >/dev/null 2>&1; then
+          jq --arg tool "$TOOL_NAME" '{
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            version: "2.1.0",
+            runs: [{
+              tool: { driver: {
+                name: $tool,
+                informationUri: "https://github.com/anthropics/claude-code-action",
+                rules: []
+              } },
+              results: [ .[] | {
+                ruleId: (.ruleId // "ai-finding"),
+                level: ( ((.severity // "") | ascii_downcase) as $s
+                         | if $s == "critical" or $s == "high" then "error"
+                           elif $s == "medium" then "warning"
+                           else "note" end ),
+                message: { text: (
+                  (.title // "Finding")
+                  + (if ((.description // "") == "") then "" else ": " + .description end)
+                ) },
+                locations: [{ physicalLocation: {
+                  artifactLocation: { uri: (.file // "") },
+                  region: { startLine: (
+                    (.startLine // 1)
+                    | (if type == "number" then floor else (tonumber? // 1) end)
+                    | (if . < 1 then 1 else . end)
+                  ) }
+                } }]
+              } ]
+            }]
+          }' "$FINDINGS" > "$SARIF"
+        else
+          echo "No valid findings array at $FINDINGS; writing empty SARIF run."
+          jq -n --arg tool "$TOOL_NAME" '{
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            version: "2.1.0",
+            runs: [{
+              tool: { driver: {
+                name: $tool,
+                informationUri: "https://github.com/anthropics/claude-code-action",
+                rules: []
+              } },
+              results: []
+            }]
+          }' > "$SARIF"
+        fi
+        echo "Wrote $SARIF with $(jq '.runs[0].results | length' "$SARIF") result(s)."
+
+    - name: Upload SARIF to code scanning
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+        category: ${{ inputs.category }}
