@@ -42,9 +42,34 @@ so AI results stay advisory and should be cross-checked against the static tools
   The image (`security/docker/Dockerfile`) bundles Foundry, Slither, Aderyn,
   Solhint, and the Claude CLI at pinned versions, with `solc` pre-cached so the
   static tier compiles with no network.
-- **AI tier only:** an `ANTHROPIC_API_KEY` in your environment. The static tier
-  needs no key. (The container intentionally does not mount your host Claude
-  credentials.)
+- **AI tier only:** a credential, resolved at run time — no permanent env var
+  needed. See [Credentials](#credentials) below. The static tier needs nothing.
+
+## Credentials
+
+The AI tier authenticates with a **Claude Code OAuth token** (tied to your
+existing Claude subscription — no separate API billing), fetched from
+**1Password** at run time and injected into the sealed container by reference
+(`-e NAME`, never on the command line). It is never written to disk or kept in
+your shell environment.
+
+One-time team setup:
+
+1. Mint a token: `claude setup-token`.
+2. Store it in your shared 1Password vault. `scan.sh` reads it from
+   `op://Shared/Claude Code OAuth Token/credential` by default — edit
+   `DEFAULT_OP_REF` in `security/scan.sh` to match your real vault/item path
+   (this reference is not a secret and is safe to commit).
+3. Be signed into the 1Password CLI (`op`); the desktop-app integration makes
+   this a Touch-ID prompt.
+
+Per-developer: nothing — `make security-ai-*` fetches the token automatically.
+
+Overrides (precedence, highest first), for power users or CI:
+
+- `CLAUDE_CODE_OAUTH_TOKEN` set in the environment → used directly.
+- `ANTHROPIC_API_KEY` set in the environment → used directly.
+- otherwise → fetched from 1Password (`FCM_OP_TOKEN_REF` overrides the path).
 
 ## Make targets
 
