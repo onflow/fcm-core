@@ -34,6 +34,7 @@ repo** that mirrors the code, where logs and alerts stay private.
 | `make security-ai-review` | Claude Code | reviews the current branch's changes |
 | `make security-ai-audit` | Claude Code | full-codebase audit |
 | `make security-ai-skills` | Claude Code + skills | `SKILL=<name>` to choose a skill |
+| `make security-ai-summarize` | Claude Code | rolls up all reports by severity to stdout |
 
 ## Prerequisites
 
