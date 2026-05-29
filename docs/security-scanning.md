@@ -1,78 +1,72 @@
 # Security Scanning
 
-Continuous, automated security testing for the Solidity codebase, set up per the
+Local security scanning for the Solidity codebase, set up per the
 [Continuous Security Testing/Auditing](https://www.notion.so/3521aee1232480958886c3666758b9f0)
-recommendation. This is **supplementary to formal audits**, not a replacement.
+recommendation. Supplementary to formal audits, not a replacement.
 
-The scanners are split into a non-AI static-analysis tier (fast, free,
-deterministic) and an AI tier (claude-code-action). The static tier runs on
-every PR. **All AI workflows are manual (dispatch-only) for now** — promote them
-to automatic PR / scheduled triggers once the API key is set and they've been
-validated for cost and quality.
+## Why local-only (not CI)
 
-## Workflows
+**This repository is public and the contracts hold real value.** Every place a
+GitHub Action could surface findings is public on a public repo:
 
-| Workflow | File | Trigger | Tools |
-|----------|------|---------|-------|
-| Static Analysis | `.github/workflows/security-static.yml` | PR, push to `main`, manual | Slither, Aderyn, Solhint |
-| AI PR Review | `.github/workflows/security-ai-pr.yml` | Manual (pass PR number) | claude-code-action (diff-scoped) |
-| AI Full Audit | `.github/workflows/security-ai-audit.yml` | Manual | claude-code-action (full codebase) |
-| AI Skills Audit | `.github/workflows/security-ai-skills.yml` | Manual (experimental) | claude-code-action + community audit skills |
+- Issues, PR comments/reviews, and committed files — public.
+- **Actions run logs and artifacts — public.** Scanners (Slither, Aderyn, and
+  any AI tool) print findings to the job log, which anyone can read.
+- Code scanning alerts are private to write-access users, but PR-context runs
+  surface them as inline check annotations, which are public on the PR.
 
-To make the AI reviews automatic later: add `on: pull_request` to the PR-review
-workflow (it already contains the diff-scoped logic), and a `schedule:` cron to
-the full-audit workflow.
+There is no way to make a single workflow's logs private on a public repo, so
+running these scans in CI would risk leaking a live vulnerability and causing
+users to lose funds. Instead, every scan runs **locally**, and all output goes
+to `security/reports/` which is **gitignored** — never committed, never posted.
 
-### Static analysis (non-AI)
+If we later want continuous/automated scanning, the correct place is a **private
+repo** that mirrors the code, where logs and alerts stay private.
 
-- **Slither** (`crytic/slither-action`) — runs against `solidity/`, auto-installs
-  Foundry, uploads SARIF to the **Security → Code scanning** tab. Config:
-  `solidity/slither.config.json` (filters out `lib/`, `test/`, `script/`).
-- **Aderyn** (Cyfrin) — installed via the official installer, runs in `solidity/`,
-  uploads SARIF.
-- **Solhint** — linter. Config: `solidity/.solhint.json`, ignores in
-  `solidity/.solhintignore`.
+## Make targets
 
-None of these block the build on findings (Slither uses `fail-on: none`);
-results surface in the Security tab / job logs. Tighten later if desired.
+| Target | Tool | Notes |
+|--------|------|-------|
+| `make security` | Slither + Aderyn + Solhint | runs all static analyzers |
+| `make security-slither` | Slither | report → `security/reports/slither-report.txt` |
+| `make security-aderyn` | Aderyn | report → `security/reports/aderyn-report.md` |
+| `make security-solhint` | Solhint | prints lint findings |
+| `make security-ai-review` | Claude Code | reviews the current branch's changes |
+| `make security-ai-audit` | Claude Code | full-codebase audit |
+| `make security-ai-skills` | Claude Code + skills | `SKILL=<name>` to choose a skill |
 
-### AI tier (claude-code-action)
+## Prerequisites
 
-All AI workflows **require the `ANTHROPIC_API_KEY` repository secret**. If it's
-not set, the jobs detect that and skip cleanly (no failures). Prompts encode the
-vault/curator threat model from the recommendation (fund drainage via arbitrary
-calldata, NAV manipulation, withdrawal-timing attacks, untested adapter paths,
-etc.).
+Static analyzers (install locally):
 
-- **PR Review** scopes the review to the PR diff and posts inline comments.
-- **Full Audit** reads all of `solidity/src/` and files a summary GitHub issue.
+```sh
+pipx install slither-analyzer        # https://github.com/crytic/slither
+curl -L https://github.com/cyfrin/aderyn/releases/latest/download/aderyn-installer.sh | bash
+# solhint runs via npx, no install needed
+```
 
-In addition to comments/issues, every AI workflow writes its findings to
-`ai-findings.json` and uploads them to **code scanning** (Security tab), the same
-place Slither and Aderyn report — so AI findings get inline PR annotations,
-triage, and auto-close. The conversion + upload is shared via the local
-composite action `.github/actions/ai-findings-to-sarif` (Claude emits a simple
-findings JSON; `jq` converts it to SARIF). Each tool uses a distinct code
-scanning `category` (`claude-ai-pr`, `claude-ai-audit`, `claude-ai-skills`,
-`slither`, `aderyn`). The upload step is `continue-on-error`, so a repo without
-code scanning enabled won't fail the job.
-- **Skills Audit** (experimental, manual) vendors community audit skills into
-  `.claude/skills/` at runtime (so third-party code isn't committed) and runs a
-  chosen skill: `solidity-auditor`/`x-ray` (pashov), `audit-prep` (CDSecurity),
-  `scv-scan` (kadenzipfel), or `auditmos`. Validate cost/quality here before
-  promoting any skill to a scheduled workflow.
+AI tools: the [Claude Code](https://docs.claude.com/claude-code) CLI (`claude`).
 
-## Setup
+## How the AI scans work
 
-1. Add the repository secret `ANTHROPIC_API_KEY` (Settings → Secrets and
-   variables → Actions). The non-AI tier needs no secret.
-2. (Optional) Create a `security` label so AI audit issues get labeled.
-3. The static-analysis tier runs automatically on the next PR/push.
+- Prompts live in `security/prompts/` (`review-changes.md`, `full-audit.md`,
+  `skills-audit.md`) and encode the vault/curator threat model.
+- `security/run-ai.sh` runs Claude headlessly with a **read-only tool
+  allowlist** (no `gh`, no git writes, no file writes) and pipes the report to a
+  gitignored file. The prompts also explicitly forbid creating issues/comments
+  or writing findings into tracked files.
+- `security/run-skills.sh` vendors community audit skills into `.claude/skills/`
+  (gitignored, managed by `security/vendor-skills.sh`) and runs the chosen one:
+  `solidity-auditor` / `x-ray` (pashov), `audit-prep` (CDSecurity), `scv-scan`
+  (kadenzipfel), or an `auditmos` skill.
 
-## Notes from the recommendation
+## Reports
 
-- State scope explicitly in prompts (full codebase vs PR changes) — done in the
-  workflow prompts.
-- State that skills must be used — the skills workflow prompt does this.
-- AI is non-deterministic; consider running audits multiple times and
-  cross-checking findings (e.g. a false-positive pass) before acting.
+All reports are written under `security/reports/` (gitignored). **Do not commit
+or share these files** — they may describe live, unfixed vulnerabilities. AI is
+non-deterministic; consider running an audit more than once and cross-checking.
+
+## Config files (safe to commit)
+
+- `solidity/slither.config.json` — filters out `lib/`, `test/`, `script/`.
+- `solidity/.solhint.json`, `solidity/.solhintignore` — Solhint rules/ignores.

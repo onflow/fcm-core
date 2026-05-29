@@ -1,0 +1,10 @@
+# Local security scan output — NEVER commit. This repo is public and the
+# contracts hold real value; findings must stay local.
+/security/reports/
+
+# Vendored audit skills, managed by security/vendor-skills.sh
+/.claude/skills/
+
+# Aderyn default report locations
+/report.md
+/solidity/report.md
