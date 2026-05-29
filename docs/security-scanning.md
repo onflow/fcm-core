@@ -28,9 +28,9 @@ repo** that mirrors the code, where logs and alerts stay private.
 | Target | Tool | Notes |
 |--------|------|-------|
 | `make security` | Slither + Aderyn + Solhint | runs all static analyzers |
-| `make security-slither` | Slither | report → `security/reports/slither-report.txt` |
-| `make security-aderyn` | Aderyn | report → `security/reports/aderyn-report.md` |
-| `make security-solhint` | Solhint | prints lint findings |
+| `make security-slither` | Slither | report → `security/reports/slither-report-<timestamp>.txt` |
+| `make security-aderyn` | Aderyn | report → `security/reports/aderyn-report-<timestamp>.md` |
+| `make security-solhint` | Solhint | report → `security/reports/solhint-report-<timestamp>.txt` |
 | `make security-ai-review` | Claude Code | reviews the current branch's changes |
 | `make security-ai-audit` | Claude Code | full-codebase audit |
 | `make security-ai-skills` | Claude Code + skills | `SKILL=<name>` to choose a skill |
