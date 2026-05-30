@@ -27,7 +27,7 @@ two distinct controls:
        source mounted **read-only**. Fully airtight.
      - **AI tier** (review/audit/skills/summarize): egress restricted to the
        **Anthropic API only** (`security/docker/init-firewall.sh`),
-       `ANTHROPIC_API_KEY` is the only secret present, source mounted read-only.
+       the Claude credential is the only secret present, source mounted read-only.
 
 Pinning + container = integrity + containment. Note what containment does **not**
 fix: a poisoned skill can still produce dishonest *output* (e.g. hide a finding),
@@ -74,15 +74,18 @@ Credential resolution (precedence, highest first):
 
 | Target | Tier | Notes |
 |--------|------|-------|
+| `make security` | all | everything: build + all static + all AI |
 | `make security-build` | — | build the scanner image (run once / after updates) |
-| `make security` | static | Slither + Aderyn + Solhint |
+| `make security-set-token` | — | store your Claude OAuth token in the Keychain (one-time) |
+| `make security-static` | static | all static analyzers: Slither + Aderyn + Solhint |
 | `make security-slither` | static | report → `security/reports/slither-report-<ts>.txt` |
 | `make security-aderyn` | static | report → `security/reports/aderyn-report-<ts>.md` |
 | `make security-solhint` | static | report → `security/reports/solhint-report-<ts>.txt` |
-| `make security-ai-review` | AI | reviews current branch changes (needs key) |
-| `make security-ai-audit` | AI | full-codebase audit (needs key) |
-| `make security-ai-skills` | AI | `SKILL=<name>`; vendors pinned skills, then audits (needs key) |
-| `make security-ai-summarize` | AI | rolls up all reports by severity to stdout (needs key) |
+| `make security-ai` | AI | all AI tiers: review + audit + skills + summarize |
+| `make security-ai-review` | AI | reviews current branch changes |
+| `make security-ai-audit` | AI | full-codebase audit |
+| `make security-ai-skills` | AI | `SKILL=<name>`; vendors pinned skills, then audits |
+| `make security-ai-summarize` | AI | rolls up all reports by severity to stdout |
 
 ## How it fits together
 
