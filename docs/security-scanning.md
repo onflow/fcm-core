@@ -77,6 +77,7 @@ Credential resolution (precedence, highest first):
 | `make security` | all | everything: build + all static + all AI |
 | `make security-build` | — | build the scanner image (run once / after updates) |
 | `make security-set-token` | — | store your Claude OAuth token in the Keychain (one-time) |
+| `make security-check-cred` | — | verify a Claude credential is available (AI-tier preflight) |
 | `make security-static` | static | all static analyzers: Slither + Aderyn + Solhint |
 | `make security-slither` | static | report → `security/reports/slither-report-<ts>.txt` |
 | `make security-aderyn` | static | report → `security/reports/aderyn-report-<ts>.md` |
