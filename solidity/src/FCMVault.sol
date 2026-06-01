@@ -52,7 +52,9 @@ contract FCMVault is ERC4626 {
         string symbol;
     }
 
-    constructor(InitParams memory p) ERC20(p.name, p.symbol) ERC4626(p.collateral) {
+    constructor(
+        InitParams memory p
+    ) ERC20(p.name, p.symbol) ERC4626(p.collateral) {
         loanToken = p.loanToken;
         yieldToken = p.yieldToken;
         feeYieldDebt = p.feeYieldDebt;
@@ -101,7 +103,9 @@ contract FCMVault is ERC4626 {
     ///         market in the same tx first (see `deposit`).
     function totalAssets() public view override returns (uint256) {
         uint256 assetAmount = market.collateral();
-        uint256 yieldInAsset = _yieldToAsset(yieldToken.balanceOf(address(this)));
+        uint256 yieldInAsset = _yieldToAsset(
+            yieldToken.balanceOf(address(this))
+        );
         uint256 debtInAsset = market.debtToCollateral(market.debt());
         uint256 gross = assetAmount + yieldInAsset;
         if (gross > debtInAsset) {
@@ -123,11 +127,7 @@ contract FCMVault is ERC4626 {
     ///            borrow is capped so this deposit cannot drag the existing
     ///            position's health factor down to the target — small
     ///            deposits never rebalance the whole protocol.
-    ///         4. Mint shares pro-rata to the NAV contribution:
-    ///            `shares = (totalAssets() − navBefore) ×
-    ///                      _totalClaims() / (navBefore + 1)`.
-    ///            The `+ 1` is the OZ virtual-asset offset; for the first
-    ///            depositor it reduces to `shares = assets × 10**offset`.
+    ///         4. Mint shares pro-rata to the NAV contribution
     ///
     ///         Rounding favors the vault: the share computation rounds
     ///         down, so any residual NAV accrues to existing shareholders
@@ -135,7 +135,10 @@ contract FCMVault is ERC4626 {
     /// @param  assets   Amount of underlying asset to deposit.
     /// @param  receiver Account to credit with newly minted shares.
     /// @return shares   Vault shares minted to `receiver`.
-    function deposit(uint256 assets, address receiver) public override returns (uint256 shares) {
+    function deposit(
+        uint256 assets,
+        address receiver
+    ) public override returns (uint256 shares) {
         market.accrueInterest();
 
         uint256 navBefore = totalAssets();
@@ -145,7 +148,12 @@ contract FCMVault is ERC4626 {
         uint256 toBorrow = _targetBorrowAgainst(assets);
         if (toBorrow > 0) {
             market.borrow(toBorrow);
-            SwapLib.swapExactIn(address(loanToken), address(yieldToken), feeYieldDebt, toBorrow);
+            SwapLib.swapExactIn(
+                address(loanToken),
+                address(yieldToken),
+                feeYieldDebt,
+                toBorrow
+            );
         }
 
         uint256 contributed = totalAssets() - navBefore;
@@ -164,12 +172,7 @@ contract FCMVault is ERC4626 {
         uint256,
         /*shares*/
         address /*receiver*/
-    )
-        public
-        pure
-        override
-        returns (uint256)
-    {
+    ) public pure override returns (uint256) {
         revert("not implemented");
     }
 
@@ -187,11 +190,17 @@ contract FCMVault is ERC4626 {
     ///      rebalance an over-collateralized protocol back to target, and
     ///      no deposit can push an already-too-leveraged position past the
     ///      target HF (`capFromTargetDebt` clamps to 0 in that case).
-    function _targetBorrowAgainst(uint256 newAssets) internal view returns (uint256) {
+    function _targetBorrowAgainst(
+        uint256 newAssets
+    ) internal view returns (uint256) {
         if (newAssets == 0) return 0;
-        uint256 capFromNewAsset =
-            market.maxBorrowFor(newAssets).mulDiv(1e18, healthFactorUpperTarget);
-        uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(healthFactorUpperTarget);
+        uint256 capFromNewAsset = market.maxBorrowFor(newAssets).mulDiv(
+            1e18,
+            healthFactorUpperTarget
+        );
+        uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(
+            healthFactorUpperTarget
+        );
         if (capFromNewAsset < capFromTargetDebt) {
             return capFromNewAsset;
         }
@@ -199,8 +208,14 @@ contract FCMVault is ERC4626 {
     }
 
     /// @dev Routes yield → debt → asset. The two 1e36 oracle scales cancel.
-    function _yieldToAsset(uint256 yieldAmount) internal view returns (uint256) {
+    function _yieldToAsset(
+        uint256 yieldAmount
+    ) internal view returns (uint256) {
         if (yieldAmount == 0) return 0;
-        return yieldAmount.mulDiv(IOracle(yieldOracle).price(), market.oraclePrice());
+        return
+            yieldAmount.mulDiv(
+                IOracle(yieldOracle).price(),
+                market.oraclePrice()
+            );
     }
 }

@@ -39,8 +39,11 @@ library MarketLib {
 
     /// @notice Supplies `assets` of collateral token from this contract to the market on behalf of itself.
     /// @dev Assumes the caller has already approved the Morpho singleton for `assets` of the
-    /// collateral token. Supplied collateral does not earn yield in Morpho Blue.
-    function supplyCollateral(MarketParams memory market, uint256 assets) internal {
+    /// collateral token.
+    function supplyCollateral(
+        MarketParams memory market,
+        uint256 assets
+    ) internal {
         MORPHO.supplyCollateral(market, assets, address(this), "");
     }
 
@@ -54,7 +57,9 @@ library MarketLib {
     // ---- reads ---------------------------------------------------------
 
     /// @notice Returns this contract's collateral balance in the given market, in raw collateral-token units.
-    function collateral(MarketParams memory market) internal view returns (uint256) {
+    function collateral(
+        MarketParams memory market
+    ) internal view returns (uint256) {
         return uint256(MORPHO.position(market.id(), address(this)).collateral);
     }
 
@@ -80,8 +85,8 @@ library MarketLib {
         Position memory pos = MORPHO.position(market.id(), address(this));
         if (pos.borrowShares == 0) return 0;
         Market memory mkt = MORPHO.market(market.id());
-        return uint256(pos.borrowShares)
-            .mulDiv(
+        return
+            uint256(pos.borrowShares).mulDiv(
                 uint256(mkt.totalBorrowAssets) + VIRTUAL_ASSETS,
                 uint256(mkt.totalBorrowShares) + VIRTUAL_SHARES,
                 Math.Rounding.Ceil
@@ -96,29 +101,29 @@ library MarketLib {
     /// Example (WETH collateral / USDC loan, 1 WETH = 2500 USDC):
     ///   price = 2500 * 10^(36 + 6 - 18) = 2.5e27
     ///   1 WETH (1e18) collateral → (1e18 * 2.5e27) / 1e36 = 2.5e9 = 2500 USDC
-    function oraclePrice(MarketParams memory market) internal view returns (uint256) {
+    function oraclePrice(
+        MarketParams memory market
+    ) internal view returns (uint256) {
         return IOracle(market.oracle).price();
     }
 
     /// @notice Converts a collateral amount to its value in loan-token units at the current oracle price.
     /// @dev Does not apply LLTV; this is a raw value conversion. Use `maxBorrowFor` for the
     /// LLTV-discounted borrowable amount.
-    function collateralToDebt(MarketParams memory market, uint256 collateralAmount)
-        internal
-        view
-        returns (uint256)
-    {
+    function collateralToDebt(
+        MarketParams memory market,
+        uint256 collateralAmount
+    ) internal view returns (uint256) {
         if (collateralAmount == 0) return 0;
         return collateralAmount.mulDiv(oraclePrice(market), ORACLE_PRICE_SCALE);
     }
 
     /// @notice Converts a loan-token amount to its equivalent collateral-token amount at the current oracle price.
     /// @dev Inverse of `collateralToDebt`. Does not apply LLTV.
-    function debtToCollateral(MarketParams memory market, uint256 debtAmount)
-        internal
-        view
-        returns (uint256)
-    {
+    function debtToCollateral(
+        MarketParams memory market,
+        uint256 debtAmount
+    ) internal view returns (uint256) {
         if (debtAmount == 0) return 0;
         return debtAmount.mulDiv(ORACLE_PRICE_SCALE, oraclePrice(market));
     }
@@ -126,17 +131,19 @@ library MarketLib {
     /// @notice Returns the maximum loan-token amount borrowable against `collateralAmount` at the market's LLTV.
     /// @dev Equal to `collateralToDebt(collateralAmount) * lltv / WAD`. A position at exactly
     /// this debt level has a health factor of WAD (the liquidation threshold).
-    function maxBorrowFor(MarketParams memory market, uint256 collateralAmount)
-        internal
-        view
-        returns (uint256)
-    {
-        return collateralToDebt(market, collateralAmount).mulDiv(market.lltv, WAD);
+    function maxBorrowFor(
+        MarketParams memory market,
+        uint256 collateralAmount
+    ) internal view returns (uint256) {
+        return
+            collateralToDebt(market, collateralAmount).mulDiv(market.lltv, WAD);
     }
 
     /// @notice Returns the maximum loan-token amount borrowable against this contract's current collateral balance.
     /// @dev Convenience wrapper over `maxBorrowFor(collateral(market))`.
-    function maxBorrow(MarketParams memory market) internal view returns (uint256) {
+    function maxBorrow(
+        MarketParams memory market
+    ) internal view returns (uint256) {
         return maxBorrowFor(market, collateral(market));
     }
 
@@ -149,7 +156,9 @@ library MarketLib {
     ///
     /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required,
     /// since `debt` reads stored state and does not include unaccrued interest.
-    function healthFactor(MarketParams memory market) internal view returns (uint256) {
+    function healthFactor(
+        MarketParams memory market
+    ) internal view returns (uint256) {
         uint256 debtAmount = debt(market);
         if (debtAmount == 0) return type(uint256).max;
         return maxBorrow(market).mulDiv(WAD, debtAmount);
@@ -161,11 +170,10 @@ library MarketLib {
     /// would push the position deeper toward liquidation than requested).
     ///
     /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required.
-    function maxBorrowAtHealthFactor(MarketParams memory market, uint256 targetHealthFactor)
-        internal
-        view
-        returns (uint256)
-    {
+    function maxBorrowAtHealthFactor(
+        MarketParams memory market,
+        uint256 targetHealthFactor
+    ) internal view returns (uint256) {
         uint256 targetDebt = maxBorrow(market).mulDiv(WAD, targetHealthFactor);
         uint256 currentDebt = debt(market);
         return targetDebt > currentDebt ? targetDebt - currentDebt : 0;
