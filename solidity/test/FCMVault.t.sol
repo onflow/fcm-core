@@ -96,9 +96,14 @@ contract FCMVaultTest is Test {
         assertEq(WETH.balanceOf(address(vault)), 0, "vault weth");
 
         // toBorrow = 2000 * 0.86 / 1.45 ≈ 1186.2069 PYUSD0 (1:1 to FUSDEV).
-        uint256 expectedBorrow = ((amount * 2000 * 0.86e18) / 1.45e18);
+        uint256 expectedBorrow = (amount * 2000 * 0.86e18) / 1.45e18;
         assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), expectedBorrow, 1, "vault fusdev");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "vault pyusd0");
+    }
+
+    function test_Mint_Reverts() public {
+        vm.expectRevert(bytes("not implemented"));
+        vault.mint(1e18, user);
     }
 
     function test_Deposit_NavRoundsToOriginalAssets() public {
