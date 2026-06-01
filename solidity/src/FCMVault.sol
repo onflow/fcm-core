@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import {ERC4626, IERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {IMorpho, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
@@ -17,14 +19,23 @@ import {SwapLib} from "./libraries/SwapLib.sol";
 IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
 
 /// @title FCMVault
-/// @notice ERC-4626 vault on Morpho Blue. Three-leg leveraged position:
+/// @notice ERC-4626 vault on Morpho Blue with role-gated participation.
+///         Three-leg leveraged position:
 ///         1. Asset leg: collateral token supplied to Morpho.
 ///         2. Debt leg: loan token borrowed from the market.
 ///         3. Yield leg: yield token bought with the borrowed loan token.
-contract FCMVault is ERC4626 {
+///
+///         Holders of `EARLY_ACCESS_ROLE` may deposit, hold, and transfer
+///         shares. Burns (withdrawals/redeems) are always permitted so a
+///         removed holder can still exit.
+contract FCMVault is ERC4626, AccessControl {
     using SafeERC20 for IERC20;
     using Math for uint256;
     using MarketLib for MarketParams;
+
+    /// @notice Members of this role may deposit assets, hold shares, and
+    ///         transfer shares.
+    bytes32 public constant EARLY_ACCESS_ROLE = keccak256("EARLY_ACCESS_ROLE");
 
     // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
     // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
@@ -48,6 +59,7 @@ contract FCMVault is ERC4626 {
         uint24 feeYieldDebt;
         uint256 healthFactorUpperTarget;
         address yieldOracle;
+        address admin;
         string name;
         string symbol;
     }
@@ -72,6 +84,8 @@ contract FCMVault is ERC4626 {
         p.loanToken.forceApprove(address(MORPHO), maxAllowance);
         p.loanToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
         p.yieldToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
+
+        _grantRole(DEFAULT_ADMIN_ROLE, p.admin);
     }
 
     // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
@@ -198,5 +212,34 @@ contract FCMVault is ERC4626 {
     function _yieldToAsset(uint256 yieldAmount) internal view returns (uint256) {
         if (yieldAmount == 0) return 0;
         return yieldAmount.mulDiv(IOracle(yieldOracle).price(), market.oraclePrice());
+    }
+
+    /// @inheritdoc IERC4626
+    function maxDeposit(address receiver) public view override returns (uint256) {
+        if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
+        return super.maxDeposit(receiver);
+    }
+
+    /// @inheritdoc IERC4626
+    function maxMint(address receiver) public view override returns (uint256) {
+        if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
+        return super.maxMint(receiver);
+    }
+
+    /// @dev Hook fires on every share movement (mint / transfer / burn).
+    ///      - Mint (`from == 0`): the receiver must be allowlisted.
+    ///      - Transfer (both non-zero): both sender and receiver must be allowlisted.
+    ///      - Burn (`to == 0`): always allowed, preserving the exit path for
+    ///        de-allowlisted holders.
+    function _update(address from, address to, uint256 value) internal override {
+        if (to != address(0)) {
+            if (!hasRole(EARLY_ACCESS_ROLE, to)) {
+                revert IAccessControl.AccessControlUnauthorizedAccount(to, EARLY_ACCESS_ROLE);
+            }
+            if (from != address(0) && !hasRole(EARLY_ACCESS_ROLE, from)) {
+                revert IAccessControl.AccessControlUnauthorizedAccount(from, EARLY_ACCESS_ROLE);
+            }
+        }
+        super._update(from, to, value);
     }
 }

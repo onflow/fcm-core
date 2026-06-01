@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -22,6 +22,7 @@ contract FCMVaultScript is Script {
                 feeYieldDebt: uint24(vm.envUint("FEE_YIELD_DEBT")),
                 healthFactorUpperTarget: vm.envUint("HEALTH_FACTOR_UPPER_TARGET"),
                 yieldOracle: vm.envAddress("YIELD_ORACLE"),
+                admin: vm.envAddress("ADMIN"),
                 name: vm.envString("VAULT_NAME"),
                 symbol: vm.envString("VAULT_SYMBOL")
             })
