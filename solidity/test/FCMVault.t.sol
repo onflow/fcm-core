@@ -42,10 +42,7 @@ contract FCMVaultTest is Test {
         vm.etch(address(PYUSD0), erc20Code);
         vm.etch(address(FUSDEV), erc20Code);
         vm.etch(address(MORPHO), address(new MockMorpho()).code);
-        vm.etch(
-            address(SwapLib.SWAP_ROUTER),
-            address(new MockSwapRouter()).code
-        );
+        vm.etch(address(SwapLib.SWAP_ROUTER), address(new MockSwapRouter()).code);
         vm.etch(MOCK_IRM, address(new MockIrm()).code);
 
         marketOracle = new MockOracle(WETH_PRICE);
@@ -98,12 +95,7 @@ contract FCMVaultTest is Test {
 
         // toBorrow = 2000 * 0.86 / 1.45 ≈ 1186.2069 PYUSD0 (1:1 to FUSDEV).
         uint256 expectedBorrow = (amount * 2000 * 0.86e18) / 1.45e18;
-        assertApproxEqAbs(
-            FUSDEV.balanceOf(address(vault)),
-            expectedBorrow,
-            1,
-            "vault fusdev"
-        );
+        assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), expectedBorrow, 1, "vault fusdev");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "vault pyusd0");
     }
 
@@ -197,16 +189,9 @@ contract FCMVaultTest is Test {
         assertGt(vault.totalAssets(), navBefore, "nav increased");
 
         uint256 healthAfter = _healthFactor();
-        assertGt(
-            healthAfter,
-            5e18,
-            "health factor still well above target after bob"
-        );
+        assertGt(healthAfter, 5e18, "health factor still well above target after bob");
         assertApproxEqRel(
-            healthAfter,
-            healthBefore,
-            1e15,
-            "bob did not materially change health factor"
+            healthAfter, healthBefore, 1e15, "bob did not materially change health factor"
         );
     }
 
@@ -238,48 +223,25 @@ contract FCMVaultTest is Test {
 
         // Bob still gets shares — collateral was supplied.
         assertGt(bobShares, 0, "bob gets shares");
-        assertEq(
-            WETH.balanceOf(address(MORPHO)),
-            amount * 2,
-            "both deposits collateral supplied"
-        );
+        assertEq(WETH.balanceOf(address(MORPHO)), amount * 2, "both deposits collateral supplied");
 
         // No new borrowing — FUSDEV balance unchanged.
-        assertEq(
-            FUSDEV.balanceOf(address(vault)),
-            fusBefore,
-            "no new yield bought"
-        );
-        assertEq(
-            PYUSD0.balanceOf(address(vault)),
-            0,
-            "no loan token sitting idle"
-        );
+        assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "no new yield bought");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan token sitting idle");
     }
 
     // ---- helpers -------------------------------------------------------
 
     function _healthFactor() internal view returns (uint256) {
-        (
-            address lt,
-            address ct,
-            address oracle,
-            address irm,
-            uint256 lltv_
-        ) = vault.market();
-        Id marketId = MarketParamsLib.id(
-            MarketParams(lt, ct, oracle, irm, lltv_)
-        );
+        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
+        Id marketId = MarketParamsLib.id(MarketParams(lt, ct, oracle, irm, lltv_));
         Position memory pos = MORPHO.position(marketId, address(vault));
         Market memory mkt = MORPHO.market(marketId);
         if (pos.borrowShares == 0) return type(uint256).max;
-        uint256 debt = (uint256(pos.borrowShares) *
-            (uint256(mkt.totalBorrowAssets) + 1)) /
-            (uint256(mkt.totalBorrowShares) + 1e6);
+        uint256 debt = (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1))
+            / (uint256(mkt.totalBorrowShares) + 1e6);
         uint256 maxBorrow = Math.mulDiv(
-            uint256(pos.collateral),
-            Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36),
-            1e18
+            uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36), 1e18
         );
         return Math.mulDiv(maxBorrow, 1e18, debt);
     }

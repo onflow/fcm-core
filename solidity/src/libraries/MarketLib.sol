@@ -69,11 +69,12 @@ library MarketLib {
         Position memory pos = MORPHO.position(market.id(), address(this));
         if (pos.borrowShares == 0) return 0;
         Market memory mkt = MORPHO.market(market.id());
-        return uint256(pos.borrowShares).mulDiv(
-            uint256(mkt.totalBorrowAssets) + VIRTUAL_ASSETS,
-            uint256(mkt.totalBorrowShares) + VIRTUAL_SHARES,
-            Math.Rounding.Ceil
-        );
+        return uint256(pos.borrowShares)
+            .mulDiv(
+                uint256(mkt.totalBorrowAssets) + VIRTUAL_ASSETS,
+                uint256(mkt.totalBorrowShares) + VIRTUAL_SHARES,
+                Math.Rounding.Ceil
+            );
     }
 
     /// @notice Returns the price of 1 unit of collateral token quoted in loan token, scaled by 1e36.
