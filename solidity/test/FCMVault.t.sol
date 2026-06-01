@@ -65,6 +65,9 @@ contract FCMVaultTest is Test {
         );
     }
 
+    /// @dev First depositor into an empty vault receives shares equal to
+    ///      `assets * 10**_decimalsOffset()`. ERC4626's virtual-shares inflation
+    ///      protection seeds the share/asset ratio at 1:1e6 for the first deposit.
     function test_Deposit_FirstDepositMintsShares() public {
         uint256 amount = 1 ether;
         MockERC20(address(WETH)).mint(user, amount);
@@ -80,6 +83,10 @@ contract FCMVaultTest is Test {
         assertEq(vault.totalSupply(), shares, "totalSupply");
     }
 
+    /// @dev A deposit must (1) pull the collateral from the depositor into Morpho,
+    ///      (2) borrow loan token against it at the configured target health factor,
+    ///      and (3) swap the borrowed loan token into yield token, leaving no loan
+    ///      token idle in the vault. Expected borrow = `assets * price * lltv / target HF`.
     function test_Deposit_PullsCollateralAndBorrowsDebt() public {
         uint256 amount = 1 ether;
         MockERC20(address(WETH)).mint(user, amount);
@@ -99,11 +106,18 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "vault pyusd0");
     }
 
+    /// @dev `mint` is intentionally not supported — the vault only accepts
+    ///      asset-denominated deposits, since minting an exact share count would
+    ///      require pre-computing the borrow+swap leg with unknown slippage.
     function test_Mint_Reverts() public {
         vm.expectRevert(bytes("not implemented"));
         vault.mint(1e18, user);
     }
 
+    /// @dev After a deposit, NAV in asset terms should equal the original deposit
+    ///      amount (modulo rounding): the collateral leg adds `assets` of value, and
+    ///      the borrow→swap leg nets to zero because yield and debt are valued at the
+    ///      same 1:1 mock rate. Verifies no value is leaked by the deposit flow itself.
     function test_Deposit_NavRoundsToOriginalAssets() public {
         uint256 amount = 1 ether;
         MockERC20(address(WETH)).mint(user, amount);
@@ -118,6 +132,10 @@ contract FCMVaultTest is Test {
         assertApproxEqAbs(vault.totalAssets(), amount, 1, "totalAssets");
     }
 
+    /// @dev Two sequential depositors contributing the same asset amount should
+    ///      receive approximately the same share count. Tolerates ~1e-3 relative
+    ///      drift from rounding in the second deposit's share computation against
+    ///      the now-nonzero totalAssets/totalSupply.
     function test_Deposit_TwoDepositorsProRata() public {
         uint256 amount = 1 ether;
         address alice = address(0xA);
@@ -139,6 +157,9 @@ contract FCMVaultTest is Test {
         assertApproxEqRel(bobShares, aliceShares, 1e15, "share parity");
     }
 
+    /// @dev A deposit without a prior ERC20 approval must revert at the
+    ///      `transferFrom` step. Sanity check that the vault does not have any
+    ///      hidden allowance path that would let it pull tokens without consent.
     function test_Deposit_RevertsOnZeroApproval() public {
         uint256 amount = 1 ether;
         MockERC20(address(WETH)).mint(user, amount);
