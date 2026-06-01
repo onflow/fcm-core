@@ -6,6 +6,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {FCMVault} from "../src/FCMVault.sol";
 import {ERC4626, IERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract MockERC20 is ERC20 {
     constructor() ERC20("Mock", "MOCK") {}
@@ -28,7 +29,7 @@ contract TvlLimitTest is Test {
 
     // Mirror the contract's events so we can use vm.expectEmit.
     event MaxTvlSet(uint256 previousMaxTvl, uint256 newMaxTvl);
-    event OwnerSet(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     function setUp() public {
         owner = address(this);
@@ -81,7 +82,7 @@ contract TvlLimitTest is Test {
 
     function test_SetMaxTvl_OnlyOwner() public {
         vm.prank(alice);
-        vm.expectRevert(FCMVault.NotOwner.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         vault.setMaxTvl(1_000);
     }
 
@@ -110,7 +111,7 @@ contract TvlLimitTest is Test {
 
     function test_TransferOwnership_OnlyOwner() public {
         vm.prank(alice);
-        vm.expectRevert(FCMVault.NotOwner.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         vault.transferOwnership(alice);
     }
 
@@ -119,7 +120,7 @@ contract TvlLimitTest is Test {
         assertEq(vault.owner(), alice);
 
         // Previous owner can no longer adjust the limit.
-        vm.expectRevert(FCMVault.NotOwner.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, owner));
         vault.setMaxTvl(1_000);
 
         // New owner can.
@@ -130,7 +131,7 @@ contract TvlLimitTest is Test {
 
     function test_TransferOwnership_EmitsEvent() public {
         vm.expectEmit(true, true, false, false, address(vault));
-        emit OwnerSet(owner, alice);
+        emit OwnershipTransferred(owner, alice);
         vault.transferOwnership(alice);
     }
 
@@ -140,7 +141,7 @@ contract TvlLimitTest is Test {
         assertEq(vault.owner(), address(0));
 
         // The limit is now frozen — no caller can change it.
-        vm.expectRevert(FCMVault.NotOwner.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, owner));
         vault.setMaxTvl(2_000);
     }
 
