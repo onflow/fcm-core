@@ -99,6 +99,11 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "vault pyusd0");
     }
 
+    function test_Mint_Reverts() public {
+        vm.expectRevert(bytes("not implemented"));
+        vault.mint(1e18, user);
+    }
+
     function test_Deposit_NavRoundsToOriginalAssets() public {
         uint256 amount = 1 ether;
         MockERC20(address(WETH)).mint(user, amount);

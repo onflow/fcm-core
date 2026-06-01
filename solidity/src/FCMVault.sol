@@ -155,6 +155,24 @@ contract FCMVault is ERC4626 {
         emit Deposit(msg.sender, receiver, assets, shares);
     }
 
+    /// @notice Not implemented. Use `deposit` instead.
+    /// @dev    `mint` would need to invert the borrow-and-swap leg to solve
+    ///         for the asset input that produces an exact share output —
+    ///         non-trivial because the yield leg goes through an AMM whose
+    ///         realized price is only known after execution.
+    function mint(
+        uint256,
+        /*shares*/
+        address /*receiver*/
+    )
+        public
+        pure
+        override
+        returns (uint256)
+    {
+        revert("not implemented");
+    }
+
     /// @dev How much loan token to borrow against `newAssets` while keeping
     ///      the position at `healthFactorUpperTarget`. Returns the smaller
     ///      of two caps:
