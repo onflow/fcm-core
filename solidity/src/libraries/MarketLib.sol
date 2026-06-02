@@ -103,22 +103,14 @@ library MarketLib {
     /// @notice Converts a collateral amount to its value in loan-token units at the current oracle price.
     /// @dev Does not apply LLTV; this is a raw value conversion. Use `maxBorrowFor` for the
     /// LLTV-discounted borrowable amount.
-    function collateralToDebt(MarketParams memory market, uint256 collateralAmount)
-        internal
-        view
-        returns (uint256)
-    {
+    function collateralToDebt(MarketParams memory market, uint256 collateralAmount) internal view returns (uint256) {
         if (collateralAmount == 0) return 0;
         return collateralAmount.mulDiv(oraclePrice(market), ORACLE_PRICE_SCALE);
     }
 
     /// @notice Converts a loan-token amount to its equivalent collateral-token amount at the current oracle price.
     /// @dev Inverse of `collateralToDebt`. Does not apply LLTV.
-    function debtToCollateral(MarketParams memory market, uint256 debtAmount)
-        internal
-        view
-        returns (uint256)
-    {
+    function debtToCollateral(MarketParams memory market, uint256 debtAmount) internal view returns (uint256) {
         if (debtAmount == 0) return 0;
         return debtAmount.mulDiv(ORACLE_PRICE_SCALE, oraclePrice(market));
     }
@@ -126,11 +118,7 @@ library MarketLib {
     /// @notice Returns the maximum loan-token amount borrowable against `collateralAmount` at the market's LLTV.
     /// @dev Equal to `collateralToDebt(collateralAmount) * lltv / WAD`. A position at exactly
     /// this debt level has a health factor of WAD (the liquidation threshold).
-    function maxBorrowFor(MarketParams memory market, uint256 collateralAmount)
-        internal
-        view
-        returns (uint256)
-    {
+    function maxBorrowFor(MarketParams memory market, uint256 collateralAmount) internal view returns (uint256) {
         return collateralToDebt(market, collateralAmount).mulDiv(market.lltv, WAD);
     }
 
