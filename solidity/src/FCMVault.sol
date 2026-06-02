@@ -47,10 +47,28 @@ contract FCMVault is ERC4626, AccessControl {
     /// @notice Pool fee tier for the asset/debt pool, used to reconcile
     ///         redeem surplus from loan token back to the underlying asset.
     uint24 public immutable feeAssetDebt;
-    uint256 public immutable healthFactorUpperTarget;
+    /// @notice Health factor below which `rebalance` will delever (sell yield
+    ///         to repay debt). WAD-scaled. Must be ≥ WAD.
+    uint256 public immutable healthFactorMin;
+    /// @notice Health factor above which `rebalance` will lever up (borrow
+    ///         more debt and swap to yield). WAD-scaled.
+    uint256 public immutable healthFactorMax;
+    /// @notice Health factor that `rebalance` drives the position toward
+    ///         whenever it acts. Also used by `deposit` to cap the
+    ///         per-deposit borrow. WAD-scaled; must satisfy
+    ///         `healthFactorMin <= healthFactorTarget <= healthFactorMax`.
+    uint256 public immutable healthFactorTarget;
+    /// @notice Maximum price impact tolerated on rebalance swaps, in basis
+    ///         points (100 = 1%). Applied against the oracle-implied output
+    ///         to compute the swap's `amountOutMinimum`. Must be ≤ 10_000.
+    uint256 public immutable maxPriceImpactBps;
     address public immutable yieldOracle;
 
     MarketParams public market;
+
+    uint256 internal constant WAD = 1e18;
+    uint256 internal constant BPS_DENOM = 10_000;
+    uint256 internal constant ORACLE_PRICE_SCALE = 1e36;
 
     struct InitParams {
         IERC20 collateral;
@@ -61,7 +79,10 @@ contract FCMVault is ERC4626, AccessControl {
         uint256 marketLltv;
         uint24 feeYieldDebt;
         uint24 feeAssetDebt;
-        uint256 healthFactorUpperTarget;
+        uint256 healthFactorMin;
+        uint256 healthFactorMax;
+        uint256 healthFactorTarget;
+        uint256 maxPriceImpactBps;
         address yieldOracle;
         address admin;
         string name;
@@ -69,11 +90,19 @@ contract FCMVault is ERC4626, AccessControl {
     }
 
     constructor(InitParams memory p) ERC20(p.name, p.symbol) ERC4626(p.collateral) {
+        require(p.healthFactorMin >= WAD, "HF min < WAD");
+        require(p.healthFactorMin <= p.healthFactorTarget, "HF min > target");
+        require(p.healthFactorTarget <= p.healthFactorMax, "HF target > max");
+        require(p.maxPriceImpactBps <= BPS_DENOM, "impact > 100%");
+
         loanToken = p.loanToken;
         yieldToken = p.yieldToken;
         feeYieldDebt = p.feeYieldDebt;
         feeAssetDebt = p.feeAssetDebt;
-        healthFactorUpperTarget = p.healthFactorUpperTarget;
+        healthFactorMin = p.healthFactorMin;
+        healthFactorMax = p.healthFactorMax;
+        healthFactorTarget = p.healthFactorTarget;
+        maxPriceImpactBps = p.maxPriceImpactBps;
         yieldOracle = p.yieldOracle;
 
         market = MarketParams({
@@ -204,11 +233,7 @@ contract FCMVault is ERC4626, AccessControl {
     /// @param  receiver  Account to credit with the asset payout.
     /// @param  owner     Account whose shares are burned.
     /// @return assets    Asset actually delivered to `receiver`.
-    function redeem(uint256 shares, address receiver, address owner)
-        public
-        override
-        returns (uint256 assets)
-    {
+    function redeem(uint256 shares, address receiver, address owner) public override returns (uint256 assets) {
         if (shares == 0) return 0;
         // If someone besides the owner attempts to redeem, this will:
         // 1. Verify the redeemer's allowance is <= shares.
@@ -342,11 +367,14 @@ contract FCMVault is ERC4626, AccessControl {
     ///      rebalance an over-collateralized protocol back to target, and
     ///      no deposit can push an already-too-leveraged position past the
     ///      target HF (`capFromTargetDebt` clamps to 0 in that case).
+    ///
+    ///      Protocol-wide rebalancing (driving the whole position back to
+    ///      `healthFactorTarget` regardless of new asset size) is the job of
+    ///      `rebalance`, not `deposit`.
     function _targetBorrowAgainst(uint256 newAssets) internal view returns (uint256) {
         if (newAssets == 0) return 0;
-        uint256 capFromNewAsset =
-            market.maxBorrowFor(newAssets).mulDiv(1e18, healthFactorUpperTarget);
-        uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(healthFactorUpperTarget);
+        uint256 capFromNewAsset = market.maxBorrowFor(newAssets).mulDiv(WAD, healthFactorTarget);
+        uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(healthFactorTarget);
         return capFromNewAsset < capFromTargetDebt ? capFromNewAsset : capFromTargetDebt;
     }
 
