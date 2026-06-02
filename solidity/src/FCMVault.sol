@@ -233,11 +233,7 @@ contract FCMVault is ERC4626, AccessControl {
     /// @param  receiver  Account to credit with the asset payout.
     /// @param  owner     Account whose shares are burned.
     /// @return assets    Asset actually delivered to `receiver`.
-    function redeem(uint256 shares, address receiver, address owner)
-        public
-        override
-        returns (uint256 assets)
-    {
+    function redeem(uint256 shares, address receiver, address owner) public override returns (uint256 assets) {
         if (shares == 0) return 0;
         // If someone besides the owner attempts to redeem, this will:
         // 1. Verify the redeemer's allowance is <= shares.
@@ -321,6 +317,165 @@ contract FCMVault is ERC4626, AccessControl {
             uint256 scaledColl = collSlice.mulDiv(loanGot, debtSlice);
             if (scaledColl > 0) market.withdrawCollateral(scaledColl);
         }
+    }
+
+    /// @notice Emitted whenever `rebalance` makes a state-changing move on
+    ///         the underlying Morpho position.
+    /// @param  caller            Address that invoked `rebalance`.
+    /// @param  healthFactorBefore Health factor at the start of the call (WAD-scaled).
+    /// @param  healthFactorAfter  Health factor after the rebalance (WAD-scaled).
+    /// @param  debtChange         Change in outstanding debt — positive on lever-up,
+    ///                            negative on delever, zero if the call was a no-op.
+    event Rebalanced(address indexed caller, uint256 healthFactorBefore, uint256 healthFactorAfter, int256 debtChange);
+
+    /// @notice Drive the vault's leveraged Morpho position back toward
+    ///         `healthFactorTarget`.
+    /// @dev    Normal (non-forced) behavior:
+    ///         - If `hf ∈ [healthFactorMin, healthFactorMax]`, the call is a
+    ///           no-op — small swings stay within the dead band and do not
+    ///           burn swap fees.
+    ///         - If `hf > healthFactorMax`, the position is under-levered:
+    ///           borrow exactly `addDebt = (maxBorrow / target) - debt` of
+    ///           the loan token and swap it to the yield token.
+    ///         - If `hf < healthFactorMin`, the position is over-levered:
+    ///           sell exactly enough yield token to repay
+    ///           `repayAmount = debt - (maxBorrow / target)` of debt.
+    ///
+    ///         `force = true` rebalances toward target whenever the current
+    ///         health factor is not already equal to target, ignoring the
+    ///         min/max dead band. Useful for operational manual triggers.
+    ///
+    ///         Price-impact protection: every swap sets an explicit
+    ///         `amountOutMinimum` derived from the relevant oracle price and
+    ///         `maxPriceImpactBps`. A swap that would exceed the configured
+    ///         price-impact tolerance reverts inside the router, aborting
+    ///         the whole rebalance.
+    ///
+    ///         Liquidation recovery: if the Morpho position has been
+    ///         partially or fully liquidated (collateral reduced, debt
+    ///         possibly underwater), the delever path simply caps the yield
+    ///         it sells to the available balance and repays whatever debt
+    ///         the realized loan-token output covers. It does not require
+    ///         the position to reach target — it does as much as the
+    ///         remaining yield buffer allows.
+    /// @param  force If true, rebalance whenever `hf != healthFactorTarget`,
+    ///               bypassing the [min, max] dead band.
+    function rebalance(bool force) external {
+        market.accrueInterest();
+        uint256 currentDebt = market.debt();
+        uint256 maxBorrow = market.maxBorrow();
+        uint256 hfBefore = currentDebt == 0 ? type(uint256).max : maxBorrow.mulDiv(WAD, currentDebt);
+
+        if (!force) {
+            if (hfBefore >= healthFactorMin && hfBefore <= healthFactorMax) {
+                return;
+            }
+        }
+
+        int256 debtChange = 0;
+        if (hfBefore > healthFactorTarget) {
+            debtChange = int256(_rebalanceLever(maxBorrow, currentDebt));
+        } else if (hfBefore < healthFactorTarget) {
+            debtChange = -int256(_rebalanceDelever(maxBorrow, currentDebt));
+        }
+
+        uint256 debtAfter = market.debt();
+        uint256 maxBorrowAfter = market.maxBorrow();
+        uint256 hfAfter = debtAfter == 0 ? type(uint256).max : maxBorrowAfter.mulDiv(WAD, debtAfter);
+
+        emit Rebalanced(msg.sender, hfBefore, hfAfter, debtChange);
+    }
+
+    /// @dev Lever-up branch of `rebalance`: position is under-levered
+    ///      (`hf > target`). Borrow exactly the debt slice that lands the
+    ///      position at `healthFactorTarget` and swap it into yield token.
+    ///
+    ///      `targetDebt = maxBorrow * WAD / healthFactorTarget` is the debt
+    ///      level that, against the current collateral, produces an HF of
+    ///      exactly target. Since `hf > target`, `currentDebt < targetDebt`.
+    ///      The borrow leg adds `targetDebt - currentDebt`.
+    ///
+    ///      Slippage cap: the swap's `amountOutMinimum` is computed from the
+    ///      yield oracle and `maxPriceImpactBps`, so the router will revert
+    ///      if the AMM price has deviated past tolerance. That revert
+    ///      aborts the whole rebalance, leaving the position untouched.
+    /// @param maxBorrow   Current maximum-borrowable amount at LLTV.
+    /// @param currentDebt Current outstanding debt (caller passes the same
+    ///                    value used to compute `hfBefore` to avoid a
+    ///                    second `MORPHO.position` SLOAD).
+    /// @return added Amount of loan token borrowed in this call.
+    function _rebalanceLever(uint256 maxBorrow, uint256 currentDebt) internal returns (uint256 added) {
+        uint256 targetDebt = maxBorrow.mulDiv(WAD, healthFactorTarget);
+        if (targetDebt <= currentDebt) return 0;
+        added = targetDebt - currentDebt;
+
+        market.borrow(added);
+
+        uint256 expectedYieldOut = added.mulDiv(ORACLE_PRICE_SCALE, IOracle(yieldOracle).price());
+        uint256 minOut = expectedYieldOut.mulDiv(BPS_DENOM - maxPriceImpactBps, BPS_DENOM);
+        SwapLib.swapExactInMin(address(loanToken), address(yieldToken), feeYieldDebt, added, minOut);
+    }
+
+    /// @dev Delever branch of `rebalance`: position is over-levered
+    ///      (`hf < target`). Sell yield token for loan token to repay
+    ///      enough debt to land the position back at `healthFactorTarget`.
+    ///
+    ///      Sizing:
+    ///        targetDebt    = maxBorrow * WAD / healthFactorTarget
+    ///        repayAmount   = currentDebt - targetDebt
+    ///        yieldNeeded   = repayAmount * 1e36 / yieldOraclePrice
+    ///        yieldToSell   = yieldNeeded * BPS / (BPS - maxPriceImpactBps)
+    ///      The scale-up on `yieldToSell` absorbs the worst-case slippage
+    ///      against oracle so the post-swap loan-token output is still ≥
+    ///      `repayAmount`.
+    ///
+    ///      Liquidation recovery: if `yieldToSell` exceeds the vault's
+    ///      yield balance (e.g., Morpho liquidated some collateral and the
+    ///      position is severely under-collateralized), the call sells the
+    ///      full yield balance and repays whatever loan token that yields.
+    ///      The rebalance does not revert just because target is no longer
+    ///      reachable — it does as much repair as the remaining yield
+    ///      buffer allows.
+    ///
+    ///      Slippage cap: the swap's `amountOutMinimum` is always the
+    ///      oracle-implied output of the actually-sent yield amount,
+    ///      discounted by `maxPriceImpactBps`. A swap worse than that
+    ///      tolerance reverts in the router.
+    /// @param maxBorrow   Current maximum-borrowable amount at LLTV (may be 0
+    ///                    after a liquidation that wiped collateral).
+    /// @param currentDebt Current outstanding debt.
+    /// @return repaid Amount of loan token repaid to Morpho in this call.
+    function _rebalanceDelever(uint256 maxBorrow, uint256 currentDebt) internal returns (uint256 repaid) {
+        uint256 targetDebt = maxBorrow.mulDiv(WAD, healthFactorTarget);
+        if (targetDebt >= currentDebt) return 0;
+        uint256 repayAmount = currentDebt - targetDebt;
+
+        uint256 yieldPrice = IOracle(yieldOracle).price();
+        // yieldNeeded: oracle-implied yield amount whose loan-token value
+        // exactly equals `repayAmount`.
+        uint256 yieldNeeded = repayAmount.mulDiv(ORACLE_PRICE_SCALE, yieldPrice);
+        // Scale up by 1 / (1 - maxPriceImpactBps) so realized output still
+        // covers `repayAmount` even at worst-tolerated slippage.
+        uint256 yieldToSell = yieldNeeded.mulDiv(BPS_DENOM, BPS_DENOM - maxPriceImpactBps);
+
+        uint256 yieldBalance = yieldToken.balanceOf(address(this));
+        if (yieldToSell > yieldBalance) yieldToSell = yieldBalance;
+        if (yieldToSell == 0) return 0;
+
+        // minOut is oracle-implied loan-token value of `yieldToSell`,
+        // discounted by `maxPriceImpactBps`. Whether or not we capped to
+        // balance, this is the per-swap slippage check.
+        uint256 expectedLoanOut = yieldToSell.mulDiv(yieldPrice, ORACLE_PRICE_SCALE);
+        uint256 minOut = expectedLoanOut.mulDiv(BPS_DENOM - maxPriceImpactBps, BPS_DENOM);
+
+        uint256 loanBefore = loanToken.balanceOf(address(this));
+        SwapLib.swapExactInMin(address(yieldToken), address(loanToken), feeYieldDebt, yieldToSell, minOut);
+        uint256 loanGot = loanToken.balanceOf(address(this)) - loanBefore;
+
+        // Cap repayment at outstanding debt — covers the liquidation-recovery
+        // case where realized output overshoots the residual debt.
+        repaid = loanGot > currentDebt ? currentDebt : loanGot;
+        if (repaid > 0) market.repay(repaid);
     }
 
     /// @notice Not implemented. Use `deposit` instead.
