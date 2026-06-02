@@ -423,11 +423,11 @@ contract FCMVault is ERC4626, AccessControl {
     ///      Sizing:
     ///        targetDebt    = maxBorrow * WAD / healthFactorTarget
     ///        repayAmount   = currentDebt - targetDebt
-    ///        yieldNeeded   = repayAmount * 1e36 / yieldOraclePrice
-    ///        yieldToSell   = yieldNeeded * BPS / (BPS - maxPriceImpactBps)
-    ///      The scale-up on `yieldToSell` absorbs the worst-case slippage
-    ///      against oracle so the post-swap loan-token output is still ≥
-    ///      `repayAmount`.
+    ///        yieldToSell   = repayAmount * 1e36 / yieldOraclePrice
+    ///      `yieldToSell` is the oracle-implied yield amount whose loan-token
+    ///      value equals `repayAmount`. AMM slippage shows up as a small
+    ///      under-shoot of target (post-rebalance HF is slightly below
+    ///      target if the swap realized less than oracle).
     ///
     ///      Liquidation recovery: if `yieldToSell` exceeds the vault's
     ///      yield balance (e.g., Morpho liquidated some collateral and the
@@ -451,12 +451,11 @@ contract FCMVault is ERC4626, AccessControl {
         uint256 repayAmount = currentDebt - targetDebt;
 
         uint256 yieldPrice = IOracle(yieldOracle).price();
-        // yieldNeeded: oracle-implied yield amount whose loan-token value
-        // exactly equals `repayAmount`.
-        uint256 yieldNeeded = repayAmount.mulDiv(ORACLE_PRICE_SCALE, yieldPrice);
-        // Scale up by 1 / (1 - maxPriceImpactBps) so realized output still
-        // covers `repayAmount` even at worst-tolerated slippage.
-        uint256 yieldToSell = yieldNeeded.mulDiv(BPS_DENOM, BPS_DENOM - maxPriceImpactBps);
+        // Oracle-implied yield amount whose loan-token value equals
+        // `repayAmount`. We do not scale up for slippage here — realized
+        // output below oracle just lands the position slightly below target,
+        // while overshooting target would leave idle loan token in the vault.
+        uint256 yieldToSell = repayAmount.mulDiv(ORACLE_PRICE_SCALE, yieldPrice);
 
         uint256 yieldBalance = yieldToken.balanceOf(address(this));
         if (yieldToSell > yieldBalance) yieldToSell = yieldBalance;

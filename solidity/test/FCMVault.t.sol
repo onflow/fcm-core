@@ -254,9 +254,7 @@ contract FCMVaultTest is Test {
         uint256 assetsOut = vault.redeem(shares / 2, user, user);
 
         // ~half of each leg consumed (within 0.1% — virtual-share offset).
-        assertApproxEqRel(
-            WETH.balanceOf(address(MORPHO)), collateralBefore / 2, 1e15, "collateral halved"
-        );
+        assertApproxEqRel(WETH.balanceOf(address(MORPHO)), collateralBefore / 2, 1e15, "collateral halved");
         assertApproxEqRel(FUSDEV.balanceOf(address(vault)), fusdevBefore / 2, 1e15, "fusdev halved");
         assertApproxEqRel(assetsOut, amount / 2, 1e15, "assetsOut approx half");
 
@@ -414,9 +412,7 @@ contract FCMVaultTest is Test {
 
         uint256 healthAfter = _healthFactor();
         assertGt(healthAfter, 5e18, "health factor still well above target after bob");
-        assertApproxEqRel(
-            healthAfter, healthBefore, 1e15, "bob did not materially change health factor"
-        );
+        assertApproxEqRel(healthAfter, healthBefore, 1e15, "bob did not materially change health factor");
     }
 
     /// @dev When the position health factor is below the target (price has dropped,
@@ -484,9 +480,7 @@ contract FCMVaultTest is Test {
         bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                stranger,
-                vault.DEFAULT_ADMIN_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, vault.DEFAULT_ADMIN_ROLE()
             )
         );
         vm.prank(stranger);
@@ -523,9 +517,7 @@ contract FCMVaultTest is Test {
         WETH.approve(address(vault), amount);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                bob,
-                vault.EARLY_ACCESS_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
             )
         );
         vault.deposit(amount, bob);
@@ -563,9 +555,7 @@ contract FCMVaultTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                bob,
-                vault.EARLY_ACCESS_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
             )
         );
         vault.transfer(bob, shares);
@@ -588,13 +578,215 @@ contract FCMVaultTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                user,
-                vault.EARLY_ACCESS_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user, vault.EARLY_ACCESS_ROLE()
             )
         );
         vm.prank(user);
         vault.transfer(bob, shares);
+    }
+
+    // ---------------------------------------------------------------------
+    // Rebalance
+    // ---------------------------------------------------------------------
+
+    /// @notice After a fresh deposit, HF lands exactly at the configured
+    ///         target (1.45), which is inside [min=1.25, max=1.65]. A
+    ///         non-forced rebalance is a no-op: debt, collateral, and FUSDEV
+    ///         balance are unchanged.
+    function test_Rebalance_NoopInsideBand() public {
+        _depositFor(user, 1 ether);
+
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+        uint256 hfBefore = _healthFactor();
+
+        vault.rebalance(false);
+
+        assertEq(WETH.balanceOf(address(MORPHO)), collBefore, "coll unchanged");
+        assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev unchanged");
+        assertEq(_healthFactor(), hfBefore, "hf unchanged");
+    }
+
+    /// @notice When the collateral price rises enough to push HF above max
+    ///         (1.65), `rebalance` borrows additional loan token and swaps
+    ///         it into yield token, driving HF back to target (1.45). The
+    ///         vault's collateral and the position's borrow shares both
+    ///         move in the expected directions.
+    function test_Rebalance_LeversWhenAboveMax() public {
+        _depositFor(user, 1 ether);
+
+        // Push HF above 1.65: 1 ether * 2300 * 0.86 / 1186.2 = 1.667.
+        marketOracle.setPrice(2300e36);
+        assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "above max");
+
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance(false);
+
+        // HF returns to target (within rounding from share math).
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "hf at target");
+        // Lever path: more yield token now held.
+        assertGt(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev grew");
+        // No idle loan token left behind by the lever swap.
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
+    }
+
+    /// @notice When the collateral price drops enough to push HF below min
+    ///         (1.25), `rebalance` sells yield token for loan token and
+    ///         repays just enough debt to land HF back at target.
+    function test_Rebalance_DeleversWhenBelowMin() public {
+        _depositFor(user, 1 ether);
+
+        // Push HF below 1.25: 1 ether * 1700 * 0.86 / 1186.2 = 1.232.
+        marketOracle.setPrice(1700e36);
+        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
+
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance(false);
+
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "hf at target");
+        // Delever path: yield token shrunk.
+        assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev shrank");
+        // Repay leg consumed all realized loan token.
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
+    }
+
+    /// @notice `force=true` rebalances when HF is inside the dead band but
+    ///         not exactly at target. Here we nudge HF slightly off-target
+    ///         (still inside [min, max]); a non-forced call is a no-op, a
+    ///         forced call pulls HF back to target.
+    function test_Rebalance_ForceRebalancesInsideBand() public {
+        _depositFor(user, 1 ether);
+
+        // Small price bump leaves HF inside [1.25, 1.65] but above target.
+        marketOracle.setPrice(2100e36);
+        uint256 hfBefore = _healthFactor();
+        assertGt(hfBefore, HEALTH_FACTOR_TARGET, "above target");
+        assertLt(hfBefore, HEALTH_FACTOR_MAX, "still inside band");
+
+        // Without force the call is a no-op.
+        vault.rebalance(false);
+        assertEq(_healthFactor(), hfBefore, "non-forced: noop");
+
+        // With force the position is driven to target.
+        vault.rebalance(true);
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "forced: at target");
+    }
+
+    /// @notice `force=true` is still a no-op when HF is exactly at target —
+    ///         neither lever nor delever branch fires, so no swap or borrow
+    ///         is issued.
+    function test_Rebalance_ForceAtTargetIsNoop() public {
+        _depositFor(user, 1 ether);
+        assertApproxEqAbs(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "at target");
+
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+
+        vault.rebalance(true);
+
+        assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev unchanged");
+        assertEq(WETH.balanceOf(address(MORPHO)), collBefore, "coll unchanged");
+    }
+
+    /// @notice The lever-leg swap enforces price-impact protection.
+    ///         maxPriceImpactBps = 100 (1%). Setting the mock router to
+    ///         200 bps (2%) slippage causes the router to reject the swap,
+    ///         which reverts the whole rebalance call — leaving the position
+    ///         untouched.
+    function test_Rebalance_RevertsOnLeverSlippageBreach() public {
+        _depositFor(user, 1 ether);
+        marketOracle.setPrice(2300e36);
+
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(200);
+
+        vm.expectRevert(bytes("Too little received"));
+        vault.rebalance(false);
+    }
+
+    /// @notice Same slippage guarantee applies on the delever path: a 2%
+    ///         AMM haircut breaks the 1% price-impact tolerance and the
+    ///         router rejects the swap, reverting `rebalance`.
+    function test_Rebalance_RevertsOnDeleverSlippageBreach() public {
+        _depositFor(user, 1 ether);
+        marketOracle.setPrice(1700e36);
+
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(200);
+
+        vm.expectRevert(bytes("Too little received"));
+        vault.rebalance(false);
+    }
+
+    /// @notice Liquidation recovery: the collateral price collapses to a
+    ///         level where the position is severely under-collateralized
+    ///         (HF ≈ 0.07, far below WAD — what a fresh liquidation residue
+    ///         could look like). `rebalance` must not revert; it sells
+    ///         yield on a best-effort basis and repays as much debt as the
+    ///         realized loan token covers.
+    function test_Rebalance_LiquidationRecoveryDoesNotRevert() public {
+        _depositFor(user, 1 ether);
+
+        uint256 debtBefore = _debt();
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        // Underwater: 1 ether * 100 * 0.86 = 86 maxBorrow vs 1186 debt → HF ≈ 0.07.
+        marketOracle.setPrice(100e36);
+        assertLt(_healthFactor(), 1e18, "underwater");
+
+        // Best-effort: should succeed even though target is unreachable.
+        vault.rebalance(false);
+
+        // Debt was repaid (positive progress) and yield consumed.
+        assertLt(_debt(), debtBefore, "debt reduced");
+        assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield consumed");
+    }
+
+    /// @notice Liquidation recovery — pathological case: the yield buffer
+    ///         is also exhausted (no FUSDEV in the vault) when the position
+    ///         goes underwater. `rebalance` is a no-op rather than a revert.
+    function test_Rebalance_LiquidationRecoveryEmptyYieldBuffer() public {
+        _depositFor(user, 1 ether);
+
+        // Burn all FUSDEV out of the vault to simulate a previously fully
+        // unwound yield buffer that was never refilled.
+        uint256 fus = FUSDEV.balanceOf(address(vault));
+        MockERC20(address(FUSDEV)).burn(address(vault), fus);
+
+        marketOracle.setPrice(100e36);
+        assertLt(_healthFactor(), 1e18, "underwater");
+
+        uint256 debtBefore = _debt();
+        vault.rebalance(false);
+        assertEq(_debt(), debtBefore, "no-op when yield exhausted");
+    }
+
+    /// @notice Constructor rejects HF configurations where the dead band is
+    ///         malformed (target < min, target > max) or the lower bound is
+    ///         below WAD (which would allow rebalancing into a liquidatable
+    ///         position).
+    function test_Rebalance_ConstructorValidatesHfBand() public {
+        FCMVault.InitParams memory p = _baseParams();
+        p.healthFactorMin = 0.9e18;
+        vm.expectRevert(bytes("HF min < WAD"));
+        new FCMVault(p);
+
+        p = _baseParams();
+        p.healthFactorMin = 1.6e18;
+        p.healthFactorTarget = 1.5e18;
+        vm.expectRevert(bytes("HF min > target"));
+        new FCMVault(p);
+
+        p = _baseParams();
+        p.healthFactorTarget = 2e18;
+        p.healthFactorMax = 1.6e18;
+        vm.expectRevert(bytes("HF target > max"));
+        new FCMVault(p);
+
+        p = _baseParams();
+        p.maxPriceImpactBps = 10_001;
+        vm.expectRevert(bytes("impact > 100%"));
+        new FCMVault(p);
     }
 
     // ---- helpers -------------------------------------------------------
@@ -611,17 +803,47 @@ contract FCMVaultTest is Test {
         vault.revokeRole(role, account);
     }
 
+    function _debt() internal view returns (uint256) {
+        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
+        Id marketId = MarketParamsLib.id(MarketParams(lt, ct, oracle, irm, lltv_));
+        Position memory pos = MORPHO.position(marketId, address(vault));
+        if (pos.borrowShares == 0) return 0;
+        Market memory mkt = MORPHO.market(marketId);
+        return
+            (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1)) / (uint256(mkt.totalBorrowShares) + 1e6);
+    }
+
+    function _baseParams() internal view returns (FCMVault.InitParams memory) {
+        return FCMVault.InitParams({
+            collateral: WETH,
+            loanToken: PYUSD0,
+            yieldToken: FUSDEV,
+            marketOracle: address(marketOracle),
+            marketIrm: MOCK_IRM,
+            marketLltv: LLTV,
+            feeYieldDebt: FEE,
+            feeAssetDebt: FEE_ASSET_DEBT,
+            healthFactorMin: HEALTH_FACTOR_MIN,
+            healthFactorMax: HEALTH_FACTOR_MAX,
+            healthFactorTarget: HEALTH_FACTOR_TARGET,
+            maxPriceImpactBps: MAX_PRICE_IMPACT_BPS,
+            yieldOracle: address(yieldOracle),
+            admin: admin,
+            name: "x",
+            symbol: "x"
+        });
+    }
+
     function _healthFactor() internal view returns (uint256) {
         (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
         Id marketId = MarketParamsLib.id(MarketParams(lt, ct, oracle, irm, lltv_));
         Position memory pos = MORPHO.position(marketId, address(vault));
         Market memory mkt = MORPHO.market(marketId);
         if (pos.borrowShares == 0) return type(uint256).max;
-        uint256 debt = (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1))
-            / (uint256(mkt.totalBorrowShares) + 1e6);
-        uint256 maxBorrow = Math.mulDiv(
-            uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36), 1e18
-        );
+        uint256 debt =
+            (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1)) / (uint256(mkt.totalBorrowShares) + 1e6);
+        uint256 maxBorrow =
+            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36), 1e18);
         return Math.mulDiv(maxBorrow, 1e18, debt);
     }
 }
