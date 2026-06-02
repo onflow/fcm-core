@@ -158,8 +158,10 @@ contract FCMVault is ERC4626, AccessControl {
             SwapLib.swapExactIn(address(loanToken), address(yieldToken), feeYieldDebt, toBorrow);
         }
 
+        // the depositor's contribution to NAV, denominated in outer vault assets
         uint256 contributed = totalAssets() - navBefore;
-        shares = contributed.mulDiv(_totalClaims(), navBefore + 1);
+        // mint shares in proportion to the depositor's contribution
+        shares = contributed.mulDiv(_totalClaims(), navBefore + 1); // +1 rounds in favour of the vaults
         _mint(receiver, shares);
 
         emit Deposit(msg.sender, receiver, assets, shares);
@@ -199,8 +201,7 @@ contract FCMVault is ERC4626, AccessControl {
     ///      target HF (`capFromTargetDebt` clamps to 0 in that case).
     function _targetBorrowAgainst(uint256 newAssets) internal view returns (uint256) {
         if (newAssets == 0) return 0;
-        uint256 capFromNewAsset =
-            market.maxBorrowFor(newAssets).mulDiv(1e18, healthFactorUpperTarget);
+        uint256 capFromNewAsset = market.maxBorrowFor(newAssets).mulDiv(1e18, healthFactorUpperTarget);
         uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(healthFactorUpperTarget);
         if (capFromNewAsset < capFromTargetDebt) {
             return capFromNewAsset;
