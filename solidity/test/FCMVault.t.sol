@@ -229,7 +229,9 @@ contract FCMVaultTest is Test {
 
         uint256 healthAfter = _healthFactor();
         assertGt(healthAfter, 5e18, "health factor still well above target after bob");
-        assertApproxEqRel(healthAfter, healthBefore, 1e15, "bob did not materially change health factor");
+        assertApproxEqRel(
+            healthAfter, healthBefore, 1e15, "bob did not materially change health factor"
+        );
     }
 
     /// @dev When the position health factor is below the target (price has dropped,
@@ -297,7 +299,9 @@ contract FCMVaultTest is Test {
         bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, vault.DEFAULT_ADMIN_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                stranger,
+                vault.DEFAULT_ADMIN_ROLE()
             )
         );
         vm.prank(stranger);
@@ -334,7 +338,9 @@ contract FCMVaultTest is Test {
         WETH.approve(address(vault), amount);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                bob,
+                vault.EARLY_ACCESS_ROLE()
             )
         );
         vault.deposit(amount, bob);
@@ -372,7 +378,9 @@ contract FCMVaultTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                bob,
+                vault.EARLY_ACCESS_ROLE()
             )
         );
         vault.transfer(bob, shares);
@@ -395,7 +403,9 @@ contract FCMVaultTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user, vault.EARLY_ACCESS_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user,
+                vault.EARLY_ACCESS_ROLE()
             )
         );
         vm.prank(user);
@@ -422,10 +432,11 @@ contract FCMVaultTest is Test {
         Position memory pos = MORPHO.position(marketId, address(vault));
         Market memory mkt = MORPHO.market(marketId);
         if (pos.borrowShares == 0) return type(uint256).max;
-        uint256 debt =
-            (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1)) / (uint256(mkt.totalBorrowShares) + 1e6);
-        uint256 maxBorrow =
-            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36), 1e18);
+        uint256 debt = (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1))
+            / (uint256(mkt.totalBorrowShares) + 1e6);
+        uint256 maxBorrow = Math.mulDiv(
+            uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36), 1e18
+        );
         return Math.mulDiv(maxBorrow, 1e18, debt);
     }
 }

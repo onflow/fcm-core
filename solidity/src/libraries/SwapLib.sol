@@ -8,7 +8,8 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 ///         Internal helpers — inlined into the caller, recipient is always
 ///         `address(this)`.
 library SwapLib {
-    ISwapRouter internal constant SWAP_ROUTER = ISwapRouter(0xeEDC6Ff75e1b10B903D9013c358e446a73d35341);
+    ISwapRouter internal constant SWAP_ROUTER =
+        ISwapRouter(0xeEDC6Ff75e1b10B903D9013c358e446a73d35341);
 
     function swapExactIn(address tokenIn, address tokenOut, uint24 fee, uint256 amountIn)
         internal
