@@ -4,6 +4,22 @@ Users holding an asset are seeking higher returns than the direct yield opportun
 We utilize flow's unique feature of scheduled transactions to automate this process, constantly adjusting the position to keep asset exposure at 100%, maximizing the potential debt to maximize yield while making sure the user doesn’t get liquidated.
 This will bring TVL and users to Flow, provide a revenue stream through fees, and demonstrate a practical application of Flow’s unique feature of scheduled transactions.
 
+## Installation
+```sh
+curl -L https://foundry.paradigm.xyz | bash
+source ~/.zshenv   # or restart your shell
+foundryup
+```
+
+## Build & Test
+```bash
+make ci             # fmt check + build + tests on the solidity project
+make solidity-test  # tests only
+```
+
+## Architecture
+See [Architecture](./docs/architecture.md)
+
 ## Dependencies (Flow EVM mainnet)
 
 ### Morpho Blue
@@ -45,9 +61,3 @@ Pools used by the vault (fetched via `Factory.getPool(tokenA, tokenB, fee)`):
 | PYUSD0 / Yield token | `100` (0.01%) |
 | WETH / PYUSD0 | `3000` (0.30%) |
 
-## Build & test
-
-```bash
-make ci             # fmt check + build + tests on the solidity project
-make solidity-test  # tests only
-```

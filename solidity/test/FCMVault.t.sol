@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 
 import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 import {SwapLib} from "../src/libraries/SwapLib.sol";
@@ -35,7 +37,11 @@ contract FCMVaultTest is Test {
     MockOracle internal marketOracle;
     MockOracle internal yieldOracle;
 
+    address internal admin = address(0x12345);
     address internal user = address(0xA11CE);
+    address internal bob = address(0xB0B);
+    address internal carol = address(0xCA401);
+    address internal stranger = address(0x5_7A);
 
     function setUp() public {
         bytes memory erc20Code = address(new MockERC20()).code;
@@ -61,12 +67,22 @@ contract FCMVaultTest is Test {
                 feeAssetDebt: FEE_ASSET_DEBT,
                 healthFactorUpperTarget: HEALTH_FACTOR_TARGET,
                 yieldOracle: address(yieldOracle),
+                admin: admin,
                 name: "Flow Credit Markets WETH",
                 symbol: "fcmWETH"
             })
         );
+
+        // Pre-allow the addresses existing deposit tests use as receivers.
+        // Gating-specific tests use fresh addresses (bob, carol, stranger).
+        _allow(user);
+        _allow(address(0xA));
+        _allow(address(0xB));
     }
 
+    /// @dev First depositor into an empty vault receives shares equal to
+    ///      `assets * 10**_decimalsOffset()`. ERC4626's virtual-shares inflation
+    ///      protection seeds the share/asset ratio at 1:1e6 for the first deposit.
     function test_Deposit_FirstDepositMintsShares() public {
         uint256 amount = 1 ether;
         MockERC20(address(WETH)).mint(user, amount);
@@ -82,6 +98,10 @@ contract FCMVaultTest is Test {
         assertEq(vault.totalSupply(), shares, "totalSupply");
     }
 
+    /// @dev A deposit must (1) pull the collateral from the depositor into Morpho,
+    ///      (2) borrow loan token against it at the configured target health factor,
+    ///      and (3) swap the borrowed loan token into yield token, leaving no loan
+    ///      token idle in the vault. Expected borrow = `assets * price * lltv / target HF`.
     function test_Deposit_PullsCollateralAndBorrowsDebt() public {
         uint256 amount = 1 ether;
         MockERC20(address(WETH)).mint(user, amount);
@@ -101,11 +121,18 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "vault pyusd0");
     }
 
+    /// @dev `mint` is intentionally not supported — the vault only accepts
+    ///      asset-denominated deposits, since minting an exact share count would
+    ///      require pre-computing the borrow+swap leg with unknown slippage.
     function test_Mint_Reverts() public {
         vm.expectRevert(bytes("not implemented"));
         vault.mint(1e18, user);
     }
 
+    /// @dev After a deposit, NAV in asset terms should equal the original deposit
+    ///      amount (modulo rounding): the collateral leg adds `assets` of value, and
+    ///      the borrow→swap leg nets to zero because yield and debt are valued at the
+    ///      same 1:1 mock rate. Verifies no value is leaked by the deposit flow itself.
     function test_Deposit_NavRoundsToOriginalAssets() public {
         uint256 amount = 1 ether;
         MockERC20(address(WETH)).mint(user, amount);
@@ -120,27 +147,34 @@ contract FCMVaultTest is Test {
         assertApproxEqAbs(vault.totalAssets(), amount, 1, "totalAssets");
     }
 
+    /// @dev Two sequential depositors contributing the same asset amount should
+    ///      receive approximately the same share count. Tolerates ~1e-3 relative
+    ///      drift from rounding in the second deposit's share computation against
+    ///      the now-nonzero totalAssets/totalSupply.
     function test_Deposit_TwoDepositorsProRata() public {
         uint256 amount = 1 ether;
         address alice = address(0xA);
-        address bob = address(0xB);
+        address bobLocal = address(0xB);
 
         MockERC20(address(WETH)).mint(alice, amount);
-        MockERC20(address(WETH)).mint(bob, amount);
+        MockERC20(address(WETH)).mint(bobLocal, amount);
 
         vm.startPrank(alice);
         WETH.approve(address(vault), amount);
         uint256 aliceShares = vault.deposit(amount, alice);
         vm.stopPrank();
 
-        vm.startPrank(bob);
+        vm.startPrank(bobLocal);
         WETH.approve(address(vault), amount);
-        uint256 bobShares = vault.deposit(amount, bob);
+        uint256 bobShares = vault.deposit(amount, bobLocal);
         vm.stopPrank();
 
         assertApproxEqRel(bobShares, aliceShares, 1e15, "share parity");
     }
 
+    /// @dev A deposit without a prior ERC20 approval must revert at the
+    ///      `transferFrom` step. Sanity check that the vault does not have any
+    ///      hidden allowance path that would let it pull tokens without consent.
     function test_Deposit_RevertsOnZeroApproval() public {
         uint256 amount = 1 ether;
         MockERC20(address(WETH)).mint(user, amount);
@@ -343,7 +377,7 @@ contract FCMVaultTest is Test {
     ///        - Health factor stays far above target, not pulled down to it.
     function test_Deposit_DepositDoesNotRebalanceProtocol() public {
         address alice = address(0xA);
-        address bob = address(0xB);
+        address bobLocal = address(0xB);
 
         uint256 aliceAmount = 100 ether;
         MockERC20(address(WETH)).mint(alice, aliceAmount);
@@ -363,10 +397,10 @@ contract FCMVaultTest is Test {
         uint256 healthBefore = _healthFactor();
 
         uint256 bobAmount = 0.001 ether;
-        MockERC20(address(WETH)).mint(bob, bobAmount);
-        vm.startPrank(bob);
+        MockERC20(address(WETH)).mint(bobLocal, bobAmount);
+        vm.startPrank(bobLocal);
         WETH.approve(address(vault), bobAmount);
-        uint256 bobShares = vault.deposit(bobAmount, bob);
+        uint256 bobShares = vault.deposit(bobAmount, bobLocal);
         vm.stopPrank();
 
         assertGt(bobShares, 0, "bob receives shares");
@@ -398,11 +432,11 @@ contract FCMVaultTest is Test {
 
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        address bob = address(0xB);
-        MockERC20(address(WETH)).mint(bob, amount);
-        vm.startPrank(bob);
+        address bobLocal = address(0xB);
+        MockERC20(address(WETH)).mint(bobLocal, amount);
+        vm.startPrank(bobLocal);
         WETH.approve(address(vault), amount);
-        uint256 bobShares = vault.deposit(amount, bob);
+        uint256 bobShares = vault.deposit(amount, bobLocal);
         vm.stopPrank();
 
         // Bob still gets shares — collateral was supplied.
@@ -414,7 +448,162 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan token sitting idle");
     }
 
+    // ---------------------------------------------------------------------
+    // Role administration
+    // ---------------------------------------------------------------------
+
+    /// @notice Admin gets DEFAULT_ADMIN_ROLE on construction; bob/carol/stranger
+    ///         start non-allowlisted.
+    function test_InitialRoles() public view {
+        assertTrue(vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), admin));
+        assertFalse(vault.hasRole(vault.EARLY_ACCESS_ROLE(), bob));
+        assertFalse(vault.hasRole(vault.EARLY_ACCESS_ROLE(), carol));
+    }
+
+    /// @notice Admin can grant EARLY_ACCESS_ROLE; hasRole reflects the grant.
+    function test_AdminCanGrantRole() public {
+        _allow(bob);
+        assertTrue(vault.hasRole(vault.EARLY_ACCESS_ROLE(), bob));
+    }
+
+    /// @notice Admin can revoke EARLY_ACCESS_ROLE; hasRole reflects the revoke.
+    function test_AdminCanRevokeRole() public {
+        _allow(bob);
+        _disallow(bob);
+        assertFalse(vault.hasRole(vault.EARLY_ACCESS_ROLE(), bob));
+    }
+
+    /// @notice Non-admin cannot grant EARLY_ACCESS_ROLE.
+    function test_NonAdminCannotGrantRole() public {
+        bytes32 role = vault.EARLY_ACCESS_ROLE();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                stranger,
+                vault.DEFAULT_ADMIN_ROLE()
+            )
+        );
+        vm.prank(stranger);
+        vault.grantRole(role, bob);
+    }
+
+    // ---------------------------------------------------------------------
+    // Deposit gating
+    // ---------------------------------------------------------------------
+
+    /// @notice maxDeposit returns 0 for a non-allowlisted receiver.
+    function test_MaxDepositZeroForNonAllowlisted() public view {
+        assertEq(vault.maxDeposit(carol), 0);
+    }
+
+    /// @notice maxDeposit returns the underlying max once the receiver is allowlisted.
+    function test_MaxDepositNonZeroForAllowlisted() public {
+        _allow(carol);
+        assertGt(vault.maxDeposit(carol), 0);
+    }
+
+    /// @notice maxMint is similarly gated.
+    function test_MaxMintZeroForNonAllowlisted() public view {
+        assertEq(vault.maxMint(carol), 0);
+    }
+
+    /// @notice Deposit reverts when the receiver of shares is not allowlisted.
+    ///         The override does not consult `maxDeposit`, but `_update` rejects
+    ///         the mint with an AccessControl error.
+    function test_DepositRevertsForNonAllowlistedReceiver() public {
+        uint256 amount = 1 ether;
+        MockERC20(address(WETH)).mint(user, amount);
+        vm.startPrank(user);
+        WETH.approve(address(vault), amount);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                bob,
+                vault.EARLY_ACCESS_ROLE()
+            )
+        );
+        vault.deposit(amount, bob);
+        vm.stopPrank();
+    }
+
+    // ---------------------------------------------------------------------
+    // Transfer gating
+    // ---------------------------------------------------------------------
+
+    /// @notice Transfers between allowlisted holders succeed.
+    function test_TransferBetweenAllowlistedHoldersSucceeds() public {
+        _allow(bob);
+
+        uint256 amount = 1 ether;
+        MockERC20(address(WETH)).mint(user, amount);
+        vm.startPrank(user);
+        WETH.approve(address(vault), amount);
+        uint256 shares = vault.deposit(amount, user);
+
+        vault.transfer(bob, shares);
+        vm.stopPrank();
+
+        assertEq(vault.balanceOf(user), 0);
+        assertEq(vault.balanceOf(bob), shares);
+    }
+
+    /// @notice Transfer reverts when the recipient is not allowlisted.
+    function test_TransferRevertsForNonAllowlistedRecipient() public {
+        uint256 amount = 1 ether;
+        MockERC20(address(WETH)).mint(user, amount);
+        vm.startPrank(user);
+        WETH.approve(address(vault), amount);
+        uint256 shares = vault.deposit(amount, user);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                bob,
+                vault.EARLY_ACCESS_ROLE()
+            )
+        );
+        vault.transfer(bob, shares);
+        vm.stopPrank();
+    }
+
+    /// @notice Transfer reverts when the sender has been de-allowlisted, even
+    ///         though they still hold shares.
+    function test_TransferRevertsForDeAllowlistedSender() public {
+        _allow(bob);
+
+        uint256 amount = 1 ether;
+        MockERC20(address(WETH)).mint(user, amount);
+        vm.startPrank(user);
+        WETH.approve(address(vault), amount);
+        uint256 shares = vault.deposit(amount, user);
+        vm.stopPrank();
+
+        _disallow(user);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user,
+                vault.EARLY_ACCESS_ROLE()
+            )
+        );
+        vm.prank(user);
+        vault.transfer(bob, shares);
+    }
+
     // ---- helpers -------------------------------------------------------
+
+    function _allow(address account) internal {
+        bytes32 role = vault.EARLY_ACCESS_ROLE();
+        vm.prank(admin);
+        vault.grantRole(role, account);
+    }
+
+    function _disallow(address account) internal {
+        bytes32 role = vault.EARLY_ACCESS_ROLE();
+        vm.prank(admin);
+        vault.revokeRole(role, account);
+    }
 
     function _healthFactor() internal view returns (uint256) {
         (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();

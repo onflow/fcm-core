@@ -29,14 +29,24 @@ library MarketLib {
 
     // ---- writes --------------------------------------------------------
 
+    /// @notice Settles accrued interest on the given market into Morpho's stored state.
+    /// @dev Must be called in the same tx before any read that depends on up-to-the-block
+    /// debt (e.g. `debt`, `healthFactor`, `maxBorrowAtHealthFactor`). Without this, reads
+    /// reflect the last-touched block's state.
     function accrueInterest(MarketParams memory market) internal {
         MORPHO.accrueInterest(market);
     }
 
+    /// @notice Supplies `assets` of collateral token from this contract to the market on behalf of itself.
+    /// @dev Assumes the caller has already approved the Morpho singleton for `assets` of the
+    /// collateral token.
     function supplyCollateral(MarketParams memory market, uint256 assets) internal {
         MORPHO.supplyCollateral(market, assets, address(this), "");
     }
 
+    /// @notice Borrows `assets` of loan token against this contract's collateral, with the loan tokens sent to itself.
+    /// @dev Passes `shares = 0` so Morpho interprets the call as an asset-denominated borrow.
+    /// Reverts inside Morpho if the resulting position would exceed LLTV.
     function borrow(MarketParams memory market, uint256 assets) internal {
         MORPHO.borrow(market, assets, 0, address(this), address(this));
     }
@@ -72,6 +82,7 @@ library MarketLib {
 
     // ---- reads ---------------------------------------------------------
 
+    /// @notice Returns this contract's collateral balance in the given market, in raw collateral-token units.
     function collateral(MarketParams memory market) internal view returns (uint256) {
         return uint256(MORPHO.position(market.id(), address(this)).collateral);
     }
@@ -118,6 +129,9 @@ library MarketLib {
         return IOracle(market.oracle).price();
     }
 
+    /// @notice Converts a collateral amount to its value in loan-token units at the current oracle price.
+    /// @dev Does not apply LLTV; this is a raw value conversion. Use `maxBorrowFor` for the
+    /// LLTV-discounted borrowable amount.
     function collateralToDebt(MarketParams memory market, uint256 collateralAmount)
         internal
         view
@@ -127,6 +141,8 @@ library MarketLib {
         return collateralAmount.mulDiv(oraclePrice(market), ORACLE_PRICE_SCALE);
     }
 
+    /// @notice Converts a loan-token amount to its equivalent collateral-token amount at the current oracle price.
+    /// @dev Inverse of `collateralToDebt`. Does not apply LLTV.
     function debtToCollateral(MarketParams memory market, uint256 debtAmount)
         internal
         view
@@ -136,6 +152,9 @@ library MarketLib {
         return debtAmount.mulDiv(ORACLE_PRICE_SCALE, oraclePrice(market));
     }
 
+    /// @notice Returns the maximum loan-token amount borrowable against `collateralAmount` at the market's LLTV.
+    /// @dev Equal to `collateralToDebt(collateralAmount) * lltv / WAD`. A position at exactly
+    /// this debt level has a health factor of WAD (the liquidation threshold).
     function maxBorrowFor(MarketParams memory market, uint256 collateralAmount)
         internal
         view
@@ -144,16 +163,33 @@ library MarketLib {
         return collateralToDebt(market, collateralAmount).mulDiv(market.lltv, WAD);
     }
 
+    /// @notice Returns the maximum loan-token amount borrowable against this contract's current collateral balance.
+    /// @dev Convenience wrapper over `maxBorrowFor(collateral(market))`.
     function maxBorrow(MarketParams memory market) internal view returns (uint256) {
         return maxBorrowFor(market, collateral(market));
     }
 
+    /// @notice Returns this contract's health factor in the given market, scaled by WAD (1e18).
+    /// @dev The health factor is the ratio of the maximum borrowable amount (at the current
+    /// collateral balance and LLTV) to the current debt. A value of WAD means the position is
+    /// exactly at the liquidation threshold; values below WAD are liquidatable, values above
+    /// are healthy. Returns `type(uint256).max` when there is no debt, since an unborrowed
+    /// position cannot be liquidated.
+    ///
+    /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required,
+    /// since `debt` reads stored state and does not include unaccrued interest.
     function healthFactor(MarketParams memory market) internal view returns (uint256) {
         uint256 debtAmount = debt(market);
         if (debtAmount == 0) return type(uint256).max;
         return maxBorrow(market).mulDiv(WAD, debtAmount);
     }
 
+    /// @notice Returns the additional loan-token amount this contract can borrow to reach `targetHealthFactor`.
+    /// @dev `targetHealthFactor` is WAD-scaled (WAD = liquidation threshold). Returns 0 if the
+    /// current debt already implies a health factor at or below the target (i.e. borrowing more
+    /// would push the position deeper toward liquidation than requested).
+    ///
+    /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required.
     function maxBorrowAtHealthFactor(MarketParams memory market, uint256 targetHealthFactor)
         internal
         view
