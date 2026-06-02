@@ -233,7 +233,11 @@ contract FCMVault is ERC4626, AccessControl {
     /// @param  receiver  Account to credit with the asset payout.
     /// @param  owner     Account whose shares are burned.
     /// @return assets    Asset actually delivered to `receiver`.
-    function redeem(uint256 shares, address receiver, address owner) public override returns (uint256 assets) {
+    function redeem(uint256 shares, address receiver, address owner)
+        public
+        override
+        returns (uint256 assets)
+    {
         if (shares == 0) return 0;
         // If someone besides the owner attempts to redeem, this will:
         // 1. Verify the redeemer's allowance is <= shares.
