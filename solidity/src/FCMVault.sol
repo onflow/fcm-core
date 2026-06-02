@@ -18,10 +18,18 @@ contract FCMVault is ERC4626, AccessControl, Ownable {
     ///         transfer shares.
     bytes32 public constant EARLY_ACCESS_ROLE = keccak256("EARLY_ACCESS_ROLE");
 
-    /// @notice TVL limit, denominated in the vault's Asset token. Enforced by
-    ///         the inherited `ERC4626.deposit`, which reverts
+    /// @notice TVL limit, denominated in the vault's Asset token.
+    ///         Enforced by `super.deposit`, which reverts with
     ///         `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`.
     ///         Default 0 -> no deposits until admin raises it.
+    ///         - This constraint prevents all deposits/mints which would cause the vault to exceed
+    ///           the configured TVL limit after the deposit/mint completes.
+    ///         - This constraint does not prevent any withdrawals/redeems under any circumstances.
+    ///         - This constraint does not prevent the vault from holding more assets than its configured TVL.
+    ///           This can happen if:
+    ///            - The owner sets maxTvl to a value lower than the current totalAssets
+    ///            - The value of vault holdings increases above the TVL limit due to market conditions.
+    ///              This can occur without any direct interactions with the vault.
     uint256 public maxTvl;
 
     event MaxTvlSet(uint256 previousMaxTvl, uint256 newMaxTvl);
@@ -49,6 +57,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable {
     function maxDeposit(address receiver) public view override returns (uint256) {
         if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
         uint256 cachedTotalAssets = totalAssets();
+        // TODO: use Math.min(innerVault.maxDeposit(), _)
         return maxTvl > cachedTotalAssets ? maxTvl - cachedTotalAssets : 0;
     }
 
