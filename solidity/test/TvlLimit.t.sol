@@ -21,6 +21,7 @@ contract TvlLimitTest is Test {
     FCMVault public vault;
     MockERC20 public asset;
 
+    address internal admin = address(0x12345);
     address internal owner;
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
@@ -34,18 +35,37 @@ contract TvlLimitTest is Test {
     function setUp() public {
         owner = address(this);
         asset = new MockERC20();
-        vault = new FCMVault("Flow Credit Markets Vault", "fcmV", IERC20(address(asset)));
+        vault = new FCMVault("Flow Credit Markets Vault", "fcmV", IERC20(address(asset)), admin);
 
-        asset.mint(owner, USER_BAL);
-        asset.approve(address(vault), type(uint256).max);
+        _fund(owner, USER_BAL);
+        _allow(owner);
 
-        asset.mint(alice, USER_BAL);
-        vm.prank(alice);
-        asset.approve(address(vault), type(uint256).max);
+        _fund(alice, USER_BAL);
+        _allow(alice);
 
-        asset.mint(bob, USER_BAL);
-        vm.prank(bob);
-        asset.approve(address(vault), type(uint256).max);
+        _fund(bob, USER_BAL);
+        _allow(bob);
+    }
+
+    /// @dev Mint asset to `account` and approve the vault to pull it.
+    function _fund(address account, uint256 amount) internal {
+        asset.mint(account, amount);
+        vm.prank(account);
+        asset.approve(address(vault), amount);
+    }
+
+    /// @dev Grant EARLY_ACCESS_ROLE to `account`.
+    function _allow(address account) internal {
+        bytes32 role = vault.EARLY_ACCESS_ROLE();
+        vm.prank(admin);
+        vault.grantRole(role, account);
+    }
+
+    /// @dev Revoke EARLY_ACCESS_ROLE from `account`.
+    function _disallow(address account) internal {
+        bytes32 role = vault.EARLY_ACCESS_ROLE();
+        vm.prank(admin);
+        vault.revokeRole(role, account);
     }
 
     function _expectMaxDepositExceeded(address receiver, uint256 assets) internal {
@@ -137,7 +157,7 @@ contract TvlLimitTest is Test {
 
     function test_RenounceOwnership_LocksLimitForever() public {
         vault.setMaxTvl(1_000);
-        vault.transferOwnership(address(0));
+        vault.renounceOwnership();
         assertEq(vault.owner(), address(0));
 
         // The limit is now frozen — no caller can change it.

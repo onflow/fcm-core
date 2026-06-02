@@ -31,6 +31,7 @@ contract FCMVaultTest is Test {
     function setUp() public {
         asset = new MockERC20();
         vault = new FCMVault("Flow Credit Markets Vault", "fcmV", IERC20(address(asset)), admin);
+        vault.setMaxTvl(1e21);
     }
 
     /// @dev Mint asset to `account` and approve the vault to pull it.
