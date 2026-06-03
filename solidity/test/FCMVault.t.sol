@@ -688,20 +688,22 @@ contract FCMVaultTest is Test {
         assertEq(WETH.balanceOf(address(MORPHO)), collBefore, "coll unchanged");
     }
 
-    /// @notice Liquidation recovery: the collateral price collapses to a
-    ///         level where the position is severely under-collateralized
-    ///         (HF ≈ 0.07, far below WAD — what a fresh liquidation residue
-    ///         could look like). `rebalance` must not revert; it sells
-    ///         yield on a best-effort basis and repays as much debt as the
-    ///         realized loan token covers.
+    /// @notice Liquidation recovery: a liquidator seizes most of the vault's
+    ///         collateral, leaving a fresh liquidation residue — genuinely
+    ///         reduced collateral against still-outstanding debt, with the
+    ///         position severely under-collateralized (HF far below WAD).
+    ///         `rebalance` must not revert; it sells yield on a best-effort
+    ///         basis and repays as much debt as the realized loan token
+    ///         covers.
     function test_Rebalance_LiquidationRecoveryDoesNotRevert() public {
         _depositFor(user, 1 ether);
 
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        // Underwater: 1 ether * 100 * 0.86 = 86 maxBorrow vs 1186 debt → HF ≈ 0.07.
-        marketOracle.setPrice(100e36);
+        // Seize 0.7 of the 1 ether collateral: maxBorrow drops to
+        // 0.3 * 2000 * 0.86 = 516 vs ~1186 debt → HF ≈ 0.43.
+        _seizeCollateral(0.7 ether);
         assertLt(_healthFactor(), 1e18, "underwater");
 
         // Best-effort: should succeed even though target is unreachable.
@@ -723,7 +725,7 @@ contract FCMVaultTest is Test {
         uint256 fus = FUSDEV.balanceOf(address(vault));
         MockERC20(address(FUSDEV)).burn(address(vault), fus);
 
-        marketOracle.setPrice(100e36);
+        _seizeCollateral(0.7 ether);
         assertLt(_healthFactor(), 1e18, "underwater");
 
         uint256 debtBefore = _debt();
@@ -776,6 +778,13 @@ contract FCMVaultTest is Test {
         Market memory mkt = MORPHO.market(marketId);
         return
             (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1)) / (uint256(mkt.totalBorrowShares) + 1e6);
+    }
+
+    /// @dev Simulate a liquidator seizing `amount` of the vault's collateral
+    ///      via the MockMorpho test hook (debt untouched).
+    function _seizeCollateral(uint256 amount) internal {
+        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
+        MockMorpho(address(MORPHO)).seizeCollateral(MarketParams(lt, ct, oracle, irm, lltv_), address(vault), amount);
     }
 
     function _baseParams() internal view returns (FCMVault.InitParams memory) {

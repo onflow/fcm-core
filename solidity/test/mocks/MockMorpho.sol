@@ -112,6 +112,23 @@ contract MockMorpho {
         IERC20(mp.collateralToken).transfer(receiver, assets);
     }
 
+    /// @notice Test-only hook that simulates a liquidator seizing `seized`
+    ///         units of collateral from `borrower`, leaving the rest of the
+    ///         position (debt, borrow shares) untouched.
+    /// @dev    A real Morpho `liquidate` also repays debt and applies a
+    ///         liquidation incentive; this mock deliberately omits that
+    ///         accounting and only reduces the collateral leg, which is all
+    ///         the tests need to drive the vault into an underwater state
+    ///         with genuinely *reduced* collateral (as opposed to a position
+    ///         that is merely devalued by an oracle move). The seized
+    ///         collateral is transferred to the caller, mirroring the tokens
+    ///         leaving the borrower's claim.
+    function seizeCollateral(MarketParams memory mp, address borrower, uint256 seized) external {
+        Id id = mp.id();
+        position[id][borrower].collateral -= uint128(seized);
+        IERC20(mp.collateralToken).transfer(msg.sender, seized);
+    }
+
     function _mulDivUp(uint256 x, uint256 y, uint256 d) internal pure returns (uint256) {
         return (x * y + d - 1) / d;
     }
