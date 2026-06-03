@@ -209,7 +209,7 @@ contract FCMVault is ERC4626, AccessControl {
     function _targetBorrowAgainst(uint256 newAssets) internal view returns (uint256) {
         if (newAssets == 0) return 0;
         uint256 capFromNewAsset =
-            market.maxBorrowFor(newAssets).mulDiv(1e18, healthFactorUpperTarget);
+            market.maxBorrowFor(newAssets).mulDiv(MarketLib.WAD, healthFactorUpperTarget);
         uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(healthFactorUpperTarget);
         if (capFromNewAsset < capFromTargetDebt) {
             return capFromNewAsset;
