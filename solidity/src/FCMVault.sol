@@ -47,6 +47,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable {
     }
 
     /// @notice Set the TVL limit. Default at deploy time is 0 (no deposits).
+    /// @param newMaxTvl the new TVL limit; applies only to new deposits.
     function setMaxTvl(uint256 newMaxTvl) external onlyOwner {
         emit MaxTvlSet(maxTvl, newMaxTvl);
         maxTvl = newMaxTvl;
@@ -54,10 +55,13 @@ contract FCMVault is ERC4626, AccessControl, Ownable {
 
     /// @inheritdoc IERC4626
     /// @notice Remaining headroom under the TVL limit, clamped to 0 when full.
+    /// @dev Even if the inner vault has hit its own deposit limit, we may still
+    ///      be able to obtain shares of it on the AMM to satisfy the deposit.
+    ///      However, if we implement 'direct deposit' to the inner vault,
+    ///      its own maxDeposit() will bind.
     function maxDeposit(address receiver) public view override returns (uint256) {
         if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
         uint256 cachedTotalAssets = totalAssets();
-        // TODO: use Math.min(innerVault.maxDeposit(), _)
         return maxTvl > cachedTotalAssets ? maxTvl - cachedTotalAssets : 0;
     }
 
