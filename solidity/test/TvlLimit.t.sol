@@ -137,6 +137,9 @@ contract TvlLimitTest is Test {
 
     function test_TransferOwnership_TransfersControl() public {
         vault.transferOwnership(alice);
+        vm.prank(alice);
+        vault.acceptOwnership();
+
         assertEq(vault.owner(), alice);
 
         // Previous owner can no longer adjust the limit.
@@ -150,9 +153,11 @@ contract TvlLimitTest is Test {
     }
 
     function test_TransferOwnership_EmitsEvent() public {
+        vault.transferOwnership(alice);
+        vm.prank(alice);
         vm.expectEmit(true, true, false, false, address(vault));
         emit OwnershipTransferred(owner, alice);
-        vault.transferOwnership(alice);
+        vault.acceptOwnership();
     }
 
     function test_RenounceOwnership_LocksLimitForever() public {

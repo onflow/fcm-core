@@ -7,13 +7,14 @@ import {ERC4626, IERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 /// @title FCMVault
 /// @notice ERC-4626 vault for Flow Credit Markets, with role-gated participation.
 ///         Holders of `EARLY_ACCESS_ROLE` may deposit, hold, and transfer shares.
 ///         Burns (withdrawals/redeems) are always permitted so a removed holder
 ///         can still exit.
-contract FCMVault is ERC4626, AccessControl, Ownable {
+contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @notice Members of this role may deposit assets, hold shares, and
     ///         transfer shares.
     bytes32 public constant EARLY_ACCESS_ROLE = keccak256("EARLY_ACCESS_ROLE");
