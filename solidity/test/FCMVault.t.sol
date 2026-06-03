@@ -32,7 +32,6 @@ contract FCMVaultTest is Test {
     uint256 internal constant HEALTH_FACTOR_MIN = 1.25e18;
     uint256 internal constant HEALTH_FACTOR_TARGET = 1.45e18;
     uint256 internal constant HEALTH_FACTOR_MAX = 1.65e18;
-    uint256 internal constant MAX_PRICE_IMPACT_BPS = 100; // 1%
     uint24 internal constant FEE = 100;
     uint24 internal constant FEE_ASSET_DEBT = 3000;
 
@@ -71,7 +70,6 @@ contract FCMVaultTest is Test {
                 healthFactorMin: HEALTH_FACTOR_MIN,
                 healthFactorMax: HEALTH_FACTOR_MAX,
                 healthFactorTarget: HEALTH_FACTOR_TARGET,
-                maxPriceImpactBps: MAX_PRICE_IMPACT_BPS,
                 yieldOracle: address(yieldOracle),
                 admin: admin,
                 name: "Flow Credit Markets WETH",
@@ -690,34 +688,6 @@ contract FCMVaultTest is Test {
         assertEq(WETH.balanceOf(address(MORPHO)), collBefore, "coll unchanged");
     }
 
-    /// @notice The lever-leg swap enforces price-impact protection.
-    ///         maxPriceImpactBps = 100 (1%). Setting the mock router to
-    ///         200 bps (2%) slippage causes the router to reject the swap,
-    ///         which reverts the whole rebalance call — leaving the position
-    ///         untouched.
-    function test_Rebalance_RevertsOnLeverSlippageBreach() public {
-        _depositFor(user, 1 ether);
-        marketOracle.setPrice(2300e36);
-
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(200);
-
-        vm.expectRevert(bytes("Too little received"));
-        vault.rebalance(false);
-    }
-
-    /// @notice Same slippage guarantee applies on the delever path: a 2%
-    ///         AMM haircut breaks the 1% price-impact tolerance and the
-    ///         router rejects the swap, reverting `rebalance`.
-    function test_Rebalance_RevertsOnDeleverSlippageBreach() public {
-        _depositFor(user, 1 ether);
-        marketOracle.setPrice(1700e36);
-
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(200);
-
-        vm.expectRevert(bytes("Too little received"));
-        vault.rebalance(false);
-    }
-
     /// @notice Liquidation recovery: the collateral price collapses to a
     ///         level where the position is severely under-collateralized
     ///         (HF ≈ 0.07, far below WAD — what a fresh liquidation residue
@@ -782,11 +752,6 @@ contract FCMVaultTest is Test {
         p.healthFactorMax = 1.6e18;
         vm.expectRevert(bytes("HF target > max"));
         new FCMVault(p);
-
-        p = _baseParams();
-        p.maxPriceImpactBps = 10_001;
-        vm.expectRevert(bytes("impact > 100%"));
-        new FCMVault(p);
     }
 
     // ---- helpers -------------------------------------------------------
@@ -826,7 +791,6 @@ contract FCMVaultTest is Test {
             healthFactorMin: HEALTH_FACTOR_MIN,
             healthFactorMax: HEALTH_FACTOR_MAX,
             healthFactorTarget: HEALTH_FACTOR_TARGET,
-            maxPriceImpactBps: MAX_PRICE_IMPACT_BPS,
             yieldOracle: address(yieldOracle),
             admin: admin,
             name: "x",

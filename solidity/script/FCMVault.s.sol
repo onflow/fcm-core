@@ -24,7 +24,6 @@ contract FCMVaultScript is Script {
                 healthFactorMin: vm.envUint("HEALTH_FACTOR_MIN"),
                 healthFactorMax: vm.envUint("HEALTH_FACTOR_MAX"),
                 healthFactorTarget: vm.envUint("HEALTH_FACTOR_TARGET"),
-                maxPriceImpactBps: vm.envUint("MAX_PRICE_IMPACT_BPS"),
                 yieldOracle: vm.envAddress("YIELD_ORACLE"),
                 admin: vm.envAddress("ADMIN"),
                 name: vm.envString("VAULT_NAME"),

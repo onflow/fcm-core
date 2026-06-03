@@ -43,8 +43,8 @@ library SwapLib {
 
     /// @notice Same as `swapExactIn` but reverts in the router if the
     ///         realized output is below `amountOutMinimum`.
-    /// @dev    Used by rebalance legs that need an explicit slippage cap
-    ///         derived from an oracle price and `maxPriceImpactBps`.
+    /// @dev    Used by legs that need an explicit slippage cap derived from
+    ///         an oracle price and a price-impact tolerance.
     /// @param  tokenIn          Token being sold.
     /// @param  tokenOut         Token being bought.
     /// @param  fee              Pool fee tier.

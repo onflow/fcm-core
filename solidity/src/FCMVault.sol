@@ -48,7 +48,7 @@ contract FCMVault is ERC4626, AccessControl {
     ///         redeem surplus from loan token back to the underlying asset.
     uint24 public immutable feeAssetDebt;
     /// @notice Health factor below which `rebalance` will delever (sell yield
-    ///         to repay debt). WAD-scaled. Must be ≥ WAD.
+    ///         to repay debt). WAD-scaled.
     uint256 public immutable healthFactorMin;
     /// @notice Health factor above which `rebalance` will lever up (borrow
     ///         more debt and swap to yield). WAD-scaled.
@@ -56,18 +56,13 @@ contract FCMVault is ERC4626, AccessControl {
     /// @notice Health factor that `rebalance` drives the position toward
     ///         whenever it acts. Also used by `deposit` to cap the
     ///         per-deposit borrow. WAD-scaled; must satisfy
-    ///         `healthFactorMin <= healthFactorTarget <= healthFactorMax`.
+    ///         `healthFactorMin < healthFactorTarget < healthFactorMax`.
     uint256 public immutable healthFactorTarget;
-    /// @notice Maximum price impact tolerated on rebalance swaps, in basis
-    ///         points (100 = 1%). Applied against the oracle-implied output
-    ///         to compute the swap's `amountOutMinimum`. Must be ≤ 10_000.
-    uint256 public immutable maxPriceImpactBps;
     address public immutable yieldOracle;
 
     MarketParams public market;
 
     uint256 internal constant WAD = 1e18;
-    uint256 internal constant BPS_DENOM = 10_000;
     uint256 internal constant ORACLE_PRICE_SCALE = 1e36;
 
     struct InitParams {
@@ -82,7 +77,6 @@ contract FCMVault is ERC4626, AccessControl {
         uint256 healthFactorMin;
         uint256 healthFactorMax;
         uint256 healthFactorTarget;
-        uint256 maxPriceImpactBps;
         address yieldOracle;
         address admin;
         string name;
@@ -93,7 +87,6 @@ contract FCMVault is ERC4626, AccessControl {
         require(p.healthFactorMin >= WAD, "HF min < WAD");
         require(p.healthFactorMin <= p.healthFactorTarget, "HF min > target");
         require(p.healthFactorTarget <= p.healthFactorMax, "HF target > max");
-        require(p.maxPriceImpactBps <= BPS_DENOM, "impact > 100%");
 
         loanToken = p.loanToken;
         yieldToken = p.yieldToken;
@@ -102,7 +95,6 @@ contract FCMVault is ERC4626, AccessControl {
         healthFactorMin = p.healthFactorMin;
         healthFactorMax = p.healthFactorMax;
         healthFactorTarget = p.healthFactorTarget;
-        maxPriceImpactBps = p.maxPriceImpactBps;
         yieldOracle = p.yieldOracle;
 
         market = MarketParams({
@@ -345,12 +337,6 @@ contract FCMVault is ERC4626, AccessControl {
     ///         health factor is not already equal to target, ignoring the
     ///         min/max dead band. Useful for operational manual triggers.
     ///
-    ///         Price-impact protection: every swap sets an explicit
-    ///         `amountOutMinimum` derived from the relevant oracle price and
-    ///         `maxPriceImpactBps`. A swap that would exceed the configured
-    ///         price-impact tolerance reverts inside the router, aborting
-    ///         the whole rebalance.
-    ///
     ///         Liquidation recovery: if the Morpho position has been
     ///         partially or fully liquidated (collateral reduced, debt
     ///         possibly underwater), the delever path simply caps the yield
@@ -394,11 +380,6 @@ contract FCMVault is ERC4626, AccessControl {
     ///      level that, against the current collateral, produces an HF of
     ///      exactly target. Since `hf > target`, `currentDebt < targetDebt`.
     ///      The borrow leg adds `targetDebt - currentDebt`.
-    ///
-    ///      Slippage cap: the swap's `amountOutMinimum` is computed from the
-    ///      yield oracle and `maxPriceImpactBps`, so the router will revert
-    ///      if the AMM price has deviated past tolerance. That revert
-    ///      aborts the whole rebalance, leaving the position untouched.
     /// @param maxBorrow   Current maximum-borrowable amount at LLTV.
     /// @param currentDebt Current outstanding debt (caller passes the same
     ///                    value used to compute `hfBefore` to avoid a
@@ -410,10 +391,7 @@ contract FCMVault is ERC4626, AccessControl {
         added = targetDebt - currentDebt;
 
         market.borrow(added);
-
-        uint256 expectedYieldOut = added.mulDiv(ORACLE_PRICE_SCALE, IOracle(yieldOracle).price());
-        uint256 minOut = expectedYieldOut.mulDiv(BPS_DENOM - maxPriceImpactBps, BPS_DENOM);
-        SwapLib.swapExactInMin(address(loanToken), address(yieldToken), feeYieldDebt, added, minOut);
+        SwapLib.swapExactIn(address(loanToken), address(yieldToken), feeYieldDebt, added);
     }
 
     /// @dev Delever branch of `rebalance`: position is over-levered
@@ -436,11 +414,6 @@ contract FCMVault is ERC4626, AccessControl {
     ///      The rebalance does not revert just because target is no longer
     ///      reachable — it does as much repair as the remaining yield
     ///      buffer allows.
-    ///
-    ///      Slippage cap: the swap's `amountOutMinimum` is always the
-    ///      oracle-implied output of the actually-sent yield amount,
-    ///      discounted by `maxPriceImpactBps`. A swap worse than that
-    ///      tolerance reverts in the router.
     /// @param maxBorrow   Current maximum-borrowable amount at LLTV (may be 0
     ///                    after a liquidation that wiped collateral).
     /// @param currentDebt Current outstanding debt.
@@ -461,14 +434,8 @@ contract FCMVault is ERC4626, AccessControl {
         if (yieldToSell > yieldBalance) yieldToSell = yieldBalance;
         if (yieldToSell == 0) return 0;
 
-        // minOut is oracle-implied loan-token value of `yieldToSell`,
-        // discounted by `maxPriceImpactBps`. Whether or not we capped to
-        // balance, this is the per-swap slippage check.
-        uint256 expectedLoanOut = yieldToSell.mulDiv(yieldPrice, ORACLE_PRICE_SCALE);
-        uint256 minOut = expectedLoanOut.mulDiv(BPS_DENOM - maxPriceImpactBps, BPS_DENOM);
-
         uint256 loanBefore = loanToken.balanceOf(address(this));
-        SwapLib.swapExactInMin(address(yieldToken), address(loanToken), feeYieldDebt, yieldToSell, minOut);
+        SwapLib.swapExactIn(address(yieldToken), address(loanToken), feeYieldDebt, yieldToSell);
         uint256 loanGot = loanToken.balanceOf(address(this)) - loanBefore;
 
         // Cap repayment at outstanding debt — covers the liquidation-recovery
