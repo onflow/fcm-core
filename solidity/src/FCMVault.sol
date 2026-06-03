@@ -83,6 +83,12 @@ contract FCMVault is ERC4626, AccessControl {
         string symbol;
     }
 
+    /// @notice Emitted whenever the vault is re-balanced
+    /// @param  caller             Address that invoked `rebalance`.
+    /// @param  healthFactorBefore Health factor at the start of the call (WAD-scaled).
+    /// @param  healthFactorAfter  Health factor after the rebalance (WAD-scaled).
+    event Rebalanced(address indexed caller, uint256 healthFactorBefore, uint256 healthFactorAfter);
+
     constructor(InitParams memory p) ERC20(p.name, p.symbol) ERC4626(p.collateral) {
         require(p.healthFactorMin >= WAD, "HF min < WAD");
         require(p.healthFactorMin <= p.healthFactorTarget, "HF min > target");
@@ -311,21 +317,11 @@ contract FCMVault is ERC4626, AccessControl {
         }
     }
 
-    /// @notice Emitted whenever `rebalance` makes a state-changing move on
-    ///         the underlying Morpho position.
-    /// @param  caller            Address that invoked `rebalance`.
-    /// @param  healthFactorBefore Health factor at the start of the call (WAD-scaled).
-    /// @param  healthFactorAfter  Health factor after the rebalance (WAD-scaled).
-    /// @param  debtChange         Change in outstanding debt — positive on lever-up,
-    ///                            negative on delever, zero if the call was a no-op.
-    event Rebalanced(address indexed caller, uint256 healthFactorBefore, uint256 healthFactorAfter, int256 debtChange);
-
     /// @notice Drive the vault's leveraged Morpho position back toward
     ///         `healthFactorTarget`.
     /// @dev    Normal (non-forced) behavior:
     ///         - If `hf ∈ [healthFactorMin, healthFactorMax]`, the call is a
-    ///           no-op — small swings stay within the dead band and do not
-    ///           burn swap fees.
+    ///           no-op
     ///         - If `hf > healthFactorMax`, the position is under-levered:
     ///           borrow exactly `addDebt = (maxBorrow / target) - debt` of
     ///           the loan token and swap it to the yield token.
@@ -333,19 +329,7 @@ contract FCMVault is ERC4626, AccessControl {
     ///           sell exactly enough yield token to repay
     ///           `repayAmount = debt - (maxBorrow / target)` of debt.
     ///
-    ///         `force = true` rebalances toward target whenever the current
-    ///         health factor is not already equal to target, ignoring the
-    ///         min/max dead band. Useful for operational manual triggers.
-    ///
-    ///         Liquidation recovery: if the Morpho position has been
-    ///         partially or fully liquidated (collateral reduced, debt
-    ///         possibly underwater), the delever path simply caps the yield
-    ///         it sells to the available balance and repays whatever debt
-    ///         the realized loan-token output covers. It does not require
-    ///         the position to reach target — it does as much as the
-    ///         remaining yield buffer allows.
-    /// @param  force If true, rebalance whenever `hf != healthFactorTarget`,
-    ///               bypassing the [min, max] dead band.
+    /// @param  force If true, rebalance regardless of current health factor
     function rebalance(bool force) external {
         market.accrueInterest();
         uint256 currentDebt = market.debt();
@@ -402,18 +386,12 @@ contract FCMVault is ERC4626, AccessControl {
     ///        targetDebt    = maxBorrow * WAD / healthFactorTarget
     ///        repayAmount   = currentDebt - targetDebt
     ///        yieldToSell   = repayAmount * 1e36 / yieldOraclePrice
+    ///
     ///      `yieldToSell` is the oracle-implied yield amount whose loan-token
     ///      value equals `repayAmount`. AMM slippage shows up as a small
     ///      under-shoot of target (post-rebalance HF is slightly below
     ///      target if the swap realized less than oracle).
     ///
-    ///      Liquidation recovery: if `yieldToSell` exceeds the vault's
-    ///      yield balance (e.g., Morpho liquidated some collateral and the
-    ///      position is severely under-collateralized), the call sells the
-    ///      full yield balance and repays whatever loan token that yields.
-    ///      The rebalance does not revert just because target is no longer
-    ///      reachable — it does as much repair as the remaining yield
-    ///      buffer allows.
     /// @param maxBorrow   Current maximum-borrowable amount at LLTV (may be 0
     ///                    after a liquidation that wiped collateral).
     /// @param currentDebt Current outstanding debt.
@@ -425,9 +403,7 @@ contract FCMVault is ERC4626, AccessControl {
 
         uint256 yieldPrice = IOracle(yieldOracle).price();
         // Oracle-implied yield amount whose loan-token value equals
-        // `repayAmount`. We do not scale up for slippage here — realized
-        // output below oracle just lands the position slightly below target,
-        // while overshooting target would leave idle loan token in the vault.
+        // `repayAmount` (not accounting for slippage)
         uint256 yieldToSell = repayAmount.mulDiv(ORACLE_PRICE_SCALE, yieldPrice);
 
         uint256 yieldBalance = yieldToken.balanceOf(address(this));
