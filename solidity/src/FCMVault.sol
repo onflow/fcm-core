@@ -333,7 +333,8 @@ contract FCMVault is ERC4626, AccessControl {
     function rebalance(bool force) external {
         market.accrueInterest();
         uint256 currentDebt = market.debt();
-        uint256 maxBorrow = market.maxBorrow();
+        uint256 maxBorrow = market.maxBorrow(); // independent of current debt balance
+        // we compute inline here rather than use MarketLib.healthFactor to save a SLOAD
         uint256 hfBefore = currentDebt == 0 ? type(uint256).max : maxBorrow.mulDiv(WAD, currentDebt);
 
         if (!force) {
@@ -359,7 +360,7 @@ contract FCMVault is ERC4626, AccessControl {
     ///      level that, against the current collateral, produces an HF of
     ///      exactly target. Since `hf > target`, `currentDebt < targetDebt`.
     ///      The borrow leg adds `targetDebt - currentDebt`.
-    /// @param maxBorrow   Current maximum-borrowable amount at LLTV.
+    /// @param maxBorrow   Current maximum-borrowable amount at LLTV (independent of current debt)
     /// @param currentDebt Current outstanding debt (caller passes the same
     ///                    value used to compute `hfBefore` to avoid a
     ///                    second `MORPHO.position` SLOAD).
@@ -367,10 +368,10 @@ contract FCMVault is ERC4626, AccessControl {
     function _rebalanceLever(uint256 maxBorrow, uint256 currentDebt) internal returns (uint256 added) {
         uint256 targetDebt = maxBorrow.mulDiv(WAD, healthFactorTarget);
         if (targetDebt <= currentDebt) return 0;
-        added = targetDebt - currentDebt;
+        additionalDebt = targetDebt - currentDebt;
 
-        market.borrow(added);
-        SwapLib.swapExactIn(address(loanToken), address(yieldToken), feeYieldDebt, added);
+        market.borrow(additionalDebt);
+        SwapLib.swapExactIn(address(loanToken), address(yieldToken), feeYieldDebt, additionalDebt);
     }
 
     /// @dev Delever branch of `rebalance`: position is over-levered
@@ -392,6 +393,7 @@ contract FCMVault is ERC4626, AccessControl {
     /// @param currentDebt Current outstanding debt.
     /// @return repaid Amount of loan token repaid to Morpho in this call.
     function _rebalanceDelever(uint256 maxBorrow, uint256 currentDebt) internal returns (uint256 repaid) {
+        // conceptually, target debt is maxBorrow / hfTarget
         uint256 targetDebt = maxBorrow.mulDiv(WAD, healthFactorTarget);
         if (targetDebt >= currentDebt) return 0;
         uint256 repayAmount = currentDebt - targetDebt;
@@ -409,10 +411,9 @@ contract FCMVault is ERC4626, AccessControl {
         SwapLib.swapExactIn(address(yieldToken), address(loanToken), feeYieldDebt, yieldToSell);
         uint256 loanGot = loanToken.balanceOf(address(this)) - loanBefore;
 
-        // Cap repayment at outstanding debt — covers the liquidation-recovery
-        // case where realized output overshoots the residual debt.
-        repaid = loanGot > currentDebt ? currentDebt : loanGot;
-        if (repaid > 0) market.repay(repaid);
+        // Cap repayment at outstanding debt
+        repayAmount = loanGot > currentDebt ? currentDebt : loanGot;
+        if (repayAmount > 0) market.repay(repayAmount);
     }
 
     /// @notice Not implemented. Use `deposit` instead.
