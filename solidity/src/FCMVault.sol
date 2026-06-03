@@ -342,18 +342,13 @@ contract FCMVault is ERC4626, AccessControl {
             }
         }
 
-        int256 debtChange = 0;
         if (hfBefore > healthFactorTarget) {
-            debtChange = int256(_rebalanceLever(maxBorrow, currentDebt));
+            _rebalanceLever(maxBorrow, currentDebt);
         } else if (hfBefore < healthFactorTarget) {
-            debtChange = -int256(_rebalanceDelever(maxBorrow, currentDebt));
+            _rebalanceDelever(maxBorrow, currentDebt);
         }
 
-        uint256 debtAfter = market.debt();
-        uint256 maxBorrowAfter = market.maxBorrow();
-        uint256 hfAfter = debtAfter == 0 ? type(uint256).max : maxBorrowAfter.mulDiv(WAD, debtAfter);
-
-        emit Rebalanced(msg.sender, hfBefore, hfAfter, debtChange);
+        emit Rebalanced(msg.sender, hfBefore, market.healthFactor());
     }
 
     /// @dev Lever-up branch of `rebalance`: position is under-levered

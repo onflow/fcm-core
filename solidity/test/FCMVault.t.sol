@@ -613,7 +613,7 @@ contract FCMVaultTest is Test {
     function test_Rebalance_LeversWhenAboveMax() public {
         _depositFor(user, 1 ether);
 
-        // Push HF above 1.65: 1 ether * 2300 * 0.86 / 1186.2 = 1.667.
+        // Push HF above 1.65 by increasing collateral value
         marketOracle.setPrice(2300e36);
         assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "above max");
 
@@ -635,7 +635,7 @@ contract FCMVaultTest is Test {
     function test_Rebalance_DeleversWhenBelowMin() public {
         _depositFor(user, 1 ether);
 
-        // Push HF below 1.25: 1 ether * 1700 * 0.86 / 1186.2 = 1.232.
+        // Push HF below 1.25 by lowering collateral value
         marketOracle.setPrice(1700e36);
         assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
 
@@ -657,7 +657,7 @@ contract FCMVaultTest is Test {
     function test_Rebalance_ForceRebalancesInsideBand() public {
         _depositFor(user, 1 ether);
 
-        // Small price bump leaves HF inside [1.25, 1.65] but above target.
+        // Small collateral price increase leaves HF inside [1.25, 1.65] but above target.
         marketOracle.setPrice(2100e36);
         uint256 hfBefore = _healthFactor();
         assertGt(hfBefore, HEALTH_FACTOR_TARGET, "above target");
