@@ -231,7 +231,11 @@ contract FCMVault is ERC4626, AccessControl {
     /// @param  receiver  Account to credit with the asset payout.
     /// @param  owner     Account whose shares are burned.
     /// @return assets    Asset actually delivered to `receiver`.
-    function redeem(uint256 shares, address receiver, address owner) public override returns (uint256 assets) {
+    function redeem(uint256 shares, address receiver, address owner)
+        public
+        override
+        returns (uint256 assets)
+    {
         if (shares == 0) return 0;
         // If someone besides the owner attempts to redeem, this will:
         // 1. Verify the redeemer's allowance is <= shares.
@@ -364,8 +368,11 @@ contract FCMVault is ERC4626, AccessControl {
     /// @param currentDebt Current outstanding debt (caller passes the same
     ///                    value used to compute `hfBefore` to avoid a
     ///                    second `MORPHO.position` SLOAD).
-    /// @return added Amount of loan token borrowed in this call.
-    function _rebalanceLever(uint256 maxBorrow, uint256 currentDebt) internal returns (uint256 added) {
+    /// @return additionalDebt Amount of loan token borrowed in this call.
+    function _rebalanceLever(uint256 maxBorrow, uint256 currentDebt)
+        internal
+        returns (uint256 additionalDebt)
+    {
         uint256 targetDebt = maxBorrow.mulDiv(WAD, healthFactorTarget);
         if (targetDebt <= currentDebt) return 0;
         additionalDebt = targetDebt - currentDebt;
@@ -392,7 +399,10 @@ contract FCMVault is ERC4626, AccessControl {
     ///                    after a liquidation that wiped collateral).
     /// @param currentDebt Current outstanding debt.
     /// @return repaid Amount of loan token repaid to Morpho in this call.
-    function _rebalanceDelever(uint256 maxBorrow, uint256 currentDebt) internal returns (uint256 repaid) {
+    function _rebalanceDelever(uint256 maxBorrow, uint256 currentDebt)
+        internal
+        returns (uint256 repaid)
+    {
         // conceptually, target debt is maxBorrow / hfTarget
         uint256 targetDebt = maxBorrow.mulDiv(WAD, healthFactorTarget);
         if (targetDebt >= currentDebt) return 0;
@@ -412,8 +422,8 @@ contract FCMVault is ERC4626, AccessControl {
         uint256 loanGot = loanToken.balanceOf(address(this)) - loanBefore;
 
         // Cap repayment at outstanding debt
-        repayAmount = loanGot > currentDebt ? currentDebt : loanGot;
-        if (repayAmount > 0) market.repay(repayAmount);
+        repaid = loanGot > currentDebt ? currentDebt : loanGot;
+        if (repaid > 0) market.repay(repaid);
     }
 
     /// @notice Not implemented. Use `deposit` instead.

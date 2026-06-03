@@ -24,7 +24,12 @@ contract MockMorpho {
         market[mp.id()].lastUpdate = uint128(block.timestamp);
     }
 
-    function supplyCollateral(MarketParams memory mp, uint256 assets, address onBehalf, bytes calldata) external {
+    function supplyCollateral(
+        MarketParams memory mp,
+        uint256 assets,
+        address onBehalf,
+        bytes calldata
+    ) external {
         Id id = mp.id();
         position[id][onBehalf].collateral += uint128(assets);
         IERC20(mp.collateralToken).transferFrom(msg.sender, address(this), assets);
@@ -37,15 +42,14 @@ contract MockMorpho {
         /*shares*/
         address onBehalf,
         address receiver
-    )
-        external
-        returns (uint256, uint256)
-    {
+    ) external returns (uint256, uint256) {
         Id id = mp.id();
         Market storage m = market[id];
 
         uint256 newShares = _mulDivUp(
-            assets, uint256(m.totalBorrowShares) + VIRTUAL_SHARES, uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
+            assets,
+            uint256(m.totalBorrowShares) + VIRTUAL_SHARES,
+            uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
         );
 
         position[id][onBehalf].borrowShares += uint128(newShares);
@@ -75,15 +79,14 @@ contract MockMorpho {
         /*shares*/
         address onBehalf,
         bytes calldata
-    )
-        external
-        returns (uint256, uint256)
-    {
+    ) external returns (uint256, uint256) {
         Id id = mp.id();
         Market storage m = market[id];
 
         uint256 sharesToBurn = _mulDivUp(
-            assets, uint256(m.totalBorrowShares) + VIRTUAL_SHARES, uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
+            assets,
+            uint256(m.totalBorrowShares) + VIRTUAL_SHARES,
+            uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
         );
         uint128 posShares = position[id][onBehalf].borrowShares;
         if (sharesToBurn > posShares) sharesToBurn = posShares;
@@ -106,7 +109,12 @@ contract MockMorpho {
     ///         needing HF-bound behavior should drive position state
     ///         explicitly. Redeem tests don't need it because they repay
     ///         debt before withdrawing collateral.
-    function withdrawCollateral(MarketParams memory mp, uint256 assets, address onBehalf, address receiver) external {
+    function withdrawCollateral(
+        MarketParams memory mp,
+        uint256 assets,
+        address onBehalf,
+        address receiver
+    ) external {
         Id id = mp.id();
         position[id][onBehalf].collateral -= uint128(assets);
         IERC20(mp.collateralToken).transfer(receiver, assets);
