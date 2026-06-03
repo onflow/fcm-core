@@ -15,7 +15,7 @@ import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketLib} from "./libraries/MarketLib.sol";
 import {SwapLib} from "./libraries/SwapLib.sol";
 
-// Morpho Blue singleton — same address on every EVM chain.
+// Morpho Blue singleton address for Flow EVM
 IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
 
 /// @title FCMVault
