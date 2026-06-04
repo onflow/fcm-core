@@ -422,8 +422,8 @@ contract FCMVault is ERC4626, AccessControl {
         uint256 loanGot = loanToken.balanceOf(address(this)) - loanBefore;
 
         // Cap repayment at outstanding debt
-        repaid = loanGot > currentDebt ? currentDebt : loanGot;
-        if (repaid > 0) market.repay(repaid);
+        repayAmount = loanGot > currentDebt ? currentDebt : loanGot;
+        if (repayAmount > 0) market.repay(repayAmount);
     }
 
     /// @notice Not implemented. Use `deposit` instead.
