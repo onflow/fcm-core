@@ -62,9 +62,6 @@ contract FCMVault is ERC4626, AccessControl {
 
     MarketParams public market;
 
-    uint256 internal constant WAD = 1e18;
-    uint256 internal constant ORACLE_PRICE_SCALE = 1e36;
-
     struct InitParams {
         IERC20 collateral;
         IERC20 loanToken;
@@ -90,7 +87,7 @@ contract FCMVault is ERC4626, AccessControl {
     event Rebalanced(address indexed caller, uint256 healthFactorBefore, uint256 healthFactorAfter);
 
     constructor(InitParams memory p) ERC20(p.name, p.symbol) ERC4626(p.collateral) {
-        require(p.healthFactorMin >= WAD, "HF min < WAD");
+        require(p.healthFactorMin >= MarketLib.WAD, "HF min < WAD");
         require(p.healthFactorMin <= p.healthFactorTarget, "HF min > target");
         require(p.healthFactorTarget <= p.healthFactorMax, "HF target > max");
 
@@ -339,7 +336,8 @@ contract FCMVault is ERC4626, AccessControl {
         uint256 currentDebt = market.debt();
         uint256 maxBorrow = market.maxBorrow(); // independent of current debt balance
         // we compute inline here rather than use MarketLib.healthFactor to save a SLOAD
-        uint256 hfBefore = currentDebt == 0 ? type(uint256).max : maxBorrow.mulDiv(WAD, currentDebt);
+        uint256 hfBefore =
+            currentDebt == 0 ? type(uint256).max : maxBorrow.mulDiv(MarketLib.WAD, currentDebt);
 
         if (!force) {
             if (hfBefore >= healthFactorMin && hfBefore <= healthFactorMax) {
@@ -373,7 +371,7 @@ contract FCMVault is ERC4626, AccessControl {
         internal
         returns (uint256 additionalDebt)
     {
-        uint256 targetDebt = maxBorrow.mulDiv(WAD, healthFactorTarget);
+        uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorTarget);
         if (targetDebt <= currentDebt) return 0;
         additionalDebt = targetDebt - currentDebt;
 
@@ -404,14 +402,14 @@ contract FCMVault is ERC4626, AccessControl {
         returns (uint256 repaid)
     {
         // conceptually, target debt is maxBorrow / hfTarget
-        uint256 targetDebt = maxBorrow.mulDiv(WAD, healthFactorTarget);
+        uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorTarget);
         if (targetDebt >= currentDebt) return 0;
         uint256 repayAmount = currentDebt - targetDebt;
 
         uint256 yieldPrice = IOracle(yieldOracle).price();
         // Oracle-implied yield amount whose loan-token value equals
         // `repayAmount` (not accounting for slippage)
-        uint256 yieldToSell = repayAmount.mulDiv(ORACLE_PRICE_SCALE, yieldPrice);
+        uint256 yieldToSell = repayAmount.mulDiv(MarketLib.ORACLE_PRICE_SCALE, yieldPrice);
 
         uint256 yieldBalance = yieldToken.balanceOf(address(this));
         if (yieldToSell > yieldBalance) yieldToSell = yieldBalance;
@@ -480,7 +478,8 @@ contract FCMVault is ERC4626, AccessControl {
     ///      `rebalance`, not `deposit`.
     function _targetBorrowAgainst(uint256 newAssets) internal view returns (uint256) {
         if (newAssets == 0) return 0;
-        uint256 capFromNewAsset = market.maxBorrowFor(newAssets).mulDiv(WAD, healthFactorTarget);
+        uint256 capFromNewAsset =
+            market.maxBorrowFor(newAssets).mulDiv(MarketLib.WAD, healthFactorTarget);
         uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(healthFactorTarget);
         return capFromNewAsset < capFromTargetDebt ? capFromNewAsset : capFromTargetDebt;
     }
