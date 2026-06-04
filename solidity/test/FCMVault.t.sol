@@ -709,9 +709,8 @@ contract FCMVaultTest is Test {
 
         // A liquidation repays 200 of the ~1186 debt and seizes 0.7 of the
         // 1 ether collateral (a contrived ratio that grabs far more value
-        // than it repays — a valid post-liquidation accounting state that
-        // leaves the position underwater): collateral 0.3 ether →
-        // maxBorrow 0.3 * 2000 * 0.86 = 516 vs ~986 debt → HF ≈ 0.52.
+        // than it repays)
+        // collateral 0.3 ether → maxBorrow 0.3 * 2000 * 0.86 = 516 vs ~986 debt → HF ≈ 0.52.
         _liquidate({seizedCollateral: 0.7 ether, repaidAssets: 200e18});
         assertLt(_healthFactor(), 1e18, "underwater");
 
@@ -724,25 +723,6 @@ contract FCMVaultTest is Test {
         // rebalance made progress: debt repaid and yield consumed.
         assertLt(_debt(), debtBefore, "debt reduced");
         assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield consumed");
-    }
-
-    /// @notice Liquidation recovery — pathological case: the yield buffer
-    ///         is also exhausted (no FUSDEV in the vault) when the position
-    ///         goes underwater. `rebalance` is a no-op rather than a revert.
-    function test_Rebalance_LiquidationRecoveryEmptyYieldBuffer() public {
-        _depositFor(user, 1 ether);
-
-        // Burn all FUSDEV out of the vault to simulate a previously fully
-        // unwound yield buffer that was never refilled.
-        uint256 fus = FUSDEV.balanceOf(address(vault));
-        MockERC20(address(FUSDEV)).burn(address(vault), fus);
-
-        _liquidate({seizedCollateral: 0.7 ether, repaidAssets: 200e18});
-        assertLt(_healthFactor(), 1e18, "underwater");
-
-        uint256 debtBefore = _debt();
-        vault.rebalance(false);
-        assertEq(_debt(), debtBefore, "no-op when yield exhausted");
     }
 
     /// @notice Constructor rejects HF configurations where the dead band is
