@@ -701,27 +701,27 @@ contract FCMVaultTest is Test {
     }
 
     /// @notice Liquidation recovery: a liquidator seizes most of the vault's
-    ///         collateral, leaving a fresh liquidation residue — genuinely
-    ///         reduced collateral against still-outstanding debt, with the
-    ///         position severely under-collateralized (HF far below WAD).
+    ///         collateral, leaving the position under-collateralized (HF well below WAD).
     ///         `rebalance` must not revert; it sells yield on a best-effort
-    ///         basis and repays as much debt as the realized loan token
-    ///         covers.
+    ///         basis and repays as much debt as the realized loan token covers.
     function test_Rebalance_LiquidationRecoveryDoesNotRevert() public {
         _depositFor(user, 1 ether);
+
+        // A liquidation repays 200 of the ~1186 debt and seizes 0.7 of the
+        // 1 ether collateral (a contrived ratio that grabs far more value
+        // than it repays — a valid post-liquidation accounting state that
+        // leaves the position underwater): collateral 0.3 ether →
+        // maxBorrow 0.3 * 2000 * 0.86 = 516 vs ~986 debt → HF ≈ 0.52.
+        _liquidate({seizedCollateral: 0.7 ether, repaidAssets: 200e18});
+        assertLt(_healthFactor(), 1e18, "underwater");
 
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        // Seize 0.7 of the 1 ether collateral: maxBorrow drops to
-        // 0.3 * 2000 * 0.86 = 516 vs ~1186 debt → HF ≈ 0.43.
-        _seizeCollateral(0.7 ether);
-        assertLt(_healthFactor(), 1e18, "underwater");
-
         // Best-effort: should succeed even though target is unreachable.
         vault.rebalance(false);
 
-        // Debt was repaid (positive progress) and yield consumed.
+        // rebalance made progress: debt repaid and yield consumed.
         assertLt(_debt(), debtBefore, "debt reduced");
         assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield consumed");
     }
@@ -737,7 +737,7 @@ contract FCMVaultTest is Test {
         uint256 fus = FUSDEV.balanceOf(address(vault));
         MockERC20(address(FUSDEV)).burn(address(vault), fus);
 
-        _seizeCollateral(0.7 ether);
+        _liquidate({seizedCollateral: 0.7 ether, repaidAssets: 200e18});
         assertLt(_healthFactor(), 1e18, "underwater");
 
         uint256 debtBefore = _debt();
@@ -792,12 +792,18 @@ contract FCMVaultTest is Test {
             / (uint256(mkt.totalBorrowShares) + 1e6);
     }
 
-    /// @dev Simulate a liquidator seizing `amount` of the vault's collateral
-    ///      via the MockMorpho test hook (debt untouched).
-    function _seizeCollateral(uint256 amount) internal {
+    /// @dev Simulate a liquidation of the vault's position via the MockMorpho
+    ///      test hook: seize `seizedCollateral` of collateral and repay
+    ///      `repaidAssets` of debt.
+    function _liquidate(uint256 seizedCollateral, uint256 repaidAssets) internal {
         (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
         MockMorpho(address(MORPHO))
-            .seizeCollateral(MarketParams(lt, ct, oracle, irm, lltv_), address(vault), amount);
+            .liquidate(
+                MarketParams(lt, ct, oracle, irm, lltv_),
+                address(vault),
+                seizedCollateral,
+                repaidAssets
+            );
     }
 
     function _baseParams() internal view returns (FCMVault.InitParams memory) {
