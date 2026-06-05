@@ -11,9 +11,22 @@ contract FCMVaultScript is Script {
     function run() public {
         vm.startBroadcast();
 
-        IERC20 asset = IERC20(vm.envAddress("ASSET"));
-        address admin = vm.envAddress("ADMIN");
-        vault = new FCMVault("Flow Credit Markets Vault", "fcmV", asset, admin);
+        vault = new FCMVault(
+            FCMVault.InitParams({
+                collateral: IERC20(vm.envAddress("COLLATERAL")),
+                loanToken: IERC20(vm.envAddress("LOAN_TOKEN")),
+                yieldToken: IERC20(vm.envAddress("YIELD_TOKEN")),
+                marketOracle: vm.envAddress("MARKET_ORACLE"),
+                marketIrm: vm.envAddress("MARKET_IRM"),
+                marketLltv: vm.envUint("MARKET_LLTV"),
+                feeYieldDebt: uint24(vm.envUint("FEE_YIELD_DEBT")),
+                healthFactorUpperTarget: vm.envUint("HEALTH_FACTOR_UPPER_TARGET"),
+                yieldOracle: vm.envAddress("YIELD_ORACLE"),
+                admin: vm.envAddress("ADMIN"),
+                name: vm.envString("VAULT_NAME"),
+                symbol: vm.envString("VAULT_SYMBOL")
+            })
+        );
 
         console.log("FCMVault deployed to:", address(vault));
 
