@@ -15,7 +15,7 @@ import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketLib} from "./libraries/MarketLib.sol";
 import {SwapLib} from "./libraries/SwapLib.sol";
 
-// Morpho Blue singleton — same address on every EVM chain.
+// Morpho Blue singleton address for Flow EVM
 IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
 
 /// @title FCMVault
@@ -41,13 +41,20 @@ contract FCMVault is ERC4626, AccessControl {
     // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     uint8 internal constant DECIMALS_OFFSET = 6;
 
+    // @dev Address of the loan token (inner vault asset)
     IERC20 public immutable loanToken;
+    // @dev Address of the yield token (inner vault share)
     IERC20 public immutable yieldToken;
+    // @dev Pool fee for swapping yield<->debt
     uint24 public immutable feeYieldDebt;
     /// @notice Pool fee tier for the asset/debt pool, used to reconcile
     ///         redeem surplus from loan token back to the underlying asset.
     uint24 public immutable feeAssetDebt;
+    // TODO: revisit health factor target in rebalancing (#6)
     uint256 public immutable healthFactorUpperTarget;
+    // @dev Address of the oracle for the yield token.
+    //      We will deploy an oracle instance, which will provide the best available price information
+    //      for the given token. This may be a 3rd party oracle, onchain price information, or both.
     address public immutable yieldOracle;
 
     MarketParams public market;
@@ -345,7 +352,7 @@ contract FCMVault is ERC4626, AccessControl {
     function _targetBorrowAgainst(uint256 newAssets) internal view returns (uint256) {
         if (newAssets == 0) return 0;
         uint256 capFromNewAsset =
-            market.maxBorrowFor(newAssets).mulDiv(1e18, healthFactorUpperTarget);
+            market.maxBorrowFor(newAssets).mulDiv(MarketLib.WAD, healthFactorUpperTarget);
         uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(healthFactorUpperTarget);
         return capFromNewAsset < capFromTargetDebt ? capFromNewAsset : capFromTargetDebt;
     }
