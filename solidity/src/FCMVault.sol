@@ -15,7 +15,7 @@ import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketLib} from "./libraries/MarketLib.sol";
 import {SwapLib} from "./libraries/SwapLib.sol";
 
-// Morpho Blue singleton — same address on every EVM chain.
+// Morpho Blue singleton address for Flow EVM
 IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
 
 /// @title FCMVault
@@ -41,8 +41,11 @@ contract FCMVault is ERC4626, AccessControl {
     // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     uint8 internal constant DECIMALS_OFFSET = 6;
 
+    // @dev Address of the loan token (inner vault asset)
     IERC20 public immutable loanToken;
+    // @dev Address of the yield token (inner vault share)
     IERC20 public immutable yieldToken;
+    // @dev Pool fee for swapping yield<->debt
     uint24 public immutable feeYieldDebt;
     /// @notice Pool fee tier for the asset/debt pool, used to reconcile
     ///         redeem surplus from loan token back to the underlying asset.
@@ -58,6 +61,9 @@ contract FCMVault is ERC4626, AccessControl {
     ///         per-deposit borrow. WAD-scaled; must satisfy
     ///         `healthFactorMin < healthFactorTarget < healthFactorMax`.
     uint256 public immutable healthFactorTarget;
+    // @dev Address of the oracle for the yield token.
+    //      We will deploy an oracle instance, which will provide the best available price information
+    //      for the given token. This may be a 3rd party oracle, onchain price information, or both.
     address public immutable yieldOracle;
 
     MarketParams public market;
@@ -459,7 +465,7 @@ contract FCMVault is ERC4626, AccessControl {
     }
 
     /// @dev How much loan token to borrow against `newAssets` while keeping
-    ///      the position at `healthFactorUpperTarget`. Returns the smaller
+    ///      the position at `healthFactorTarget`. Returns the smaller
     ///      of two caps:
     ///      - `capFromNewAsset`: the borrow `newAssets` of fresh collateral
     ///        could support on its own at the target HF.
