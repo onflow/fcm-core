@@ -178,7 +178,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         market.accrueInterest();
 
         uint256 navBefore = totalAssets();
-        if (assets > maxDeposit(receiver)) {
+        if (navBefore + assets > maxTvl) {
             revert ERC4626ExceededMaxDeposit(receiver, assets, maxDeposit(receiver));
         }
 
