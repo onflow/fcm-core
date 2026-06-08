@@ -92,7 +92,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     constructor(InitParams memory p)
         ERC20(p.name, p.symbol)
         ERC4626(p.collateral)
-        Ownable(msg.sender)
+        Ownable(p.admin)
     {
         loanToken = p.loanToken;
         yieldToken = p.yieldToken;
