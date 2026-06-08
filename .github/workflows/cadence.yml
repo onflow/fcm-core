@@ -1,0 +1,39 @@
+name: Cadence
+
+permissions: {}
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  FLOW_CLI_VERSION: v2.17.4
+
+jobs:
+  cadence:
+    name: Cadence (Flow CLI)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cadence
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install Flow CLI
+        run: sh -ci "$(curl -fsSL https://raw.githubusercontent.com/onflow/flow-cli/master/install.sh)" -- "$FLOW_CLI_VERSION"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Add Flow CLI to PATH
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Show Flow CLI version
+        run: flow version
+
+      - name: Run Cadence tests
+        run: flow test
