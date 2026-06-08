@@ -4,22 +4,37 @@ pragma solidity ^0.8.13;
 import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {FCMVault} from "../src/FCMVault.sol";
+import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 import {ERC4626, IERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {SwapLib} from "../src/libraries/SwapLib.sol";
 
-contract MockERC20 is ERC20 {
-    constructor() ERC20("Mock", "MOCK") {}
-
-    function mint(address to, uint256 amount) external {
-        _mint(to, amount);
-    }
-}
+import {MockERC20} from "./mocks/MockERC20.sol";
+import {MockMorpho} from "./mocks/MockMorpho.sol";
+import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
+import {MockOracle} from "./mocks/MockOracle.sol";
+import {MockIrm} from "./mocks/MockIrm.sol";
 
 /// @notice Tests for the TVL limit on FCMVault.
 contract TvlLimitTest is Test {
-    FCMVault public vault;
-    MockERC20 public asset;
+    // Token addresses — using the real Flow EVM addresses so mocks are
+    // etched where the vault constants would otherwise point.
+    IERC20 constant WETH = IERC20(0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590);
+    IERC20 constant PYUSD0 = IERC20(0x99aF3EeA856556646C98c8B9b2548Fe815240750);
+    IERC20 constant FUSDEV = IERC20(0xd069d989e2F44B70c65347d1853C0c67e10a9F8D);
+    address constant MOCK_IRM = 0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546;
+
+    uint256 internal constant WETH_PRICE = 2000e36;
+    uint256 internal constant YIELD_PRICE = 1e36;
+    uint256 internal constant LLTV = 0.86e18;
+    uint256 internal constant HEALTH_FACTOR_TARGET = 1.45e18;
+    uint24 internal constant FEE = 100;
+
+    FCMVault internal vault;
+    MockOracle internal marketOracle;
+    MockOracle internal yieldOracle;
+
+    MockERC20 internal asset;
 
     address internal admin = address(0x12345);
     address internal owner;
@@ -34,8 +49,34 @@ contract TvlLimitTest is Test {
 
     function setUp() public {
         owner = address(this);
-        asset = new MockERC20();
-        vault = new FCMVault("Flow Credit Markets Vault", "fcmV", IERC20(address(asset)), admin);
+        bytes memory erc20Code = address(new MockERC20()).code;
+        vm.etch(address(WETH), erc20Code);
+        vm.etch(address(PYUSD0), erc20Code);
+        vm.etch(address(FUSDEV), erc20Code);
+        vm.etch(address(MORPHO), address(new MockMorpho()).code);
+        vm.etch(address(SwapLib.SWAP_ROUTER), address(new MockSwapRouter()).code);
+        vm.etch(MOCK_IRM, address(new MockIrm()).code);
+
+        marketOracle = new MockOracle(WETH_PRICE);
+        yieldOracle = new MockOracle(YIELD_PRICE);
+
+        vault = new FCMVault(
+            FCMVault.InitParams({
+                collateral: WETH,
+                loanToken: PYUSD0,
+                yieldToken: FUSDEV,
+                marketOracle: address(marketOracle),
+                marketIrm: MOCK_IRM,
+                marketLltv: LLTV,
+                feeYieldDebt: FEE,
+                healthFactorUpperTarget: HEALTH_FACTOR_TARGET,
+                yieldOracle: address(yieldOracle),
+                admin: admin,
+                name: "Flow Credit Markets WETH",
+                symbol: "fcmWETH"
+            })
+        );
+        asset = MockERC20(address(WETH));
 
         _fund(owner, USER_BAL);
         _allow(owner);
