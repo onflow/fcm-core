@@ -70,6 +70,8 @@ contract FCMVaultTest is Test {
                 symbol: "fcmWETH"
             })
         );
+        vm.prank(admin);
+        vault.setMaxTvl(1e21);
 
         // Pre-allow the addresses existing deposit tests use as receivers.
         // Gating-specific tests use fresh addresses (bob, carol, stranger).
