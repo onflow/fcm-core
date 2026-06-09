@@ -16,9 +16,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    defaults:
-      run:
-        working-directory: cadence
     steps:
       - uses: actions/checkout@v5
         with:
