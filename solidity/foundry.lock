@@ -1,4 +1,7 @@
 {
+  "lib/Yearn-ERC4626-Router": {
+    "rev": "b848746a05839e5f301a067a7a41aca87efcbabd"
+  },
   "lib/forge-std": {
     "tag": {
       "name": "v1.16.1",
