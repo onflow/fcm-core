@@ -8,6 +8,8 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 import {IMorpho, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
@@ -28,7 +30,7 @@ IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
 ///         Holders of `EARLY_ACCESS_ROLE` may deposit, hold, and transfer
 ///         shares. Burns (withdrawals/redeems) are always permitted so a
 ///         removed holder can still exit.
-contract FCMVault is ERC4626, AccessControl {
+contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     using SafeERC20 for IERC20;
     using Math for uint256;
     using MarketLib for MarketParams;
@@ -59,6 +61,22 @@ contract FCMVault is ERC4626, AccessControl {
 
     MarketParams public market;
 
+    /// @notice TVL limit, denominated in the vault's Asset token.
+    ///         Enforced by `super.deposit`, which reverts with
+    ///         `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`.
+    ///         Default 0 -> no deposits until admin raises it.
+    ///         - This constraint prevents all deposits/mints which would cause the vault to exceed
+    ///           the configured TVL limit after the deposit/mint completes.
+    ///         - This constraint does not prevent any withdrawals/redeems under any circumstances.
+    ///         - This constraint does not prevent the vault from holding more assets than its configured TVL.
+    ///           This can happen if:
+    ///            - The owner sets maxTvl to a value lower than the current totalAssets
+    ///            - The value of vault holdings increases above the TVL limit due to market conditions.
+    ///              This can occur without any direct interactions with the vault.
+    uint256 public maxTvl;
+
+    event MaxTvlSet(uint256 previousMaxTvl, uint256 newMaxTvl);
+
     struct InitParams {
         IERC20 collateral;
         IERC20 loanToken;
@@ -75,7 +93,11 @@ contract FCMVault is ERC4626, AccessControl {
         string symbol;
     }
 
-    constructor(InitParams memory p) ERC20(p.name, p.symbol) ERC4626(p.collateral) {
+    constructor(InitParams memory p)
+        ERC20(p.name, p.symbol)
+        ERC4626(p.collateral)
+        Ownable(p.admin)
+    {
         loanToken = p.loanToken;
         yieldToken = p.yieldToken;
         feeYieldDebt = p.feeYieldDebt;
@@ -161,6 +183,9 @@ contract FCMVault is ERC4626, AccessControl {
         market.accrueInterest();
 
         uint256 navBefore = totalAssets();
+        if (navBefore + assets > maxTvl) {
+            revert ERC4626ExceededMaxDeposit(receiver, assets, maxDeposit(receiver));
+        }
 
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), assets);
         market.supplyCollateral(assets);
@@ -369,16 +394,30 @@ contract FCMVault is ERC4626, AccessControl {
         return yieldAmount.mulDiv(IOracle(yieldOracle).price(), market.oraclePrice());
     }
 
-    /// @inheritdoc IERC4626
-    function maxDeposit(address receiver) public view override returns (uint256) {
-        if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
-        return super.maxDeposit(receiver);
+    /// @notice Set the TVL limit. Default at deploy time is 0 (no deposits).
+    /// @param newMaxTvl the new TVL limit; applies only to new deposits.
+    function setMaxTvl(uint256 newMaxTvl) external onlyOwner {
+        emit MaxTvlSet(maxTvl, newMaxTvl);
+        maxTvl = newMaxTvl;
     }
 
     /// @inheritdoc IERC4626
+    /// @notice Remaining headroom under the TVL limit, clamped to 0 when full.
+    /// @dev Even if the inner vault has hit its own deposit limit, we may still
+    ///      be able to obtain shares of it on the AMM to satisfy the deposit.
+    ///      However, if we implement 'direct deposit' to the inner vault,
+    ///      its own maxDeposit() will bind.
+    function maxDeposit(address receiver) public view override returns (uint256) {
+        if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
+        uint256 cachedTotalAssets = totalAssets();
+        return maxTvl > cachedTotalAssets ? maxTvl - cachedTotalAssets : 0;
+    }
+
+    /// @inheritdoc IERC4626
+    /// @notice Mint is disabled in favor of deposit.
     function maxMint(address receiver) public view override returns (uint256) {
         if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
-        return super.maxMint(receiver);
+        return 0;
     }
 
     /// @dev Hook fires on every share movement (mint / transfer / burn).
