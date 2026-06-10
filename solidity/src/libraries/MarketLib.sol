@@ -51,6 +51,35 @@ library MarketLib {
         MORPHO.borrow(market, assets, 0, address(this), address(this));
     }
 
+    /// @notice Repay `assets` units of the loan token to Morpho, reducing
+    ///         this contract's debt on the market.
+    ///
+    /// @dev   `onBehalf = address(this)` repays this contract's own
+    ///         position; the trailing `""` is Morpho's callback data, unused.
+    /// @param  market  Morpho market parameters identifying the position.
+    /// @param  assets  Amount of loan token to repay, in token units.
+    /// @return assetsRepaid Mirrors `assets` (Morpho's return convention).
+    /// @return sharesRepaid Borrow shares burned by this repayment.
+    function repay(MarketParams memory market, uint256 assets)
+        internal
+        returns (uint256 assetsRepaid, uint256 sharesRepaid)
+    {
+        return MORPHO.repay(market, assets, 0, address(this), "");
+    }
+
+    /// @notice Withdraw `assets` units of the collateral token from this
+    ///         contract's Morpho position back to this contract.
+    /// @dev    Morpho enforces that the withdrawal leaves the position with
+    ///         a health factor ≥ 1.
+    ///
+    ///         Both the `onBehalf` and `receiver` arguments to Morpho are
+    ///         `address(this)`: the collateral belongs to this contract.
+    /// @param  market  Morpho market parameters identifying the position.
+    /// @param  assets  Amount of collateral to withdraw, in token units.
+    function withdrawCollateral(MarketParams memory market, uint256 assets) internal {
+        MORPHO.withdrawCollateral(market, assets, address(this), address(this));
+    }
+
     // ---- reads ---------------------------------------------------------
 
     /// @notice Returns this contract's collateral balance in the given market, in raw collateral-token units.

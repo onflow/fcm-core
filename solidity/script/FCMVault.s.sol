@@ -20,6 +20,7 @@ contract FCMVaultScript is Script {
                 marketIrm: vm.envAddress("MARKET_IRM"),
                 marketLltv: vm.envUint("MARKET_LLTV"),
                 feeYieldDebt: uint24(vm.envUint("FEE_YIELD_DEBT")),
+                feeAssetDebt: uint24(vm.envUint("FEE_ASSET_DEBT")),
                 healthFactorUpperTarget: vm.envUint("HEALTH_FACTOR_UPPER_TARGET"),
                 yieldOracle: vm.envAddress("YIELD_ORACLE"),
                 admin: vm.envAddress("ADMIN"),
