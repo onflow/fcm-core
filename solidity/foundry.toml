@@ -11,6 +11,10 @@ remappings = [
     "yearn-erc4626-router/=lib/Yearn-ERC4626-Router/src/",
     "forge-std/=lib/forge-std/src/",
 ]
+fs_permissions = [{ access = "read", path = "./deployments" }]
+
+[rpc_endpoints]
+flow_mainnet = "https://mainnet.evm.nodes.onflow.org"
 
 [fmt]
 line_length = 100
