@@ -205,6 +205,9 @@ contract FCMVault is ERC4626, AccessControl {
     ///         Case-B scale factor round down, so residuals accrue to
     ///         remaining shareholders rather than leaking to the redeemer.
     ///
+    ///         TODO: Redemptions should use flash loans in the future to ensure
+    ///         collateral withdrawals can always be used to satisfy redemptions.
+    ///
     ///         Reverts if `msg.sender != owner` and allowance is
     ///         insufficient.
     /// @param  shares    Vault shares to burn.
@@ -266,6 +269,9 @@ contract FCMVault is ERC4626, AccessControl {
     ///         their pro-rata collateral remains in the vault and accrues
     ///         to the remaining shareholders. No surplus reconcile leg runs
     ///         in this case.
+    ///
+    ///      TODO: Redemptions should use flash loans in the future to ensure
+    ///      collateral withdrawals can always be used to satisfy redemptions.
     ///
     ///      Rounding favors the vault: pro-rata slices and the scaled
     ///      collateral amount are computed with mulDiv rounding down.
