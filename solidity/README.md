@@ -95,18 +95,47 @@ Notes:
   your shell history; `cast wallet` keystores also work with
   `forge script --account`.
 
-### Rehearsing the full sequence locally
-
-To rehearse seed → deploy → check with state carried between steps, run them
-against an anvil fork of mainnet (chain id is preserved, so the config
-check passes):
+### Rehearsing the full sequence locally (fork-based deployment test)
 
 ```shell
-anvil --fork-url https://mainnet.evm.nodes.onflow.org
-# then run the make targets with FLOW_MAINNET_RPC=http://localhost:8545
-# and one of anvil's funded test keys, after funding it with WETH/PYUSD0
-# via anvil_impersonateAccount transfers from a holder.
+make mainnet-rehearse    # from the repo root
 ```
+
+This runs the **entire production deployment sequence against an anvil fork
+of live mainnet** — real Morpho, FlowSwap, Pyth, and token contracts; state
+carried between steps; zero real funds and no `PRIVATE_KEY` needed. Run it
+before any real deployment: it proves the scripts work against *current*
+mainnet state, which the per-script `-dry` targets cannot (each dry run
+simulates in isolation, so `DeployVault` can't see `SeedMarket`'s effect).
+
+What [`script/rehearse.sh`](./script/rehearse.sh) does:
+
+1. **Starts `anvil --fork-url <mainnet>`** with `--auto-impersonate`. The
+   fork preserves chain id 747, so the scripts' config chain-id guard
+   passes unchanged.
+2. **Funds anvil's dev account** (`0xf39F…2266`, a publicly-known test key)
+   with WETH and PYUSD0 by impersonating the largest on-chain holders — the
+   FlowSwap pools — and transferring from them, after giving the pools gas
+   via `anvil_setBalance`.
+3. **Freshens the Pyth market oracle if stale.** The Morpho market's
+   WETH/USD oracle reverts with `StalePrice` when the Pyth feed hasn't been
+   pushed within `PRICE_FEED_MAX_AGE` (1 hour). The script pulls a fresh
+   signed update from [Hermes](https://hermes.pyth.network) and posts it via
+   `pyth.updatePriceFeeds` — permissionless and fee-paid, exactly the remedy
+   you would use on real mainnet if deposits revert with a stale oracle.
+4. **Runs the three broadcast scripts in production order** against the
+   fork: `SeedMarket` (default 50k PYUSD0) → `DeployVault` (yield oracle +
+   vault + admin setup, default `MAX_TVL` 100 WETH) → `LiveCheck`
+   (deposit/redeem round-trip, default 0.01 WETH), parsing the vault
+   address out of the deploy logs.
+5. **Cleans up**: kills anvil and deletes the rehearsal's
+   `broadcast/*/747/` records so they cannot masquerade as real mainnet
+   deployment records (it refuses to start if uncommitted broadcast records
+   are already present, since cleanup couldn't tell them apart).
+
+Knobs (all optional env vars): `FLOW_MAINNET_RPC`, `ANVIL_PORT`,
+`SEED_AMOUNT`, `MAX_TVL`, `CHECK_AMOUNT`. Requires `anvil`/`cast`/`forge`
+(Foundry), `curl`, and `python3`.
 
 <!-- Cadence: once the VaultRebalancer (PR #38) merges, its deployment step
      (flow CLI, consumes the FCMVault address) gets a section here. -->
