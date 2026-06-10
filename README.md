@@ -20,6 +20,23 @@ make solidity-test  # tests only
 ## Architecture
 See [Architecture](./docs/architecture.md)
 
+## Deployment
+
+Deployments are **manual** and target Flow EVM mainnet directly — see the
+[deployment runbook](./solidity/README.md#mainnet-deployment). Dependency
+addresses used at deploy time are pinned in
+[`solidity/deployments/mainnet.json`](./solidity/deployments/mainnet.json).
+
+### Deployed contracts (Flow EVM mainnet)
+
+| Contract | Address |
+| :--- | :--- |
+| FCMVault | _not yet deployed_ |
+| YieldTokenOracle | _not yet deployed_ |
+
+Morpho market (WETH collateral / PYUSD0 loan, LLTV 86%):
+`0xe9c0fc2a0c62a6e5cdee4bc4d06d571850a2add3bb7c96d8c3a75997cae6b866`
+
 ## Dependencies (Flow EVM mainnet)
 
 ### Morpho Blue
