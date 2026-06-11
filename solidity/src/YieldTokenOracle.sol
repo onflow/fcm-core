@@ -13,12 +13,6 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 ///         `assetAmount = shareAmount * price() / 1e36` (in each token's
 ///         native base units -- the vault's conversion already embeds both
 ///         tokens' decimals, so no explicit decimal scaling is required).
-///
-///         NAV-based pricing cannot be moved by trading against a pool, so
-///         it needs no TWAP; it is only as trustworthy as the vault's own
-///         share accounting. It reflects redemption value, not the price a
-///         swap on a secondary market will execute at -- arbitrage keeps the
-///         two close while vault redemptions remain permissionless.
 contract YieldTokenOracle is IOracle {
     /// @dev Morpho's ORACLE_PRICE_SCALE.
     uint256 internal constant PRICE_SCALE = 1e36;
