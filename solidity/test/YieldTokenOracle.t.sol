@@ -5,35 +5,15 @@ import {Test} from "forge-std/Test.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import {YieldTokenOracle} from "../src/YieldTokenOracle.sol";
-
-/// @dev Minimal ERC4626 stub: fixed asset/decimals, configurable exchange
-///      rate expressed as assets per one whole share.
-contract StubVault {
-    address public asset;
-    uint8 public decimals;
-    uint256 internal assetsPerWholeShare;
-
-    constructor(address asset_, uint8 decimals_) {
-        asset = asset_;
-        decimals = decimals_;
-    }
-
-    function setRate(uint256 assetsPerWholeShare_) external {
-        assetsPerWholeShare = assetsPerWholeShare_;
-    }
-
-    function convertToAssets(uint256 shares) external view returns (uint256) {
-        return shares * assetsPerWholeShare / 10 ** decimals;
-    }
-}
+import {MockERC4626} from "./mocks/MockERC4626.sol";
 
 contract YieldTokenOracleTest is Test {
     address internal constant LOAN = address(0xBBB2);
 
-    StubVault internal vault;
+    MockERC4626 internal vault;
 
     function setUp() public {
-        vault = new StubVault(LOAN, 18);
+        vault = new MockERC4626(LOAN, 18);
     }
 
     function _oracle() internal returns (YieldTokenOracle) {
@@ -56,7 +36,7 @@ contract YieldTokenOracleTest is Test {
     }
 
     function test_priceWithEqualDecimals() public {
-        vault = new StubVault(LOAN, 6);
+        vault = new MockERC4626(LOAN, 6);
         vault.setRate(2e6);
         // 6-decimal shares and asset: parity would be 1e36, double is 2e36.
         assertEq(_oracle().price(), 2e36, "equal decimals, 2x rate");
