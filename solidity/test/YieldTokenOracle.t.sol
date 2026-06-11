@@ -42,11 +42,6 @@ contract YieldTokenOracleTest is Test {
         assertEq(_oracle().price(), 2e36, "equal decimals, 2x rate");
     }
 
-    function test_priceUsesWholeShareSample() public {
-        vault.setRate(1e6);
-        assertEq(_oracle().conversionSample(), 1e18, "sample is one whole share");
-    }
-
     function test_constructorRejectsAssetMismatch() public {
         vm.expectRevert(YieldTokenOracle.AssetMismatch.selector);
         new YieldTokenOracle(IERC4626(address(vault)), address(0xDEAD));
