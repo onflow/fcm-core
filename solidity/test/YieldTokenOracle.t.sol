@@ -3,9 +3,22 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {YieldTokenOracle} from "../src/YieldTokenOracle.sol";
 import {MockERC4626} from "./mocks/MockERC4626.sol";
+
+/// @dev Morpho's ORACLE_PRICE_SCALE.
+uint256 constant ORACLE_PRICE_SCALE = 1e36;
+
+/// @dev Mirrors how Morpho values a position from an `IOracle` price:
+///      `assets = shares.mulDivDown(price, ORACLE_PRICE_SCALE)`. Running the
+///      oracle output through this strips the 1e36 scaling, so the tests can
+///      assert against amounts in the asset's native units rather than
+///      scaled prices.
+function convertSharesToAssets(uint256 shares, uint256 price) pure returns (uint256) {
+    return Math.mulDiv(shares, price, ORACLE_PRICE_SCALE);
+}
 
 contract YieldTokenOracleTest is Test {
     address internal constant ASSET = address(0xBBB2);
@@ -21,30 +34,26 @@ contract YieldTokenOracleTest is Test {
     }
 
     function test_priceAtParity() public {
-        // 18-decimal shares, 6-decimal asset, rate 1:1 => Morpho price 1e24
-        // (the 10^(6-18) decimal adjustment is embedded in the conversion).
+        // 18-decimal shares, 6-decimal asset, rate 1:1 => one whole share
+        // (1e18) redeems for one whole asset (1e6).
         vault.setRate(1e6);
-        assertEq(_oracle().price(), 1e24, "1:1 rate, 18->6 decimals");
+        assertEq(convertSharesToAssets(1e18, _oracle().price()), 1e6, "1:1 rate, 18->6 decimals");
     }
 
     function test_priceTracksExchangeRate() public {
         vault.setRate(1.05e6);
-        assertEq(_oracle().price(), 1.05e24, "rate above parity");
+        assertEq(convertSharesToAssets(1e18, _oracle().price()), 1.05e6, "rate above parity");
 
         vault.setRate(0.97e6);
-        assertEq(_oracle().price(), 0.97e24, "rate below parity");
+        assertEq(convertSharesToAssets(1e18, _oracle().price()), 0.97e6, "rate below parity");
     }
 
     function test_priceWithEqualDecimals() public {
         vault = new MockERC4626(ASSET, 6);
         vault.setRate(2e6);
-        // 6-decimal shares and asset: parity would be 1e36, double is 2e36.
-        assertEq(_oracle().price(), 2e36, "equal decimals, 2x rate");
-    }
-
-    function test_priceUsesWholeShareSample() public {
-        vault.setRate(1e6);
-        assertEq(_oracle().conversionSample(), 1e18, "sample is one whole share");
+        // 6-decimal shares and asset: one whole share (1e6) redeems for two
+        // whole assets (2e6) at a 2x rate.
+        assertEq(convertSharesToAssets(1e6, _oracle().price()), 2e6, "equal decimals, 2x rate");
     }
 
     function test_constructorRejectsAssetMismatch() public {
@@ -77,16 +86,18 @@ contract YieldTokenOracleForkTest is Test {
 
     function test_fork_priceIsSane() public onlyFork {
         YieldTokenOracle oracle = new YieldTokenOracle(IERC4626(FUSDEV), PYUSD0);
-        uint256 p = oracle.price();
-        // FUSDEV (18 dec) priced in PYUSD0 (6 dec) near $1 => ~1e24, allow a
+        // One whole FUSDEV (1e18 shares) redeems near 1 PYUSD0 (1e6); allow a
         // wide band so ordinary yield accrual never breaks the test.
-        assertGt(p, 0.5e24, "price above half parity");
-        assertLt(p, 2e24, "price below double parity");
+        uint256 assets = convertSharesToAssets(1e18, oracle.price());
+        assertGt(assets, 0.5e6, "redeems above half parity");
+        assertLt(assets, 2e6, "redeems below double parity");
     }
 
     function test_fork_priceMatchesVaultNav() public onlyFork {
         YieldTokenOracle oracle = new YieldTokenOracle(IERC4626(FUSDEV), PYUSD0);
         uint256 nav = IERC4626(FUSDEV).convertToAssets(1e18);
-        assertEq(oracle.price(), nav * 1e18, "price is the 1e36-scaled NAV");
+        // Converting one whole share through the oracle reproduces the vault's
+        // own NAV for that share.
+        assertEq(convertSharesToAssets(1e18, oracle.price()), nav, "matches vault NAV");
     }
 }
