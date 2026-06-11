@@ -38,14 +38,17 @@ contract YieldTokenOracleTest is Test {
         // (1e18) redeems for one whole asset (1e6).
         vault.setRate(1e6);
         assertEq(convertSharesToAssets(1e18, _oracle().price()), 1e6, "1:1 rate, 18->6 decimals");
+        assertEq(convertSharesToAssets(2e18, _oracle().price()), 2e6, "1:1 rate, 18->6 decimals");
     }
 
     function test_priceTracksExchangeRate() public {
         vault.setRate(1.05e6);
         assertEq(convertSharesToAssets(1e18, _oracle().price()), 1.05e6, "rate above parity");
+        assertEq(convertSharesToAssets(2e18, _oracle().price()), 2.1e6, "rate above parity");
 
         vault.setRate(0.97e6);
         assertEq(convertSharesToAssets(1e18, _oracle().price()), 0.97e6, "rate below parity");
+        assertEq(convertSharesToAssets(2e18, _oracle().price()), 1.94e6, "rate below parity");
     }
 
     function test_priceWithEqualDecimals() public {
@@ -54,6 +57,7 @@ contract YieldTokenOracleTest is Test {
         // 6-decimal shares and asset: one whole share (1e6) redeems for two
         // whole assets (2e6) at a 2x rate.
         assertEq(convertSharesToAssets(1e6, _oracle().price()), 2e6, "equal decimals, 2x rate");
+        assertEq(convertSharesToAssets(2e6, _oracle().price()), 4e6, "equal decimals, 2x rate");
     }
 
     function test_constructorRejectsAssetMismatch() public {
