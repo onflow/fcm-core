@@ -23,25 +23,24 @@ contract YieldTokenOracle is IOracle {
     /// @dev Morpho's ORACLE_PRICE_SCALE.
     uint256 internal constant PRICE_SCALE = 1e36;
 
-    IERC4626 public immutable yieldToken;
-    address public immutable loanToken;
+    IERC4626 public immutable vault;
+    address public immutable asset;
 
-    /// @dev One whole yield token, used as the conversion sample so the
+    /// @dev One whole vault share, used as the conversion sample so the
     ///      vault's rounding error stays negligible.
     uint256 public immutable conversionSample;
 
     error AssetMismatch();
 
-    constructor(IERC4626 yieldToken_, address loanToken_) {
-        if (yieldToken_.asset() != loanToken_) revert AssetMismatch();
-        yieldToken = yieldToken_;
-        loanToken = loanToken_;
-        conversionSample = 10 ** yieldToken_.decimals();
+    constructor(IERC4626 vault_, address asset_) {
+        if (vault_.asset() != asset_) revert AssetMismatch();
+        vault = vault_;
+        asset = asset_;
+        conversionSample = 10 ** vault_.decimals();
     }
 
     /// @inheritdoc IOracle
     function price() external view returns (uint256) {
-        return
-            Math.mulDiv(yieldToken.convertToAssets(conversionSample), PRICE_SCALE, conversionSample);
+        return Math.mulDiv(vault.convertToAssets(conversionSample), PRICE_SCALE, conversionSample);
     }
 }
