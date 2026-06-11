@@ -8,16 +8,16 @@ import {YieldTokenOracle} from "../src/YieldTokenOracle.sol";
 import {MockERC4626} from "./mocks/MockERC4626.sol";
 
 contract YieldTokenOracleTest is Test {
-    address internal constant LOAN = address(0xBBB2);
+    address internal constant ASSET = address(0xBBB2);
 
     MockERC4626 internal vault;
 
     function setUp() public {
-        vault = new MockERC4626(LOAN, 18);
+        vault = new MockERC4626(ASSET, 18);
     }
 
     function _oracle() internal returns (YieldTokenOracle) {
-        return new YieldTokenOracle(IERC4626(address(vault)), LOAN);
+        return new YieldTokenOracle(IERC4626(address(vault)), ASSET);
     }
 
     function test_priceAtParity() public {
@@ -36,7 +36,7 @@ contract YieldTokenOracleTest is Test {
     }
 
     function test_priceWithEqualDecimals() public {
-        vault = new MockERC4626(LOAN, 6);
+        vault = new MockERC4626(ASSET, 6);
         vault.setRate(2e6);
         // 6-decimal shares and asset: parity would be 1e36, double is 2e36.
         assertEq(_oracle().price(), 2e36, "equal decimals, 2x rate");
