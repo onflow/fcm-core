@@ -39,7 +39,7 @@ contract DeployVault is ConfiguredScript {
         require(m.totalSupplyAssets > 0, "market has no loan liquidity; run SeedMarket first");
         _requirePoolsExist(c);
 
-        uint256 maxTvl = vm.envUint("MAX_TVL");
+        uint256 maxTvl = vm.envOf("MAX_TVL", uint256(0));
         string memory name = vm.envOr("VAULT_NAME", string("Flow Credit Markets WETH"));
         string memory symbol = vm.envOr("VAULT_SYMBOL", string("fcmWETH"));
         address[] memory grantees = vm.envOr("EARLY_ACCESS_GRANTEES", ",", new address[](0));
