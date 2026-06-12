@@ -13,8 +13,9 @@ foundryup
 
 ## Build & Test
 ```bash
-make ci             # fmt check + build + tests on the solidity project
-make solidity-test  # tests only
+make ci             # fmt check + build + tests (solidity + cadence)
+make solidity-test  # solidity tests only
+make cadence-test   # cadence tests only (requires the Flow CLI)
 ```
 
 ## Architecture

@@ -76,6 +76,8 @@ contract FCMVaultTest is Test {
                 symbol: "fcmWETH"
             })
         );
+        vm.prank(admin);
+        vault.setMaxTvl(1e21);
 
         // Pre-allow the addresses existing deposit tests use as receivers.
         // Gating-specific tests use fresh addresses (bob, carol, stranger).
@@ -266,7 +268,8 @@ contract FCMVaultTest is Test {
     /// position and share balance materially unaffected.
     function test_Redeem_TwoDepositorsIndependentRedeem() public {
         address alice = address(0xA);
-        address bob = address(0xB);
+        _allow(alice);
+        _allow(bob);
         uint256 aliceShares = _depositFor(alice, 1 ether);
         uint256 bobShares = _depositFor(bob, 3 ether);
 
