@@ -14,3 +14,6 @@
 emulator-account.pkey
 imports
 .env
+
+# Deployer key material — NEVER commit (public repo, real funds).
+/.private-key
