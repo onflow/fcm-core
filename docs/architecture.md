@@ -227,6 +227,28 @@ sequenceDiagram
       deactivate Outer
 ```
 
+## Escape Hatch
+A swap-free, in-kind exit, exposed as its own `redeemInKind` function distinct from the standard `redeem` above. The holder repays their pro-rata debt slice in `innerAsset`, their shares are burned, and they receive the pro-rata collateral (`outerAsset`) and yield (`innerShare`) in kind.
+```mermaid
+sequenceDiagram
+      autonumber
+      actor User
+      participant Outer as Outer ERC4626 Vault
+      participant Lender as Lending Protocol
+
+      User->>Outer: redeemInKind(outerShare)
+      activate Outer
+      Note over User,Outer: User supplies their debtSlice in innerAsset<br/>(no swap — the user funds the repayment)
+
+      Outer->>Lender: repay debtSlice (innerAsset)
+      Lender-->>Outer: withdraw collSlice (outerAsset)
+
+      Outer-->>User: collSlice (outerAsset) + yieldSlice (innerShare), in kind
+      deactivate Outer
+```
+
+Because it delivers the yield leg in kind instead of selling it, it needs no swap — so it doesn't depend on the AMM or the inner vault to liquidate that leg (the two routes a normal `redeem` would use), and stays available when AMM liquidity is thin or manipulated. It still settles through Morpho, so the collateral withdrawal is subject to Morpho's collateral-price check; an underwater position can't be exited until liquidation restores it. The caller must hold and approve the `innerAsset` debt slice (it is not sourced from the position), and the yield leg is returned in kind as `innerShare`, to be unwound separately.
+
 ## Rebalancing
 See **TODO LINK TO REBALANCING SPEC**
 
