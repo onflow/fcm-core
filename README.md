@@ -39,6 +39,32 @@ See [Architecture](./docs/architecture.md)
 | WETH/USD | [`0xD744044044C0Dd0c73BeA440747115674Ebae030`](https://evm.flowscan.io/address/0xD744044044C0Dd0c73BeA440747115674Ebae030?tab=read_contract) |
 | WFLOW/USD | [`0xd8848Ccc8beA82046Da0B144844118db17086af4`](https://evm.flowscan.io/address/0xd8848Ccc8beA82046Da0B144844118db17086af4?tab=read_write_contract) |
 
+Update these Pyth feeds with the Foundry script. The script requires `curl`; `--ffi` lets
+Foundry invoke it to fetch the latest update from Hermes. Run without `--broadcast` first to
+simulate the update:
+
+```bash
+cd solidity
+forge script script/UpdatePythPrices.s.sol:UpdatePythPrices \
+  --rpc-url https://mainnet.evm.nodes.onflow.org \
+  --account "$ACCOUNT" \
+  --ffi
+```
+
+Then broadcast it:
+
+```bash
+forge script script/UpdatePythPrices.s.sol:UpdatePythPrices \
+  --rpc-url https://mainnet.evm.nodes.onflow.org \
+  --account "$ACCOUNT" \
+  --ffi \
+  --broadcast
+```
+
+Foundry prompts for the account's keystore password. Add `--sender "$SENDER"` if the sender cannot
+be inferred from the account. The account must hold enough FLOW to cover the dynamic Pyth update
+fee printed by the script plus gas. Per Price Feed is 0.5 FLOW. 
+
 ### ERC-20 tokens
 
 | Token | Address |
@@ -61,4 +87,3 @@ Pools used by the vault (fetched via `Factory.getPool(tokenA, tokenB, fee)`):
 | :--- | :--- |
 | PYUSD0 / Yield token | `100` (0.01%) |
 | WETH / PYUSD0 | `3000` (0.30%) |
-
