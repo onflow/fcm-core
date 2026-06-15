@@ -8,7 +8,9 @@
   "marketLltv": "860000000000000000",
   "feeYieldDebt": 100,
   "feeAssetDebt": 3000,
-  "healthFactorUpperTarget": "1450000000000000000",
+  "healthFactorMin": "1250000000000000000",
+  "healthFactorMax": "1650000000000000000",
+  "healthFactorTarget": "1450000000000000000",
   "yieldOracle": "0x144F613490DD55C9844Ef139CFB9B63433dD349F",
   "swapFactory": "0xca6d7Bb03334bBf135902e1d919a5feccb461632",
   "yieldDebtPool": "0x9196e243b7562B0866309013f2F9EB63F83A690f"

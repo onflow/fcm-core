@@ -33,7 +33,7 @@ import {FCMVault} from "../src/FCMVault.sol";
 contract LiveCheck is Script {
     function run() public {
         FCMVault vault = FCMVault(vm.envAddress("VAULT"));
-        uint256 amount = vm.envOr("CHECK_AMOUNT", uint256(0.01e18));
+        uint256 amount = vm.envOr("CHECK_AMOUNT", uint256(0.00001e18));
         uint256 minRoundtripBps = vm.envOr("MIN_ROUNDTRIP_BPS", uint256(9700));
         IERC20 assetToken = IERC20(vault.asset());
 

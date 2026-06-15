@@ -9,3 +9,11 @@
 # Aderyn default report locations
 /report.md
 /solidity/report.md
+
+# flow
+emulator-account.pkey
+imports
+.env
+
+# Deployer key material — NEVER commit (public repo, real funds).
+/.private-key

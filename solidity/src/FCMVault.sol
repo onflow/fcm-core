@@ -52,8 +52,17 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @notice Pool fee tier for the asset/debt pool, used to reconcile
     ///         redeem surplus from loan token back to the underlying asset.
     uint24 public immutable feeAssetDebt;
-    // TODO: revisit health factor target in rebalancing (#6)
-    uint256 public immutable healthFactorUpperTarget;
+    /// @notice Health factor below which `rebalance` will delever (sell yield
+    ///         to repay debt). WAD-scaled.
+    uint256 public immutable healthFactorMin;
+    /// @notice Health factor above which `rebalance` will lever up (borrow
+    ///         more debt and swap to yield). WAD-scaled.
+    uint256 public immutable healthFactorMax;
+    /// @notice Health factor that `rebalance` drives the position toward
+    ///         whenever it acts. Also used by `deposit` to cap the
+    ///         per-deposit borrow. WAD-scaled; must satisfy
+    ///         `healthFactorMin < healthFactorTarget < healthFactorMax`.
+    uint256 public immutable healthFactorTarget;
     // @dev Address of the oracle for the yield token.
     //      We will deploy an oracle instance, which will provide the best available price information
     //      for the given token. This may be a 3rd party oracle, onchain price information, or both.
@@ -86,23 +95,37 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         uint256 marketLltv;
         uint24 feeYieldDebt;
         uint24 feeAssetDebt;
-        uint256 healthFactorUpperTarget;
+        uint256 healthFactorMin;
+        uint256 healthFactorMax;
+        uint256 healthFactorTarget;
         address yieldOracle;
         address admin;
         string name;
         string symbol;
     }
 
+    /// @notice Emitted whenever the vault is re-balanced
+    /// @param  caller             Address that invoked `rebalance`.
+    /// @param  healthFactorBefore Health factor at the start of the call (WAD-scaled).
+    /// @param  healthFactorAfter  Health factor after the rebalance (WAD-scaled).
+    event Rebalanced(address indexed caller, uint256 healthFactorBefore, uint256 healthFactorAfter);
+
     constructor(InitParams memory p)
         ERC20(p.name, p.symbol)
         ERC4626(p.collateral)
         Ownable(p.admin)
     {
+        require(p.healthFactorMin >= MarketLib.WAD, "HF min < WAD");
+        require(p.healthFactorMin <= p.healthFactorTarget, "HF min > target");
+        require(p.healthFactorTarget <= p.healthFactorMax, "HF target > max");
+
         loanToken = p.loanToken;
         yieldToken = p.yieldToken;
         feeYieldDebt = p.feeYieldDebt;
         feeAssetDebt = p.feeAssetDebt;
-        healthFactorUpperTarget = p.healthFactorUpperTarget;
+        healthFactorMin = p.healthFactorMin;
+        healthFactorMax = p.healthFactorMax;
+        healthFactorTarget = p.healthFactorTarget;
         yieldOracle = p.yieldOracle;
 
         market = MarketParams({
@@ -332,6 +355,112 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         }
     }
 
+    /// @notice Drive the vault's leveraged Morpho position back toward
+    ///         `healthFactorTarget`.
+    /// @dev    Normal (non-forced) behavior:
+    ///         - If `hf ∈ [healthFactorMin, healthFactorMax]`, the call is a
+    ///           no-op
+    ///         - If `hf > healthFactorMax`, the position is under-levered:
+    ///           borrow exactly `addDebt = (maxBorrow / target) - debt` of
+    ///           the loan token and swap it to the yield token.
+    ///         - If `hf < healthFactorMin`, the position is over-levered:
+    ///           sell exactly enough yield token to repay
+    ///           `repayAmount = debt - (maxBorrow / target)` of debt.
+    ///
+    /// @param  force If true, rebalance regardless of current health factor
+    function rebalance(bool force) external {
+        market.accrueInterest();
+        uint256 currentDebt = market.debt();
+        uint256 maxBorrow = market.maxBorrow(); // independent of current debt balance
+        // we compute inline here rather than use MarketLib.healthFactor to save a SLOAD
+        uint256 hfBefore =
+            currentDebt == 0 ? type(uint256).max : maxBorrow.mulDiv(MarketLib.WAD, currentDebt);
+
+        if (!force) {
+            if (hfBefore >= healthFactorMin && hfBefore <= healthFactorMax) {
+                return;
+            }
+        }
+
+        if (hfBefore > healthFactorTarget) {
+            _rebalanceLever(maxBorrow, currentDebt);
+        } else if (hfBefore < healthFactorTarget) {
+            _rebalanceDelever(maxBorrow, currentDebt);
+        }
+
+        emit Rebalanced(msg.sender, hfBefore, market.healthFactor());
+    }
+
+    /// @dev Lever-up branch of `rebalance`: position is under-levered
+    ///      (`hf > target`). Borrow exactly the debt slice that lands the
+    ///      position at `healthFactorTarget` and swap it into yield token.
+    ///
+    ///      `targetDebt = maxBorrow * WAD / healthFactorTarget` is the debt
+    ///      level that, against the current collateral, produces an HF of
+    ///      exactly target. Since `hf > target`, `currentDebt < targetDebt`.
+    ///      The borrow leg adds `targetDebt - currentDebt`.
+    /// @param maxBorrow   Current maximum-borrowable amount at LLTV (independent of current debt)
+    /// @param currentDebt Current outstanding debt (caller passes the same
+    ///                    value used to compute `hfBefore` to avoid a
+    ///                    second `MORPHO.position` SLOAD).
+    /// @return additionalDebt Amount of loan token borrowed in this call.
+    function _rebalanceLever(uint256 maxBorrow, uint256 currentDebt)
+        internal
+        returns (uint256 additionalDebt)
+    {
+        uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorTarget);
+        if (targetDebt <= currentDebt) return 0;
+        additionalDebt = targetDebt - currentDebt;
+
+        market.borrow(additionalDebt);
+        SwapLib.swapExactIn(address(loanToken), address(yieldToken), feeYieldDebt, additionalDebt);
+    }
+
+    /// @dev Delever branch of `rebalance`: position is over-levered
+    ///      (`hf < target`). Sell yield token for loan token to repay
+    ///      enough debt to land the position back at `healthFactorTarget`.
+    ///
+    ///      Sizing:
+    ///        targetDebt    = maxBorrow * WAD / healthFactorTarget
+    ///        repayAmount   = currentDebt - targetDebt
+    ///        yieldToSell   = repayAmount * 1e36 / yieldOraclePrice
+    ///
+    ///      `yieldToSell` is the oracle-implied yield amount whose loan-token
+    ///      value equals `repayAmount`. AMM slippage shows up as a small
+    ///      under-shoot of target (post-rebalance HF is slightly below
+    ///      target if the swap realized less than oracle).
+    ///
+    /// @param maxBorrow   Current maximum-borrowable amount at LLTV (may be 0
+    ///                    after a liquidation that wiped collateral).
+    /// @param currentDebt Current outstanding debt.
+    /// @return repaid Amount of loan token repaid to Morpho in this call.
+    function _rebalanceDelever(uint256 maxBorrow, uint256 currentDebt)
+        internal
+        returns (uint256 repaid)
+    {
+        // conceptually, target debt is maxBorrow / hfTarget
+        uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorTarget);
+        if (targetDebt >= currentDebt) return 0;
+        uint256 repayAmount = currentDebt - targetDebt;
+
+        uint256 yieldPrice = IOracle(yieldOracle).price();
+        // Oracle-implied yield amount whose loan-token value equals
+        // `repayAmount` (not accounting for slippage)
+        uint256 yieldToSell = repayAmount.mulDiv(MarketLib.ORACLE_PRICE_SCALE, yieldPrice);
+
+        uint256 yieldBalance = yieldToken.balanceOf(address(this));
+        if (yieldToSell > yieldBalance) yieldToSell = yieldBalance;
+        if (yieldToSell == 0) return 0;
+
+        uint256 loanBefore = loanToken.balanceOf(address(this));
+        SwapLib.swapExactIn(address(yieldToken), address(loanToken), feeYieldDebt, yieldToSell);
+        uint256 loanGot = loanToken.balanceOf(address(this)) - loanBefore;
+
+        // Cap repayment at outstanding debt
+        repayAmount = loanGot > currentDebt ? currentDebt : loanGot;
+        if (repayAmount > 0) market.repay(repayAmount);
+    }
+
     /// @notice Not implemented. Use `deposit` instead.
     /// @dev    `mint` would need to invert the borrow-and-swap leg to solve
     ///         for the asset input that produces an exact share output —
@@ -367,7 +496,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     }
 
     /// @dev How much loan token to borrow against `newAssets` while keeping
-    ///      the position at `healthFactorUpperTarget`. Returns the smaller
+    ///      the position at `healthFactorTarget`. Returns the smaller
     ///      of two caps:
     ///      - `capFromNewAsset`: the borrow `newAssets` of fresh collateral
     ///        could support on its own at the target HF.
@@ -380,11 +509,15 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///      rebalance an over-collateralized protocol back to target, and
     ///      no deposit can push an already-too-leveraged position past the
     ///      target HF (`capFromTargetDebt` clamps to 0 in that case).
+    ///
+    ///      Protocol-wide rebalancing (driving the whole position back to
+    ///      `healthFactorTarget` regardless of new asset size) is the job of
+    ///      `rebalance`, not `deposit`.
     function _targetBorrowAgainst(uint256 newAssets) internal view returns (uint256) {
         if (newAssets == 0) return 0;
         uint256 capFromNewAsset =
-            market.maxBorrowFor(newAssets).mulDiv(MarketLib.WAD, healthFactorUpperTarget);
-        uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(healthFactorUpperTarget);
+            market.maxBorrowFor(newAssets).mulDiv(MarketLib.WAD, healthFactorTarget);
+        uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(healthFactorTarget);
         return capFromNewAsset < capFromTargetDebt ? capFromNewAsset : capFromTargetDebt;
     }
 
