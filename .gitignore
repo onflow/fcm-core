@@ -17,3 +17,6 @@ imports
 
 # Deployer key material — NEVER commit (public repo, real funds).
 /.private-key
+
+# Forge broadcast logs / deployment transaction artifacts — local only.
+/solidity/broadcast/
