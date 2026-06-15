@@ -29,7 +29,9 @@ contract FCMVaultTest is Test {
     uint256 internal constant WETH_PRICE = 2000e36;
     uint256 internal constant YIELD_PRICE = 1e36;
     uint256 internal constant LLTV = 0.86e18;
+    uint256 internal constant HEALTH_FACTOR_MIN = 1.25e18;
     uint256 internal constant HEALTH_FACTOR_TARGET = 1.45e18;
+    uint256 internal constant HEALTH_FACTOR_MAX = 1.65e18;
     uint24 internal constant FEE = 100;
     uint24 internal constant FEE_ASSET_DEBT = 3000;
 
@@ -65,7 +67,9 @@ contract FCMVaultTest is Test {
                 marketLltv: LLTV,
                 feeYieldDebt: FEE,
                 feeAssetDebt: FEE_ASSET_DEBT,
-                healthFactorUpperTarget: HEALTH_FACTOR_TARGET,
+                healthFactorMin: HEALTH_FACTOR_MIN,
+                healthFactorMax: HEALTH_FACTOR_MAX,
+                healthFactorTarget: HEALTH_FACTOR_TARGET,
                 yieldOracle: address(yieldOracle),
                 admin: admin,
                 name: "Flow Credit Markets WETH",
@@ -594,6 +598,159 @@ contract FCMVaultTest is Test {
         vault.transfer(bob, shares);
     }
 
+    // ---------------------------------------------------------------------
+    // Rebalance
+    // ---------------------------------------------------------------------
+
+    /// @notice After a fresh deposit, HF lands exactly at the configured
+    ///         target (1.45), which is inside [min=1.25, max=1.65]. A
+    ///         non-forced rebalance is a no-op: debt, collateral, and FUSDEV
+    ///         balance are unchanged.
+    function test_Rebalance_NoopInsideBand() public {
+        _depositFor(user, 1 ether);
+
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+        uint256 hfBefore = _healthFactor();
+
+        vault.rebalance(false);
+
+        assertEq(WETH.balanceOf(address(MORPHO)), collBefore, "coll unchanged");
+        assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev unchanged");
+        assertEq(_healthFactor(), hfBefore, "hf unchanged");
+    }
+
+    /// @notice When the collateral price rises enough to push HF above max
+    ///         (1.65), `rebalance` borrows additional loan token and swaps
+    ///         it into yield token, driving HF back to target (1.45). The
+    ///         vault's collateral and the position's borrow shares both
+    ///         move in the expected directions.
+    function test_Rebalance_LeversWhenAboveMax() public {
+        _depositFor(user, 1 ether);
+
+        // Push HF above 1.65 by increasing collateral value
+        marketOracle.setPrice(2300e36);
+        assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "above max");
+
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance(false);
+
+        // HF returns to target (within rounding from share math).
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "hf at target");
+        // Lever path: more yield token now held.
+        assertGt(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev grew");
+        // No idle loan token left behind by the lever swap.
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
+    }
+
+    /// @notice When the collateral price drops enough to push HF below min
+    ///         (1.25), `rebalance` sells yield token for loan token and
+    ///         repays just enough debt to land HF back at target.
+    function test_Rebalance_DeleversWhenBelowMin() public {
+        _depositFor(user, 1 ether);
+
+        // Push HF below 1.25 by lowering collateral value
+        marketOracle.setPrice(1700e36);
+        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
+
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance(false);
+
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "hf at target");
+        // Delever path: yield token shrunk.
+        assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev shrank");
+        // Repay leg consumed all realized loan token.
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
+    }
+
+    /// @notice `force=true` rebalances when HF is inside the dead band but
+    ///         not exactly at target. Here we nudge HF slightly off-target
+    ///         (still inside [min, max]); a non-forced call is a no-op, a
+    ///         forced call pulls HF back to target.
+    function test_Rebalance_ForceRebalancesInsideBand() public {
+        _depositFor(user, 1 ether);
+
+        // Small collateral price increase leaves HF inside [1.25, 1.65] but above target.
+        marketOracle.setPrice(2100e36);
+        uint256 hfBefore = _healthFactor();
+        assertGt(hfBefore, HEALTH_FACTOR_TARGET, "above target");
+        assertLt(hfBefore, HEALTH_FACTOR_MAX, "still inside band");
+
+        // Without force the call is a no-op.
+        vault.rebalance(false);
+        assertEq(_healthFactor(), hfBefore, "non-forced: noop");
+
+        // With force the position is driven to target.
+        vault.rebalance(true);
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "forced: at target");
+    }
+
+    /// @notice `force=true` is still a no-op when HF is exactly at target —
+    ///         neither lever nor delever branch fires, so no swap or borrow
+    ///         is issued.
+    function test_Rebalance_ForceAtTargetIsNoop() public {
+        _depositFor(user, 1 ether);
+        assertApproxEqAbs(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "at target");
+
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+
+        vault.rebalance(true);
+
+        assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev unchanged");
+        assertEq(WETH.balanceOf(address(MORPHO)), collBefore, "coll unchanged");
+    }
+
+    /// @notice Liquidation recovery: a liquidator seizes most of the vault's
+    ///         collateral, leaving the position under-collateralized (HF well below WAD).
+    ///         `rebalance` must not revert; it sells yield on a best-effort
+    ///         basis and repays as much debt as the realized loan token covers.
+    function test_Rebalance_LiquidationRecoveryDoesNotRevert() public {
+        _depositFor(user, 1 ether);
+
+        // A liquidation repays 200 of the ~1186 debt and seizes 0.7 of the
+        // 1 ether collateral (a contrived ratio that grabs far more value
+        // than it repays)
+        // collateral 0.3 ether → maxBorrow 0.3 * 2000 * 0.86 = 516 vs ~986 debt → HF ≈ 0.52.
+        _liquidate({seizedCollateral: 0.7 ether, repaidAssets: 200e18});
+        assertLt(_healthFactor(), 1e18, "underwater");
+
+        uint256 debtBefore = _debt();
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        // Best-effort: should succeed even though target is unreachable.
+        vault.rebalance(false);
+
+        // rebalance made progress: debt repaid and yield consumed.
+        assertLt(_debt(), debtBefore, "debt reduced");
+        assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield consumed");
+    }
+
+    /// @notice Constructor rejects HF configurations where the dead band is
+    ///         malformed (target < min, target > max) or the lower bound is
+    ///         below WAD (which would allow rebalancing into a liquidatable
+    ///         position).
+    function test_Rebalance_ConstructorValidatesHfBand() public {
+        FCMVault.InitParams memory p = _baseParams();
+        p.healthFactorMin = 0.9e18;
+        vm.expectRevert(bytes("HF min < WAD"));
+        new FCMVault(p);
+
+        p = _baseParams();
+        p.healthFactorMin = 1.6e18;
+        p.healthFactorTarget = 1.5e18;
+        vm.expectRevert(bytes("HF min > target"));
+        new FCMVault(p);
+
+        p = _baseParams();
+        p.healthFactorTarget = 2e18;
+        p.healthFactorMax = 1.6e18;
+        vm.expectRevert(bytes("HF target > max"));
+        new FCMVault(p);
+    }
+
     // ---- helpers -------------------------------------------------------
 
     function _allow(address account) internal {
@@ -606,6 +763,50 @@ contract FCMVaultTest is Test {
         bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
         vault.revokeRole(role, account);
+    }
+
+    function _debt() internal view returns (uint256) {
+        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
+        Id marketId = MarketParamsLib.id(MarketParams(lt, ct, oracle, irm, lltv_));
+        Position memory pos = MORPHO.position(marketId, address(vault));
+        if (pos.borrowShares == 0) return 0;
+        Market memory mkt = MORPHO.market(marketId);
+        return (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1))
+            / (uint256(mkt.totalBorrowShares) + 1e6);
+    }
+
+    /// @dev Simulate a liquidation of the vault's position via the MockMorpho
+    ///      test hook: seize `seizedCollateral` of collateral and repay
+    ///      `repaidAssets` of debt.
+    function _liquidate(uint256 seizedCollateral, uint256 repaidAssets) internal {
+        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
+        MockMorpho(address(MORPHO))
+            .liquidate(
+                MarketParams(lt, ct, oracle, irm, lltv_),
+                address(vault),
+                seizedCollateral,
+                repaidAssets
+            );
+    }
+
+    function _baseParams() internal view returns (FCMVault.InitParams memory) {
+        return FCMVault.InitParams({
+            collateral: WETH,
+            loanToken: PYUSD0,
+            yieldToken: FUSDEV,
+            marketOracle: address(marketOracle),
+            marketIrm: MOCK_IRM,
+            marketLltv: LLTV,
+            feeYieldDebt: FEE,
+            feeAssetDebt: FEE_ASSET_DEBT,
+            healthFactorMin: HEALTH_FACTOR_MIN,
+            healthFactorMax: HEALTH_FACTOR_MAX,
+            healthFactorTarget: HEALTH_FACTOR_TARGET,
+            yieldOracle: address(yieldOracle),
+            admin: admin,
+            name: "x",
+            symbol: "x"
+        });
     }
 
     function _healthFactor() internal view returns (uint256) {

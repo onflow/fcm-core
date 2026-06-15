@@ -120,6 +120,51 @@ contract MockMorpho {
         IERC20(mp.collateralToken).transfer(receiver, assets);
     }
 
+    /// @notice Test-only hook that simulates a liquidation against `borrower`:
+    ///         seizes `seizedCollateral` units of collateral and repays
+    ///         `repaidAssets` of loan-token debt. The caller chooses how much
+    ///         of each independently.
+    /// @dev    Only the position/market accounting is mutated to mirror the
+    ///         net effect of a real Morpho `liquidate`: collateral is reduced
+    ///         and the borrow position (shares + market totals) is paid down
+    ///         using the same share rounding as `repay`. No tokens are moved
+    ///         and no liquidation-incentive or bad-debt math is applied —
+    ///         tests only need the resulting accounting state (e.g. an
+    ///         underwater position with genuinely reduced collateral) to
+    ///         exercise rebalance recovery. The share burn is capped at the
+    ///         position's balance, and `repaidAssets == 0` makes this a pure
+    ///         collateral seizure.
+    /// @param  mp               Market params identifying the position.
+    /// @param  borrower         Position owner being liquidated.
+    /// @param  seizedCollateral Collateral units removed from the position.
+    /// @param  repaidAssets     Loan-token debt repaid (reduces borrow shares
+    ///                          and market totals).
+    function liquidate(
+        MarketParams memory mp,
+        address borrower,
+        uint256 seizedCollateral,
+        uint256 repaidAssets
+    ) external {
+        Id id = mp.id();
+        Market storage m = market[id];
+
+        position[id][borrower].collateral -= uint128(seizedCollateral);
+
+        if (repaidAssets > 0) {
+            uint256 sharesToBurn = _mulDivUp(
+                repaidAssets,
+                uint256(m.totalBorrowShares) + VIRTUAL_SHARES,
+                uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
+            );
+            uint128 posShares = position[id][borrower].borrowShares;
+            if (sharesToBurn > posShares) sharesToBurn = posShares;
+
+            position[id][borrower].borrowShares = posShares - uint128(sharesToBurn);
+            m.totalBorrowShares -= uint128(sharesToBurn);
+            m.totalBorrowAssets = uint128(uint256(m.totalBorrowAssets) - repaidAssets);
+        }
+    }
+
     function _mulDivUp(uint256 x, uint256 y, uint256 d) internal pure returns (uint256) {
         return (x * y + d - 1) / d;
     }

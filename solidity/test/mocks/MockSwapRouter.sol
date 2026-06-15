@@ -22,6 +22,7 @@ contract MockSwapRouter {
     {
         MockERC20(p.tokenIn).burn(msg.sender, p.amountIn);
         amountOut = p.amountIn * (10_000 - feeBps) / 10_000;
+        require(amountOut >= p.amountOutMinimum, "Too little received");
         MockERC20(p.tokenOut).mint(p.recipient, amountOut);
     }
 }
