@@ -104,3 +104,12 @@ Pools used by the vault (fetched via `Factory.getPool(tokenA, tokenB, fee)`):
 | :--- | :--- |
 | PYUSD0 / Yield token | `100` (0.01%) |
 | WETH / PYUSD0 | `3000` (0.30%) |
+
+## ERC4626 Router
+
+Generic [ERC4626-Alliance](https://github.com/ERC4626-Alliance/ERC4626-Contracts) router for user-facing deposit/redeem slippage. Used by integrators, not a vault dependency.
+
+| Network | Address |
+| :--- | :--- |
+| Mainnet | [`0xDc1A2Bf9E89fA176e56013b54A1377a39C753fA7`](https://evm.flowscan.io/address/0xDc1A2Bf9E89fA176e56013b54A1377a39C753fA7) |
+| Testnet | [`0x8e44a03b1019D4060c16f04103bB8942029E42bf`](https://evm-testnet.flowscan.io/address/0x8e44a03b1019D4060c16f04103bB8942029E42bf) |
