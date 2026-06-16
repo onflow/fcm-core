@@ -50,10 +50,10 @@ contract DeployVault is ConfiguredScript {
         address yieldOracle = c.yieldOracle;
         if (yieldOracle == address(0)) {
             yieldOracle = address(new YieldTokenOracle(IERC4626(c.yieldToken), c.loanToken));
-            uint256 p = YieldTokenOracle(yieldOracle).price();
-            require(p > 0, "yield oracle reports zero price");
-            console.log("yield oracle deployed at %s, NAV price %s", yieldOracle, p);
         }
+        uint256 p = YieldTokenOracle(yieldOracle).price();
+        require(p > 0, "yield oracle reports zero price");
+        console.log("yield oracle deployed at %s, NAV price %s", yieldOracle, p);
 
         FCMVault vault = new FCMVault(
             FCMVault.InitParams({
