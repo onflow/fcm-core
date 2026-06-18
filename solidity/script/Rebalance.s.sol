@@ -33,7 +33,7 @@ import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 ///
 ///         Usage (dry-run first by dropping --broadcast):
 ///           VAULT=0x... forge script script/Rebalance.s.sol \
-///             --rpc-url flow_mainnet --broadcast --private-key $PRIVATE_KEY
+///             --rpc-url flow_mainnet --broadcast --account "$ACCOUNT"
 contract Rebalance is Script {
     using MarketParamsLib for MarketParams;
     using SharesMathLib for uint256;

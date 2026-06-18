@@ -36,7 +36,7 @@ interface IPoolTokens {
 ///           SWAP_AMOUNT=<FLOW wei to convert; default = half native balance> \
 ///           SLIPPAGE_BPS=<max slippage, default 300> \
 ///           forge script script/SwapForWeth.s.sol --rpc-url flow_mainnet \
-///             --broadcast --private-key $PRIVATE_KEY
+///             --broadcast --account "$ACCOUNT"
 contract SwapForWeth is ConfiguredScript {
     // Canonical Wrapped FLOW on Flow EVM mainnet.
     IWFLOW internal constant WFLOW = IWFLOW(0xd3bF53DAC106A0290B0483EcBC89d40FcC961f3e);
