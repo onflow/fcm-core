@@ -75,22 +75,34 @@ contract MockMorpho {
     function repay(
         MarketParams memory mp,
         uint256 assets,
-        uint256,
-        /*shares*/
+        uint256 shares,
         address onBehalf,
         bytes calldata
     ) external returns (uint256, uint256) {
         Id id = mp.id();
         Market storage m = market[id];
 
-        uint256 sharesToBurn = _mulDivUp(
-            assets,
-            uint256(m.totalBorrowShares) + VIRTUAL_SHARES,
-            uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
-        );
+        // Mirror Morpho: exactly one of (assets, shares) is set. By-shares repays a
+        // precise share count (assets rounded up); by-assets converts assets -> shares.
+        uint256 sharesToBurn;
+        if (shares > 0) {
+            sharesToBurn = shares;
+            assets = _mulDivUp(
+                shares,
+                uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS,
+                uint256(m.totalBorrowShares) + VIRTUAL_SHARES
+            );
+        } else {
+            // Morpho rounds by-assets repay DOWN (toSharesDown).
+            sharesToBurn = _mulDivDown(
+                assets,
+                uint256(m.totalBorrowShares) + VIRTUAL_SHARES,
+                uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
+            );
+        }
+        // No clamp: like Morpho, over-burning more shares than the position holds
+        // underflows and reverts.
         uint128 posShares = position[id][onBehalf].borrowShares;
-        if (sharesToBurn > posShares) sharesToBurn = posShares;
-
         position[id][onBehalf].borrowShares = posShares - uint128(sharesToBurn);
         m.totalBorrowShares -= uint128(sharesToBurn);
         m.totalBorrowAssets = uint128(uint256(m.totalBorrowAssets) - assets);
@@ -167,5 +179,9 @@ contract MockMorpho {
 
     function _mulDivUp(uint256 x, uint256 y, uint256 d) internal pure returns (uint256) {
         return (x * y + d - 1) / d;
+    }
+
+    function _mulDivDown(uint256 x, uint256 y, uint256 d) internal pure returns (uint256) {
+        return (x * y) / d;
     }
 }

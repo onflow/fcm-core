@@ -40,6 +40,7 @@ abstract contract ConfiguredScript is Script {
         address yieldOracle;
         address swapFactory;
         address yieldDebtPool;
+        uint256 recoveryDelay;
     }
 
     function _loadConfig() internal view returns (Config memory c) {
@@ -66,6 +67,7 @@ abstract contract ConfiguredScript is Script {
         c.yieldOracle = vm.parseJsonAddress(json, ".yieldOracle");
         c.swapFactory = vm.parseJsonAddress(json, ".swapFactory");
         c.yieldDebtPool = vm.parseJsonAddress(json, ".yieldDebtPool");
+        c.recoveryDelay = vm.parseJsonUint(json, ".recoveryDelay");
     }
 
     function _marketParams(Config memory c) internal pure returns (MarketParams memory) {

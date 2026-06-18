@@ -78,6 +78,7 @@ contract TvlLimitTest is Test {
                 healthFactorTarget: HEALTH_FACTOR_TARGET,
                 yieldOracle: address(yieldOracle),
                 admin: admin,
+                recoveryDelay: 7 days,
                 name: "Flow Credit Markets WETH",
                 symbol: "fcmWETH"
             })

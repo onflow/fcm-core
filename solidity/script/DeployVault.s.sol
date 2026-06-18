@@ -70,6 +70,7 @@ contract DeployVault is ConfiguredScript {
                 healthFactorTarget: c.healthFactorTarget,
                 yieldOracle: yieldOracle,
                 admin: deployer,
+                recoveryDelay: c.recoveryDelay,
                 name: name,
                 symbol: symbol
             })
