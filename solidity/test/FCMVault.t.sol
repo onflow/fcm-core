@@ -757,13 +757,11 @@ contract FCMVaultTest is Test {
 
     /// @notice Full happy-path lifecycle in a single flow: a user deposits,
     ///         the position is rebalanced, then the user redeems all shares.
-    ///         The individual legs are covered in isolation above; this test
-    ///         asserts they compose end to end.
     ///
     ///         The rebalance step is set up to perform a real balancing
-    ///         operation, not a no-op: a collateral price rise pushes HF above
-    ///         max, so a non-forced rebalance must lever up — borrowing more
-    ///         debt and buying more yield. We assert debt and yield strictly
+    ///         operation: a collateral price rise pushes HF above
+    ///         max, so a non-forced rebalance must borrow more
+    ///         debt and buy more yield. We assert debt and yield
     ///         grew and HF returned to target.
     ///
     ///         NAV is price-invariant in this rig (collateral is measured in
