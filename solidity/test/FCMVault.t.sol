@@ -365,6 +365,112 @@ contract FCMVaultTest is Test {
         assertEq(vault.balanceOf(user), sharesBefore, "shares unchanged");
     }
 
+    // ---- in-kind redeem (escape hatch) ------------------------------------
+
+    /// @notice Escape hatch: a holder exits in kind — repays its pro-rata debt in
+    ///         loanToken and receives collateral + yield tokens directly, no swap.
+    ///         (A swap-based redeem delivers only the asset and zero yield, so
+    ///         receiving FUSDEV proves the swap-free path ran.)
+    function test_RedeemInKind_FullExit() public {
+        uint256 shares = _depositFor(user, 1 ether);
+
+        // Sole holder exiting in full; pin the exact slices the vault must
+        // deliver. claims = totalSupply + 10**offset (offset 6), so the slice
+        // is shares/claims (just under 1, from the virtual-share offset).
+        uint256 collateral = WETH.balanceOf(address(MORPHO));
+        uint256 yield = FUSDEV.balanceOf(address(vault));
+        uint256 claims = vault.totalSupply() + 1e6;
+        uint256 expColl = collateral * shares / claims; // floors
+        uint256 expYield = yield * shares / claims; // floors
+
+        // Caller funds the debt repayment in loanToken and approves the vault.
+        MockERC20(address(PYUSD0)).mint(user, 1_000_000 ether);
+        uint256 loanBefore = PYUSD0.balanceOf(user);
+
+        vm.startPrank(user);
+        PYUSD0.approve(address(vault), type(uint256).max);
+        (uint256 collOut, uint256 yieldOut) = vault.redeemInKind(shares, user, user);
+        vm.stopPrank();
+
+        assertEq(vault.balanceOf(user), 0, "shares burned");
+        assertEq(collOut, expColl, "exact collateral slice");
+        assertEq(yieldOut, expYield, "exact yield slice");
+        assertEq(WETH.balanceOf(user), collOut, "collateral delivered in kind");
+        assertEq(FUSDEV.balanceOf(user), yieldOut, "yield delivered in kind");
+
+        // Debt and yield share the same base (1:1 borrow->swap, no interest), so
+        // the debt slice is just the yield slice rounded up: the +1 proves Ceil
+        // (Floor would give equality), i.e. the redeemer over-repays by 1 wei.
+        uint256 debtSpent = loanBefore - PYUSD0.balanceOf(user);
+        assertEq(debtSpent, yieldOut + 1, "debt slice = yield slice + 1 (rounded up)");
+    }
+
+    /// @notice A de-allowlisted holder can still exit: the escape hatch burns
+    ///         shares, and the allowlist hook permits burns (same as `redeem`).
+    function test_RedeemInKind_WorksWhenDeAllowlisted() public {
+        uint256 shares = _depositFor(user, 1 ether);
+
+        uint256 expColl = WETH.balanceOf(address(MORPHO)) * shares / (vault.totalSupply() + 1e6);
+        uint256 expYield = FUSDEV.balanceOf(address(vault)) * shares / (vault.totalSupply() + 1e6);
+
+        bytes32 role = vault.EARLY_ACCESS_ROLE();
+        vm.prank(admin);
+        vault.revokeRole(role, user);
+
+        MockERC20(address(PYUSD0)).mint(user, 1_000_000 ether);
+        vm.startPrank(user);
+        PYUSD0.approve(address(vault), type(uint256).max);
+        (uint256 collOut, uint256 yieldOut) = vault.redeemInKind(shares, user, user);
+        vm.stopPrank();
+
+        // Same full in-kind slice as a normal exit — de-allowlisting changes nothing.
+        assertEq(vault.balanceOf(user), 0, "exited despite de-allowlist");
+        assertEq(collOut, expColl, "exact collateral slice");
+        assertEq(yieldOut, expYield, "exact yield slice");
+        assertEq(WETH.balanceOf(user), collOut, "collateral delivered in kind");
+        assertEq(FUSDEV.balanceOf(user), yieldOut, "yield delivered in kind");
+    }
+
+    /// @notice Partial in-kind exit alongside a second holder. Confirms the slices
+    ///         are floored pro-rata, the debt slice rounds UP (Ceil — the redeemer
+    ///         over-repays by 1 wei), and the remaining holder's value-per-share is
+    ///         not diluted.
+    function test_RedeemInKind_PartialExitDoesNotDiluteRemainingHolder() public {
+        _allow(bob);
+        uint256 aliceShares = _depositFor(user, 1 ether);
+        uint256 bobShares = _depositFor(bob, 3 ether);
+
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+        uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
+        uint256 bobValueBefore = vault.convertToAssets(bobShares);
+
+        // Burn a non-round portion so the debt slice has a nonzero remainder and
+        // the Ceil rounding actually bites. claims = totalSupply + 10**offset.
+        uint256 exit = aliceShares / 3;
+        uint256 claims = vault.totalSupply() + 1e6;
+
+        MockERC20(address(PYUSD0)).mint(user, 1_000_000 ether);
+        uint256 loanBefore = PYUSD0.balanceOf(user);
+        vm.startPrank(user);
+        PYUSD0.approve(address(vault), type(uint256).max);
+        (uint256 collOut, uint256 yieldOut) = vault.redeemInKind(exit, user, user);
+        vm.stopPrank();
+
+        // Slices are exactly the floored pro-rata fraction of the position.
+        assertEq(collOut, collBefore * exit / claims, "collateral slice floored pro-rata");
+        assertEq(yieldOut, yieldBefore * exit / claims, "yield slice floored pro-rata");
+
+        // Same base as the yield slice, so the +1 is the Ceil rounding biting here
+        // on a partial slice.
+        uint256 debtSpent = loanBefore - PYUSD0.balanceOf(user);
+        assertEq(debtSpent, yieldOut + 1, "debt slice rounded up vs floored yield slice");
+
+        // Bob stayed put: shares untouched and value-per-share did not drop — every
+        // rounding residual stays with the vault, never leaking to the exiter.
+        assertEq(vault.balanceOf(bob), bobShares, "bob shares untouched");
+        assertGe(vault.convertToAssets(bobShares), bobValueBefore, "bob not diluted");
+    }
+
     // ---- deposit edge-case tests ------------------------------------------
 
     /// @dev Verifies that a deposit only borrows against the depositor's own

@@ -110,6 +110,19 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @param  healthFactorAfter  Health factor after the rebalance (WAD-scaled).
     event Rebalanced(address indexed caller, uint256 healthFactorBefore, uint256 healthFactorAfter);
 
+    /// @notice Emitted on a `redeemInKind` (escape hatch): `owner`'s `shares`
+    ///         burned, `caller` repaid `debtRepaid` loanToken, `receiver` got
+    ///         `collateralOut` collateral + `yieldOut` yield in kind.
+    event RedeemInKind(
+        address indexed caller,
+        address indexed receiver,
+        address indexed owner,
+        uint256 shares,
+        uint256 debtRepaid,
+        uint256 collateralOut,
+        uint256 yieldOut
+    );
+
     constructor(InitParams memory p)
         ERC20(p.name, p.symbol)
         ERC4626(p.collateral)
@@ -353,6 +366,56 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
             uint256 scaledColl = collSlice.mulDiv(loanGot, debtSlice);
             if (scaledColl > 0) market.withdrawCollateral(scaledColl);
         }
+    }
+
+    /// @notice Escape hatch — swap-free, in-kind redemption: the caller
+    ///         repays `owner`'s pro-rata debt slice in `loanToken` and burns
+    ///         `owner`'s `shares`; `receiver` receives the pro-rata collateral and
+    ///         yield tokens directly. Needs no swap — the yield leg is delivered
+    ///         in kind rather than sold on the AMM; the collateral leg still
+    ///         settles through Morpho. Rounding favors the vault: the debt slice
+    ///         rounds up, collateral/yield slices round down.
+    ///
+    ///         Reverts if `msg.sender != owner` and allowance is insufficient, if
+    ///         the caller has not approved this vault for the debt slice, or if the
+    ///         position is underwater (Morpho blocks the collateral withdrawal).
+    /// @param  shares        Vault shares to burn.
+    /// @param  receiver      Account credited with the collateral + yield in kind.
+    /// @param  owner         Account whose shares are burned and whose pro-rata
+    ///                       debt the caller repays.
+    /// @return collateralOut Collateral tokens delivered to `receiver`.
+    /// @return yieldOut      Yield tokens delivered to `receiver`.
+    function redeemInKind(uint256 shares, address receiver, address owner)
+        public
+        returns (uint256 collateralOut, uint256 yieldOut)
+    {
+        if (shares == 0) return (0, 0);
+        if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
+
+        market.accrueInterest();
+        uint256 claims = _totalClaims();
+
+        // Caller repays the pro-rata debt slice (rounded up — never under-repays);
+        // the caller supplies the loanToken, so no swap is needed.
+        uint256 debtRepaid = market.debt().mulDiv(shares, claims, Math.Rounding.Ceil);
+        if (debtRepaid > 0) {
+            loanToken.safeTransferFrom(msg.sender, address(this), debtRepaid);
+            market.repay(debtRepaid);
+        }
+
+        // Pro-rata collateral + yield, delivered in kind (rounded down).
+        collateralOut = market.collateral().mulDiv(shares, claims);
+        yieldOut = yieldToken.balanceOf(address(this)).mulDiv(shares, claims);
+
+        _burn(owner, shares);
+
+        if (collateralOut > 0) {
+            market.withdrawCollateral(collateralOut);
+            IERC20(asset()).safeTransfer(receiver, collateralOut);
+        }
+        if (yieldOut > 0) yieldToken.safeTransfer(receiver, yieldOut);
+
+        emit RedeemInKind(msg.sender, receiver, owner, shares, debtRepaid, collateralOut, yieldOut);
     }
 
     /// @notice Drive the vault's leveraged Morpho position back toward
