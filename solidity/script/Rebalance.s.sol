@@ -6,6 +6,7 @@ import {Script, console} from "forge-std/Script.sol";
 import {Id, MarketParams, Position, Market} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
+import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
 
 import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 
@@ -35,6 +36,7 @@ import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 ///             --rpc-url flow_mainnet --broadcast --private-key $PRIVATE_KEY
 contract Rebalance is Script {
     using MarketParamsLib for MarketParams;
+    using SharesMathLib for uint256;
 
     function run() public {
         FCMVault vault = FCMVault(vm.envAddress("VAULT"));
@@ -84,14 +86,17 @@ contract Rebalance is Script {
         return _debtFromPosition(mp, pos);
     }
 
+    /// @dev Converts borrow shares to loan-token debt with Morpho's own
+    ///      `SharesMathLib.toAssetsUp`, matching how Morpho charges debt (and
+    ///      the contract's `MarketLib.debt`).
     function _debtFromPosition(MarketParams memory mp, Position memory pos)
         internal
         view
         returns (uint256)
     {
         Market memory mkt = MORPHO.market(mp.id());
-        return (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1))
-            / (uint256(mkt.totalBorrowShares) + 1e6);
+        return uint256(pos.borrowShares)
+            .toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
     }
 
     function _market(FCMVault vault) internal view returns (MarketParams memory) {
