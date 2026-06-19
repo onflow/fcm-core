@@ -771,6 +771,77 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
+    // ---- rebalance slippage floor ----------------------------------------
+
+    /// @notice The delever swap reverts when realized slippage exceeds
+    ///         `maxSlippageBps`: a 3% AMM haircut trips the default 1% floor,
+    ///         so the rebalance reverts rather than executing at a bad price
+    ///         (the price-impact / sandwich guard). Deposit/redeem have no such
+    ///         floor — that slippage is the caller's via the router.
+    function test_Rebalance_DeleverRevertsWhenSlippageExceedsFloor() public {
+        _depositFor(user, 1 ether);
+        marketOracle.setPrice(1700e36); // push HF below min -> delever path
+        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
+
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3% > 1% floor
+
+        vm.expectRevert("Too little received");
+        vault.rebalance(false);
+    }
+
+    /// @notice Same guard on the lever leg.
+    function test_Rebalance_LeverRevertsWhenSlippageExceedsFloor() public {
+        _depositFor(user, 1 ether);
+        marketOracle.setPrice(2300e36); // push HF above max -> lever path
+        assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "above max");
+
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3% > 1% floor
+
+        vm.expectRevert("Too little received");
+        vault.rebalance(false);
+    }
+
+    /// @notice Loosening `maxSlippageBps` lets a previously-reverting rebalance
+    ///         through: with the floor raised to 5%, a 3% haircut is tolerated.
+    function test_Rebalance_RespectsLoosenedSlippage() public {
+        _depositFor(user, 1 ether);
+        marketOracle.setPrice(1700e36);
+        uint256 hfBefore = _healthFactor();
+        assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
+
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3%
+
+        vm.prank(admin);
+        vault.setMaxSlippageBps(500); // 5% > 3%, so the 3% haircut now passes
+
+        vault.rebalance(false);
+        assertGt(_healthFactor(), hfBefore, "delever raised HF");
+    }
+
+    /// @notice `maxSlippageBps` defaults to 1%, is admin-only, and rejects
+    ///         values >= 100%.
+    function test_SetMaxSlippageBps() public {
+        assertEq(vault.maxSlippageBps(), 100, "default 1%");
+
+        vm.prank(admin);
+        vault.setMaxSlippageBps(250);
+        assertEq(vault.maxSlippageBps(), 250, "admin updated");
+
+        // Non-admin cannot set (DEFAULT_ADMIN_ROLE == bytes32(0)).
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", stranger, bytes32(0)
+            )
+        );
+        vault.setMaxSlippageBps(300);
+
+        // >= 100% rejected.
+        vm.prank(admin);
+        vm.expectRevert(FCMVault.InvalidSlippage.selector);
+        vault.setMaxSlippageBps(10_000);
+    }
+
     /// @notice `force=true` rebalances when HF is inside the dead band but
     ///         not exactly at target. Here we nudge HF slightly off-target
     ///         (still inside [min, max]); a non-forced call is a no-op, a
