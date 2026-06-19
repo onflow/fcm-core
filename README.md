@@ -24,8 +24,10 @@ See [Architecture](./docs/architecture.md)
 ## Deployment
 
 Deployments are **manual** and target Flow EVM mainnet directly — see the
-[deployment runbook](./solidity/README.md#mainnet-deployment). Dependency
-addresses used at deploy time are pinned in
+`mainnet-*` targets in the [`Makefile`](./Makefile) (every one has a `-dry`
+variant that fork-simulates against live state first). The signer is a Foundry
+encrypted keystore account; set it up once with `make setup-evm-deployer`.
+Dependency addresses used at deploy time are pinned in
 [`solidity/deployments/mainnet.json`](./solidity/deployments/mainnet.json).
 
 ### Deployed contracts (Flow EVM mainnet)

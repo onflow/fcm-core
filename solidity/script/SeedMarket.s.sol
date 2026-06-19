@@ -20,7 +20,7 @@ import {ConfiguredScript} from "./ConfiguredScript.s.sol";
 ///         Usage (dry-run first by dropping --broadcast):
 ///           SEED_AMOUNT=<loan token base units> \
 ///           forge script script/SeedMarket.s.sol --rpc-url flow_mainnet \
-///             --broadcast --private-key $PRIVATE_KEY
+///             --broadcast --account "$ACCOUNT"
 contract SeedMarket is ConfiguredScript {
     function run() public {
         Config memory c = _loadConfig();

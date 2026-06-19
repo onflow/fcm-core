@@ -31,7 +31,7 @@ import {ConfiguredScript} from "./ConfiguredScript.s.sol";
 ///
 ///         Usage (dry-run first by dropping --broadcast):
 ///           MAX_TVL=... forge script script/DeployVault.s.sol \
-///             --rpc-url flow_mainnet --broadcast --private-key $PRIVATE_KEY
+///             --rpc-url flow_mainnet --broadcast --account "$ACCOUNT"
 contract DeployVault is ConfiguredScript {
     function run() public {
         Config memory c = _loadConfig();

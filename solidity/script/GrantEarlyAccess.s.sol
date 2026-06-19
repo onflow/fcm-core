@@ -20,7 +20,7 @@ import {ConfiguredScript} from "./ConfiguredScript.s.sol";
 ///         Usage (dry-run first by dropping --broadcast):
 ///           VAULT=0x... EARLY_ACCESS_GRANTEES=0xabc...,0xdef... \
 ///           forge script script/GrantEarlyAccess.s.sol --rpc-url flow_mainnet \
-///             --broadcast --private-key $PRIVATE_KEY
+///             --broadcast --account "$ACCOUNT"
 contract GrantEarlyAccess is ConfiguredScript {
     function run() public {
         FCMVault vault = FCMVault(vm.envAddress("VAULT"));

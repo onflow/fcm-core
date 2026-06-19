@@ -43,6 +43,9 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     uint8 internal constant DECIMALS_OFFSET = 6;
 
+    /// @dev Basis-points denominator for `maxSlippageBps`.
+    uint256 internal constant BPS = 10_000;
+
     // @dev Address of the loan token (inner vault asset)
     IERC20 public immutable loanToken;
     // @dev Address of the yield token (inner vault share)
@@ -85,6 +88,20 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     uint256 public maxTvl;
 
     event MaxTvlSet(uint256 previousMaxTvl, uint256 newMaxTvl);
+
+    /// @notice Max slippage (basis points) tolerated on the rebalance swaps
+    ///         (lever and delever). The swap's `amountOutMinimum` is the
+    ///         oracle-expected output discounted by this; a worse fill reverts
+    ///         the rebalance. Applies only to vault-initiated rebalances —
+    ///         deposit/redeem slippage is the caller's responsibility, set via
+    ///         the ERC4626 router. Defaults to 1%, admin-adjustable.
+    uint256 public maxSlippageBps;
+
+    /// @notice Emitted when the admin updates `maxSlippageBps`.
+    event MaxSlippageBpsSet(uint256 oldBps, uint256 newBps);
+
+    /// @dev Thrown when a slippage tolerance >= 100% (10_000 bps) is set.
+    error InvalidSlippage();
 
     // ── Timelocked emergency recovery (custodial, in-kind) ──────────────────
     /// @notice Delay between scheduling and executing a recovery.
@@ -175,8 +192,24 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         p.yieldToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
 
         recoveryDelay = p.recoveryDelay;
+        maxSlippageBps = 100; // 1% default; admin retunes per pool depth.
 
         _grantRole(DEFAULT_ADMIN_ROLE, p.admin);
+    }
+
+    /// @notice Set the max slippage tolerance applied to the rebalance swaps.
+    /// @param  newBps Tolerance in basis points; must be < 100% (10_000) so the
+    ///         floor can never be fully disabled.
+    function setMaxSlippageBps(uint256 newBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newBps >= BPS) revert InvalidSlippage();
+        emit MaxSlippageBpsSet(maxSlippageBps, newBps);
+        maxSlippageBps = newBps;
+    }
+
+    /// @dev Discount an oracle-expected swap output by `maxSlippageBps` to get
+    ///      the `amountOutMinimum` floor for a rebalance swap.
+    function _slippageFloor(uint256 expectedOut) internal view returns (uint256) {
+        return expectedOut.mulDiv(BPS - maxSlippageBps, BPS);
     }
 
     // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
@@ -503,7 +536,19 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         additionalDebt = targetDebt - currentDebt;
 
         market.borrow(additionalDebt);
-        SwapLib.swapExactIn(address(loanToken), address(yieldToken), feeYieldDebt, additionalDebt);
+        // Floor the loan->yield swap at the oracle-expected yield out, less
+        // maxSlippageBps. Deposit's identical leg is intentionally unfloored
+        // (user-facing slippage is the router's job); this leg is
+        // vault-initiated, so the floor is the price-impact / sandwich guard.
+        uint256 expectedYield =
+            additionalDebt.mulDiv(MarketLib.ORACLE_PRICE_SCALE, IOracle(yieldOracle).price());
+        SwapLib.swapExactInMin(
+            address(loanToken),
+            address(yieldToken),
+            feeYieldDebt,
+            additionalDebt,
+            _slippageFloor(expectedYield)
+        );
     }
 
     /// @dev Delever branch of `rebalance`: position is over-levered
@@ -543,7 +588,18 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         if (yieldToSell == 0) return 0;
 
         uint256 loanBefore = loanToken.balanceOf(address(this));
-        SwapLib.swapExactIn(address(yieldToken), address(loanToken), feeYieldDebt, yieldToSell);
+        // Floor the yield->loan swap at the oracle-expected loan out for the
+        // (possibly-capped) yieldToSell, less maxSlippageBps. Redeem's identical
+        // leg is intentionally unfloored (router's job); this vault-initiated
+        // leg gets the price-impact / sandwich guard.
+        uint256 expectedLoan = yieldToSell.mulDiv(yieldPrice, MarketLib.ORACLE_PRICE_SCALE);
+        SwapLib.swapExactInMin(
+            address(yieldToken),
+            address(loanToken),
+            feeYieldDebt,
+            yieldToSell,
+            _slippageFloor(expectedLoan)
+        );
         uint256 loanGot = loanToken.balanceOf(address(this)) - loanBefore;
 
         // Cap repayment at outstanding debt

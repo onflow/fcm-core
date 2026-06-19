@@ -772,6 +772,77 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
+    // ---- rebalance slippage floor ----------------------------------------
+
+    /// @notice The delever swap reverts when realized slippage exceeds
+    ///         `maxSlippageBps`: a 3% AMM haircut trips the default 1% floor,
+    ///         so the rebalance reverts rather than executing at a bad price
+    ///         (the price-impact / sandwich guard). Deposit/redeem have no such
+    ///         floor — that slippage is the caller's via the router.
+    function test_Rebalance_DeleverRevertsWhenSlippageExceedsFloor() public {
+        _depositFor(user, 1 ether);
+        marketOracle.setPrice(1700e36); // push HF below min -> delever path
+        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
+
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3% > 1% floor
+
+        vm.expectRevert("Too little received");
+        vault.rebalance(false);
+    }
+
+    /// @notice Same guard on the lever leg.
+    function test_Rebalance_LeverRevertsWhenSlippageExceedsFloor() public {
+        _depositFor(user, 1 ether);
+        marketOracle.setPrice(2300e36); // push HF above max -> lever path
+        assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "above max");
+
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3% > 1% floor
+
+        vm.expectRevert("Too little received");
+        vault.rebalance(false);
+    }
+
+    /// @notice Loosening `maxSlippageBps` lets a previously-reverting rebalance
+    ///         through: with the floor raised to 5%, a 3% haircut is tolerated.
+    function test_Rebalance_RespectsLoosenedSlippage() public {
+        _depositFor(user, 1 ether);
+        marketOracle.setPrice(1700e36);
+        uint256 hfBefore = _healthFactor();
+        assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
+
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3%
+
+        vm.prank(admin);
+        vault.setMaxSlippageBps(500); // 5% > 3%, so the 3% haircut now passes
+
+        vault.rebalance(false);
+        assertGt(_healthFactor(), hfBefore, "delever raised HF");
+    }
+
+    /// @notice `maxSlippageBps` defaults to 1%, is admin-only, and rejects
+    ///         values >= 100%.
+    function test_SetMaxSlippageBps() public {
+        assertEq(vault.maxSlippageBps(), 100, "default 1%");
+
+        vm.prank(admin);
+        vault.setMaxSlippageBps(250);
+        assertEq(vault.maxSlippageBps(), 250, "admin updated");
+
+        // Non-admin cannot set (DEFAULT_ADMIN_ROLE == bytes32(0)).
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", stranger, bytes32(0)
+            )
+        );
+        vault.setMaxSlippageBps(300);
+
+        // >= 100% rejected.
+        vm.prank(admin);
+        vm.expectRevert(FCMVault.InvalidSlippage.selector);
+        vault.setMaxSlippageBps(10_000);
+    }
+
     /// @notice `force=true` rebalances when HF is inside the dead band but
     ///         not exactly at target. Here we nudge HF slightly off-target
     ///         (still inside [min, max]); a non-forced call is a no-op, a
@@ -856,6 +927,60 @@ contract FCMVaultTest is Test {
         p.healthFactorMax = 1.6e18;
         vm.expectRevert(bytes("HF target > max"));
         new FCMVault(p);
+    }
+
+    // ---------------------------------------------------------------------
+    // Lifecycle (deposit -> rebalance -> redeem)
+    // ---------------------------------------------------------------------
+
+    /// @notice Full happy-path lifecycle in a single flow: a user deposits,
+    ///         the position is rebalanced, then the user redeems all shares.
+    ///
+    ///         The rebalance step is set up to perform a real balancing
+    ///         operation: a collateral price rise pushes HF above
+    ///         max, so a non-forced rebalance must borrow more
+    ///         debt and buy more yield. We assert debt and yield
+    ///         grew and HF returned to target.
+    ///
+    ///         NAV is price-invariant in this rig (collateral is measured in
+    ///         token units; the yield and debt legs scale together), so the
+    ///         round-trip returns approximately the original deposit despite
+    ///         the price move.
+    function test_Integration_DepositRebalanceRedeem() public {
+        uint256 amount = 1 ether;
+
+        // Deposit.
+        uint256 shares = _depositFor(user, amount);
+        assertGt(shares, 0, "deposit minted shares");
+        assertEq(WETH.balanceOf(address(MORPHO)), amount, "collateral supplied to morpho");
+        assertGt(FUSDEV.balanceOf(address(vault)), 0, "yield bought with borrowed debt");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token after deposit");
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "deposit lands at target HF");
+
+        // Rebalance: price rise lifts HF above max, forcing a real lever-up.
+        marketOracle.setPrice(2300e36);
+        assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "price rise pushed HF above max");
+
+        uint256 debtBefore = _debt();
+        uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance(false);
+
+        assertGt(_debt(), debtBefore, "rebalance borrowed more debt");
+        assertGt(FUSDEV.balanceOf(address(vault)), yieldBefore, "rebalance bought more yield");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token after rebalance");
+        assertApproxEqRel(
+            _healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "rebalance restored target HF"
+        );
+
+        // Redeem everything.
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(shares, user, user);
+
+        assertEq(vault.balanceOf(user), 0, "all shares burned");
+        assertEq(vault.totalSupply(), 0, "supply back to zero");
+        assertEq(WETH.balanceOf(user), assetsOut, "user received redeemed asset");
+        assertApproxEqRel(assetsOut, amount, 1e15, "round-trip returns ~deposit");
     }
 
     // ---- helpers -------------------------------------------------------
