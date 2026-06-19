@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
@@ -982,7 +983,167 @@ contract FCMVaultTest is Test {
         assertApproxEqRel(assetsOut, amount, 1e15, "round-trip returns ~deposit");
     }
 
+    // VaultState logging
+    // ---------------------------------------------------------------------
+
+    /// @notice Every state-modifying entry point emits a `VaultState` snapshot
+    ///         whose fields match the vault's actual post-call state: the three
+    ///         leg balances read straight from Morpho/the token, and the three
+    ///         oracle prices (debtPrice being the 1e36 scale itself).
+    function test_VaultState_DepositEmitsSnapshot() public {
+        uint256 amount = 1 ether;
+        MockERC20(address(WETH)).mint(user, amount);
+
+        vm.startPrank(user);
+        WETH.approve(address(vault), amount);
+        vm.recordLogs();
+        vault.deposit(amount, user);
+        vm.stopPrank();
+
+        _assertVaultStateMatchesCurrentState();
+    }
+
+    /// @notice `redeem` emits a `VaultState` snapshot reflecting the unwound
+    ///         position (less collateral, debt, and yield than before).
+    function test_VaultState_RedeemEmitsSnapshot() public {
+        uint256 shares = _depositFor(user, 1 ether);
+
+        vm.recordLogs();
+        vm.prank(user);
+        vault.redeem(shares / 2, user, user);
+
+        (uint256 collateral, uint256 debt, uint256 yield,,,) =
+            _assertVaultStateMatchesCurrentState();
+        // A partial redeem leaves a live position behind.
+        assertGt(collateral, 0, "collateral remains");
+        assertGt(debt, 0, "debt remains");
+        assertGt(yield, 0, "yield remains");
+    }
+
+    /// @notice `redeemInKind` emits a `VaultState` snapshot reflecting the
+    ///         in-kind exit.
+    function test_VaultState_RedeemInKindEmitsSnapshot() public {
+        uint256 shares = _depositFor(user, 1 ether);
+
+        MockERC20(address(PYUSD0)).mint(user, 1_000_000 ether);
+        vm.startPrank(user);
+        PYUSD0.approve(address(vault), type(uint256).max);
+        vm.recordLogs();
+        vault.redeemInKind(shares / 2, user, user);
+        vm.stopPrank();
+
+        _assertVaultStateMatchesCurrentState();
+    }
+
+    /// @notice `rebalance` emits a `VaultState` snapshot even when it is a
+    ///         no-op inside the dead band — the modifier fires after every
+    ///         call regardless of whether the body mutated state.
+    function test_VaultState_RebalanceNoopStillEmitsSnapshot() public {
+        _depositFor(user, 1 ether);
+
+        vm.recordLogs();
+        vault.rebalance(false); // HF at target → no-op body, but modifier emits
+
+        _assertVaultStateMatchesCurrentState();
+    }
+
+    /// @notice After a lever-up rebalance, the snapshot must report the price
+    ///         the rebalance saw and the grown yield leg.
+    function test_VaultState_RebalanceLeverEmitsUpdatedSnapshot() public {
+        _depositFor(user, 1 ether);
+        marketOracle.setPrice(2300e36); // push HF above max so rebalance levers
+
+        vm.recordLogs();
+        vault.rebalance(false);
+
+        (,, uint256 yield, uint256 collPrice,, uint256 yieldPrice) =
+            _assertVaultStateMatchesCurrentState();
+        assertEq(collPrice, 2300e36, "snapshot collateral price is the new oracle price");
+        assertEq(yieldPrice, YIELD_PRICE, "snapshot yield price");
+        assertGt(yield, 0, "yield leg present");
+    }
+
+    /// @notice The emitted prices track the live oracles: `collateralPrice` and
+    ///         `yieldPrice` come from the two oracles, and `debtPrice` is the
+    ///         fixed 1e36 oracle scale (debt is already in loan-token units).
+    function test_VaultState_PricesReflectOracles() public {
+        marketOracle.setPrice(1234e36);
+        yieldOracle.setPrice(5e35);
+
+        uint256 amount = 1 ether;
+        MockERC20(address(WETH)).mint(user, amount);
+        vm.startPrank(user);
+        WETH.approve(address(vault), amount);
+        vm.recordLogs();
+        vault.deposit(amount, user);
+        vm.stopPrank();
+
+        (,,, uint256 collPrice, uint256 debtPrice, uint256 yieldPrice) = _lastVaultState();
+        assertEq(collPrice, 1234e36, "collateral price from market oracle");
+        assertEq(debtPrice, 1e36, "debt price is the 1e36 oracle scale");
+        assertEq(yieldPrice, 5e35, "yield price from yield oracle");
+    }
+
     // ---- helpers -------------------------------------------------------
+
+    /// @dev Decode the most recent `VaultState` event emitted by the vault from
+    ///      the recorded logs. Reverts if none was emitted. Caller must have
+    ///      started recording with `vm.recordLogs()` before the action.
+    function _lastVaultState()
+        internal
+        view
+        returns (
+            uint256 collateral,
+            uint256 debt,
+            uint256 yield,
+            uint256 collateralPrice,
+            uint256 debtPrice,
+            uint256 yieldPrice
+        )
+    {
+        bytes32 sig = keccak256("VaultState(uint256,uint256,uint256,uint256,uint256,uint256)");
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bool found;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter != address(vault) || logs[i].topics[0] != sig) {
+                continue;
+            }
+            (collateral, debt, yield, collateralPrice, debtPrice, yieldPrice) =
+                abi.decode(logs[i].data, (uint256, uint256, uint256, uint256, uint256, uint256));
+            found = true;
+        }
+        require(found, "VaultState not emitted");
+    }
+
+    /// @dev Assert the last emitted `VaultState` matches the vault's actual
+    ///      current state, and return the decoded fields for further checks.
+    function _assertVaultStateMatchesCurrentState()
+        internal
+        view
+        returns (
+            uint256 collateral,
+            uint256 debt,
+            uint256 yield,
+            uint256 collateralPrice,
+            uint256 debtPrice,
+            uint256 yieldPrice
+        )
+    {
+        (collateral, debt, yield, collateralPrice, debtPrice, yieldPrice) = _lastVaultState();
+        assertEq(collateral, _collateral(), "collateral leg");
+        // contract's market.debt() rounds up; the test helper floors → ±1 wei.
+        assertApproxEqAbs(debt, _debt(), 1, "debt leg");
+        assertEq(yield, FUSDEV.balanceOf(address(vault)), "yield leg");
+        assertEq(collateralPrice, marketOracle.price(), "collateral price");
+        assertEq(debtPrice, 1e36, "debt price (oracle scale)");
+        assertEq(yieldPrice, yieldOracle.price(), "yield price");
+    }
+
+    function _collateral() internal view returns (uint256) {
+        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
+        Id marketId = MarketParamsLib.id(MarketParams(lt, ct, oracle, irm, lltv_));
+        return uint256(MORPHO.position(marketId, address(vault)).collateral);
+    }
 
     function _allow(address account) internal {
         bytes32 role = vault.EARLY_ACCESS_ROLE();

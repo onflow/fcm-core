@@ -229,8 +229,6 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         return expectedOut.mulDiv(BPS - maxSlippageBps, BPS);
     }
 
-
-
     // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
     // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     function _decimalsOffset() internal pure override returns (uint8) {
