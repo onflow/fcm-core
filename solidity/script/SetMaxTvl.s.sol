@@ -18,7 +18,7 @@ import {ConfiguredScript} from "./ConfiguredScript.s.sol";
 ///
 ///         Usage (dry-run first by dropping --broadcast):
 ///           VAULT=0x... MAX_TVL=... forge script script/SetMaxTvl.s.sol \
-///             --rpc-url flow_mainnet --broadcast --private-key $PRIVATE_KEY
+///             --rpc-url flow_mainnet --broadcast --account "$ACCOUNT"
 contract SetMaxTvl is ConfiguredScript {
     function run() public {
         FCMVault vault = FCMVault(vm.envAddress("VAULT"));
