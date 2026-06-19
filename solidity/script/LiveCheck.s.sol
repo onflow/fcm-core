@@ -4,15 +4,21 @@ pragma solidity ^0.8.20;
 import {Script, console} from "forge-std/Script.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {FCMVault} from "../src/FCMVault.sol";
+import {Id, MarketParams, Position, Market} from "@morpho-blue/interfaces/IMorpho.sol";
+import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
+import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
+
+import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 
 /// @title LiveCheck
 /// @notice End-to-end integration check against a LIVE FCMVault deployment:
-///         deposit a small amount of the underlying asset, verify shares and
-///         NAV accounting, redeem everything, and verify the round-trip
-///         value. Spends real funds (swap fees + price impact), so dry-run
-///         first by dropping --broadcast -- the dry-run fork-simulates the
-///         exact same sequence for free.
+///         deposit a small amount of the underlying asset, rebalance the
+///         position, redeem everything, and verify the round-trip value.
+///         Exercises all three vault legs in sequence. Spends real funds
+///         (swap fees + price impact), so dry-run first.
+///
+///         The rebalance is a forced rebalance against real mainnet state.
+///         It may be a no-op if the health factor is already at target.
 ///
 ///         Everything is read from the vault itself, so this works against
 ///         any FCMVault address with no config file.
@@ -31,6 +37,9 @@ import {FCMVault} from "../src/FCMVault.sol";
 ///           VAULT=0x... forge script script/LiveCheck.s.sol \
 ///             --rpc-url flow_mainnet --broadcast --slow --private-key $PRIVATE_KEY
 contract LiveCheck is Script {
+    using MarketParamsLib for MarketParams;
+    using SharesMathLib for uint256;
+
     function run() public {
         FCMVault vault = FCMVault(vm.envAddress("VAULT"));
         uint256 amount = vm.envOr("CHECK_AMOUNT", uint256(0.00001e18));
@@ -67,6 +76,13 @@ contract LiveCheck is Script {
         );
         require(vault.totalAssets() > navBefore, "vault NAV did not grow on deposit");
 
+        // Rebalance the position. Forced, so it drives toward the target
+        // health factor even inside the dead band; against live state it may
+        // be a no-op, which is fine.
+        uint256 debtBeforeRebalance = _debt(vault);
+        vault.rebalance(true);
+        uint256 debtAfterRebalance = _debt(vault);
+
         // Redeem everything we just minted.
         uint256 redeemed = vault.redeem(shares, caller, caller);
         vm.stopBroadcast();
@@ -82,9 +98,31 @@ contract LiveCheck is Script {
         );
 
         console.log("=== live check passed ===");
-        console.log("deposited:  %s", amount);
-        console.log("shares:     %s", shares);
-        console.log("redeemed:   %s", redeemed);
-        console.log("round-trip: %s bps", roundtripBps);
+        console.log("deposited:   %s", amount);
+        console.log("shares:      %s", shares);
+        console.log("debt before rebalance: %s", debtBeforeRebalance);
+        console.log("debt after rebalance:  %s", debtAfterRebalance);
+        if (debtAfterRebalance == debtBeforeRebalance) {
+            console.log("rebalance was a no-op (position already within band)");
+        }
+        console.log("redeemed:    %s", redeemed);
+        console.log("round-trip:  %s bps", roundtripBps);
+    }
+
+    /// @dev The vault's outstanding debt on its Morpho market, in loan-token
+    ///      units. Converts borrow shares to assets with Morpho's own
+    ///      `SharesMathLib.toAssetsUp`, matching how Morpho charges debt (and
+    ///      the contract's `MarketLib.debt`). Read from stored state;
+    ///      `rebalance` accrues interest in the same tx, so the post-rebalance
+    ///      read is fresh while the pre-read may lag by unaccrued interest
+    ///      (immaterial for this report).
+    function _debt(FCMVault vault) internal view returns (uint256) {
+        (address lt, address ct, address oracle, address irm, uint256 lltv) = vault.market();
+        MarketParams memory mp = MarketParams(lt, ct, oracle, irm, lltv);
+        Position memory pos = MORPHO.position(mp.id(), address(vault));
+        if (pos.borrowShares == 0) return 0;
+        Market memory mkt = MORPHO.market(mp.id());
+        return uint256(pos.borrowShares)
+            .toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
     }
 }
