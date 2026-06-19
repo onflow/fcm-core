@@ -140,6 +140,43 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         uint256 yieldOut
     );
 
+    /// @notice Emitted at the end of every state-modifying entry point with a
+    ///         snapshot of the vault's three legs and their oracle prices. All
+    ///         prices are quoted in loan-token (debt) units and 1e36-scaled, so
+    ///         `amount * price / 1e36` gives each leg's value in debt units.
+    ///         `debtPrice` is the 1e36 scale itself, since debt is already
+    ///         denominated in the loan token.
+    /// @param  collateral      Collateral supplied to Morpho, raw token units.
+    /// @param  debt            Outstanding loan-token debt, raw token units.
+    /// @param  yield           Yield token held by the vault, raw token units.
+    /// @param  collateralPrice Collateral price in loan token, 1e36-scaled.
+    /// @param  debtPrice       Loan-token price in loan token (the 1e36 scale).
+    /// @param  yieldPrice      Yield-token price in loan token, 1e36-scaled.
+    event VaultState(
+        uint256 collateral,
+        uint256 debt,
+        uint256 yield,
+        uint256 collateralPrice,
+        uint256 debtPrice,
+        uint256 yieldPrice
+    );
+
+    /// @dev Emits a `VaultState` snapshot after the wrapped function body runs.
+    ///      Placed after `_;` so the event reflects post-call state. Modifying
+    ///      entry points accrue market interest before mutating, so the debt
+    ///      read here is fresh.
+    modifier logsVaultState() {
+        _;
+        emit VaultState(
+            market.collateral(),
+            market.debt(),
+            yieldToken.balanceOf(address(this)),
+            market.oraclePrice(),
+            MarketLib.ORACLE_PRICE_SCALE,
+            IOracle(yieldOracle).price()
+        );
+    }
+
     constructor(InitParams memory p)
         ERC20(p.name, p.symbol)
         ERC4626(p.collateral)
@@ -191,6 +228,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     function _slippageFloor(uint256 expectedOut) internal view returns (uint256) {
         return expectedOut.mulDiv(BPS - maxSlippageBps, BPS);
     }
+
+
 
     // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
     // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
@@ -249,7 +288,12 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @param  assets   Amount of underlying asset to deposit.
     /// @param  receiver Account to credit with newly minted shares.
     /// @return shares   Vault shares minted to `receiver`.
-    function deposit(uint256 assets, address receiver) public override returns (uint256 shares) {
+    function deposit(uint256 assets, address receiver)
+        public
+        override
+        logsVaultState
+        returns (uint256 shares)
+    {
         market.accrueInterest();
 
         uint256 navBefore = totalAssets();
@@ -312,6 +356,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     function redeem(uint256 shares, address receiver, address owner)
         public
         override
+        logsVaultState
         returns (uint256 assets)
     {
         if (shares == 0) return 0;
@@ -421,6 +466,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @return yieldOut      Yield tokens delivered to `receiver`.
     function redeemInKind(uint256 shares, address receiver, address owner)
         public
+        logsVaultState
         returns (uint256 collateralOut, uint256 yieldOut)
     {
         if (shares == 0) return (0, 0);
@@ -465,7 +511,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///           `repayAmount = debt - (maxBorrow / target)` of debt.
     ///
     /// @param  force If true, rebalance regardless of current health factor
-    function rebalance(bool force) external {
+    function rebalance(bool force) external logsVaultState {
         market.accrueInterest();
         uint256 currentDebt = market.debt();
         uint256 maxBorrow = market.maxBorrow(); // independent of current debt balance
