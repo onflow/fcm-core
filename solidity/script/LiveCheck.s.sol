@@ -35,7 +35,7 @@ import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 ///
 ///         Usage:
 ///           VAULT=0x... forge script script/LiveCheck.s.sol \
-///             --rpc-url flow_mainnet --broadcast --slow --private-key $PRIVATE_KEY
+///             --rpc-url flow_mainnet --broadcast --slow --account "$ACCOUNT"
 contract LiveCheck is Script {
     using MarketParamsLib for MarketParams;
     using SharesMathLib for uint256;
