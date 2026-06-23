@@ -23,12 +23,51 @@ See [Architecture](./docs/architecture.md)
 
 ## Deployment
 
-Deployments are **manual** and target Flow EVM mainnet directly — see the
+Deployments are **manual** and target Flow mainnet directly — see the
 `mainnet-*` targets in the [`Makefile`](./Makefile) (every one has a `-dry`
-variant that fork-simulates against live state first). The signer is a Foundry
-encrypted keystore account; set it up once with `make setup-evm-deployer`.
-Dependency addresses used at deploy time are pinned in
+variant that fork-simulates against live state first). EVM deployments sign with
+a Foundry encrypted keystore account (set it up once with
+`make setup-evm-deployer`); the Cadence rebalancer signs with the
+`mainnet-deployer` Flow account (see below). Dependency addresses used at deploy
+time are pinned in
 [`solidity/deployments/mainnet.json`](./solidity/deployments/mainnet.json).
+
+### Cadence contract (VaultRebalancer)
+
+Automates `FCMVault.rebalance()` on an interval via `FlowTransactionScheduler`.
+The signer is the `mainnet-deployer` account in the `flow.mainnet.json` overlay,
+whose key is read from a gitignored `.private-key` file (ECDSA_P256 / SHA3_256,
+key index 0) — the account becomes the resource owner and pays scheduling fees.
+The overlay is loaded only by the rebalancer `make` targets (via `-f`), so
+`flow test` / `make ci` never touch it. For `-dry`, start a forked emulator in a
+separate terminal with `make mainnet-fork-emulator`.
+
+`VAULT` is the FCMVault EVM address from the EVM deploy above:
+
+```bash
+make mainnet-deploy-rebalancer
+make mainnet-setup-rebalancer VAULT=0x… TICK_INTERVAL=3600.0 EVM_GAS_LIMIT=200000 EXECUTION_EFFORT=20000
+make mainnet-schedule-rebalancer VAULT=0x…
+```
+
+`mainnet-deploy-rebalancer` is idempotent (`--update`): re-running it ships an
+additive contract change in place, subject to Cadence contract-update validation.
+
+To tear a rebalancer down — cancel its pending tick (refunding the fee to the
+deployer's FlowToken vault), destroy the resource, and free its storage path so the
+same target can be re-created — use the remove target. This is the way to stop fee
+drain on an unused or misconfigured rebalancer:
+
+```bash
+make mainnet-remove-rebalancer VAULT=0x…
+```
+
+Calldata is hardcoded to `rebalance(false)` and scheduler priority to Medium.
+The deployer must hold enough FLOW for the per-tick scheduling fee plus the
+account storage minimum. The scheduling fee scales with `EXECUTION_EFFORT`
+(≈0.0002 FLOW per effort unit; e.g. 20000 → ~4 FLOW per tick), so the deployer
+must be funded for the full run. Size the tunables to measured worst-case
+`rebalance()` cost — see the [rebalancer design notes](./docs/vault-rebalancer.md).
 
 ### Deployed contracts (Flow EVM mainnet)
 
@@ -36,6 +75,12 @@ Dependency addresses used at deploy time are pinned in
 | :--- | :--- |
 | FCMVault | _not yet deployed_ |
 | YieldTokenOracle | _not yet deployed_ |
+
+### Deployed contracts (Flow mainnet — Cadence)
+
+| Contract | Account |
+| :--- | :--- |
+| VaultRebalancer | _not yet deployed_ |
 
 Morpho market (WETH collateral / PYUSD0 loan, LLTV 86%):
 `0xe9c0fc2a0c62a6e5cdee4bc4d06d571850a2add3bb7c96d8c3a75997cae6b866`

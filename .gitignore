@@ -15,8 +15,12 @@ emulator-account.pkey
 imports
 .env
 
-# Deployer key material — NEVER commit (public repo, real funds).
+# Deployer key material + local signer config — NEVER commit (public repo, real
+# funds). flow.mainnet.json references .private-key by path; the key file itself
+# stays local. flow.local.json holds the bootstrap signer for account creation.
 /.private-key
+/.bootstrap-account-private-key
+/flow.local.json
 
 # Forge broadcast logs / deployment transaction artifacts — local only.
 /solidity/broadcast/
