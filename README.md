@@ -35,9 +35,8 @@ time are pinned in
 ### Cadence contract (VaultRebalancer)
 
 Automates `FCMVault.rebalance()` on an interval via `FlowTransactionScheduler`.
-The signer is the `mainnet-deployer` account in the `flow.mainnet.json` overlay,
-whose key is read from a gitignored `.private-key` file (ECDSA_P256 / SHA3_256,
-key index 0) — the account becomes the resource owner and pays scheduling fees.
+The signer is the `mainnet-deployer` account in `flow.mainnet.json`. 
+This account becomes the resource owner and pays scheduling fees.
 The overlay is loaded only by the rebalancer `make` targets (via `-f`), so
 `flow test` / `make ci` never touch it. For `-dry`, start a forked emulator in a
 separate terminal with `make mainnet-fork-emulator`.
@@ -64,10 +63,8 @@ make mainnet-remove-rebalancer VAULT=0x…
 
 Calldata is hardcoded to `rebalance(false)` and scheduler priority to Medium.
 The deployer must hold enough FLOW for the per-tick scheduling fee plus the
-account storage minimum. The scheduling fee scales with `EXECUTION_EFFORT`
-(≈0.0002 FLOW per effort unit; e.g. 20000 → ~4 FLOW per tick), so the deployer
-must be funded for the full run. Size the tunables to measured worst-case
-`rebalance()` cost — see the [rebalancer design notes](./docs/vault-rebalancer.md).
+account storage minimum. The scheduling fee scales with `EXECUTION_EFFORT`, so the deployer
+must be funded for the full run. 
 
 ### Deployed contracts (Flow EVM mainnet)
 
