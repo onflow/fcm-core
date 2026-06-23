@@ -15,9 +15,11 @@ emulator-account.pkey
 imports
 .env
 
-# Deployer key material — NEVER commit (public repo, real funds).
+# Canonical file names for staging deployment keys
+# (production deployment keys use Google KMS)
 /.private-key
 /.bootstrap-account-private-key
+/.mainnet-cadence-deployer-private-key
 /flow.local.json
 
 # Forge broadcast logs / deployment transaction artifacts — local only.
