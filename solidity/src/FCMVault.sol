@@ -111,8 +111,18 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @notice Set once a recovery executes; permanently blocks new deposits.
     bool public recovered;
 
+    /// @notice Emitted when a recovery is scheduled.
+    /// @param  caller  Owner that scheduled it.
+    /// @param  validAt Timestamp the recovery becomes executable (`now + recoveryDelay`).
     event EmergencyRecoveryScheduled(address indexed caller, uint256 validAt);
+    /// @notice Emitted when a pending recovery is cancelled before execution.
+    /// @param  caller Owner that cancelled it.
     event EmergencyRecoveryCancelled(address indexed caller);
+    /// @notice Emitted when a recovery executes and the position is swept to the owner.
+    /// @param  debtRepaid    Loan token the owner funded to clear the debt.
+    /// @param  collateralOut Collateral swept to the owner.
+    /// @param  yieldOut      Yield token swept to the owner.
+    /// @param  loanOut       Over-funded loan token remainder swept back to the owner.
     event EmergencyRecoveryExecuted(
         uint256 debtRepaid, uint256 collateralOut, uint256 yieldOut, uint256 loanOut
     );

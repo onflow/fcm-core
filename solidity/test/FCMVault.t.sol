@@ -1155,6 +1155,26 @@ contract FCMVaultTest is Test {
         assertGt(assets, 0, "redeem works during pending recovery");
     }
 
+    /// @notice The escape hatch (`redeemInKind`) also stays open while a
+    ///         recovery is pending — a holder can self-exit in kind throughout
+    ///         the timelock window.
+    function test_Recovery_RedeemInKindStaysOpenWhilePending() public {
+        uint256 shares = _depositFor(user, 1 ether);
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+
+        // Caller funds the debt slice and approves the vault.
+        MockERC20(address(PYUSD0)).mint(user, 1_000_000 ether);
+        vm.startPrank(user);
+        PYUSD0.approve(address(vault), type(uint256).max);
+        (uint256 collOut, uint256 yieldOut) = vault.redeemInKind(shares, user, user);
+        vm.stopPrank();
+
+        assertEq(vault.balanceOf(user), 0, "shares burned during pending recovery");
+        assertGt(collOut, 0, "collateral delivered in kind");
+        assertGt(yieldOut, 0, "yield delivered in kind");
+    }
+
     /// @notice Only the owner may schedule or cancel a recovery.
     function test_Recovery_AccessControl() public {
         vm.prank(user);
