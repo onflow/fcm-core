@@ -104,7 +104,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     error InvalidSlippage();
 
     // ── Timelocked emergency recovery (custodial, in-kind) ──────────────────
-    /// @notice Delay between scheduling and executing a recovery.
+    /// @notice Delay (in seconds) between scheduling and executing a recovery.
     uint256 public immutable recoveryDelay;
     /// @notice Timestamp a scheduled recovery becomes executable; 0 = none pending.
     uint256 public recoveryValidAt;
@@ -744,8 +744,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///      However, if we implement 'direct deposit' to the inner vault,
     ///      its own maxDeposit() will bind.
     function maxDeposit(address receiver) public view override returns (uint256) {
-        // The deposit freeze is enforced by the guard in deposit(); maxDeposit
-        // mirrors it as 0 because ERC-4626 requires reporting 0 when deposits
+        // The emergency recovery deposit freeze is enforced by the guard in deposit();
+        // maxDeposit mirrors it as 0 because ERC-4626 requires reporting 0 when deposits
         // are disabled.
         if (recoveryValidAt != 0 || recovered) return 0;
         if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
