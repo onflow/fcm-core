@@ -1350,4 +1350,208 @@ contract FCMVaultTest is Test {
         vm.expectRevert();
         vault.cancelEmergencyRecovery();
     }
+
+    // ---- management & performance fees ------------------------------------
+
+    function _enableFees(address recipient, uint256 mgmtBps, uint256 perfBps) internal {
+        _allow(recipient);
+        vm.startPrank(admin);
+        vault.setFeeRecipient(recipient);
+        vault.setManagementFeeBps(mgmtBps);
+        vault.setPerformanceFeeBps(perfBps);
+        vm.stopPrank();
+    }
+
+    /// @notice With no recipient/rates configured, no fee shares are ever minted.
+    function test_Fees_OffByDefault() public {
+        _depositFor(user, 1 ether);
+        vm.warp(block.timestamp + 365 days);
+        vault.accrueFees();
+        assertEq(vault.totalSupply(), vault.balanceOf(user), "no fee shares minted");
+    }
+
+    /// @notice Only the admin can set fees, and rates are capped.
+    function test_Fees_SetAccessAndCaps() public {
+        vm.prank(user);
+        vm.expectRevert();
+        vault.setManagementFeeBps(100);
+
+        vm.startPrank(admin);
+        vm.expectRevert(FCMVault.InvalidFee.selector);
+        vault.setManagementFeeBps(1_001); // > MAX_MANAGEMENT_FEE_BPS (10%)
+        vm.expectRevert(FCMVault.InvalidFee.selector);
+        vault.setPerformanceFeeBps(5_001); // > MAX_PERFORMANCE_FEE_BPS (50%)
+        vault.setManagementFeeBps(200);
+        vault.setPerformanceFeeBps(2_000);
+        vm.stopPrank();
+        assertEq(vault.managementFeeBps(), 200, "mgmt set");
+        assertEq(vault.performanceFeeBps(), 2_000, "perf set");
+    }
+
+    /// @notice Management fee accrues ~ rate * NAV * elapsed, minted as shares.
+    function test_Fees_ManagementAccrual() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 0); // 2%/yr, no perf
+        _depositFor(user, 1 ether);
+
+        uint256 nav = vault.totalAssets();
+        vm.warp(block.timestamp + 365 days);
+        vault.accrueFees();
+
+        uint256 feeShares = vault.balanceOf(feeRcpt);
+        assertGt(feeShares, 0, "fee shares minted");
+        assertApproxEqRel(
+            vault.convertToAssets(feeShares), nav * 200 / 10_000, 2e16, "mgmt ~2% NAV"
+        );
+    }
+
+    /// @notice Performance fee ~ rate * gain above HWM; not double-charged.
+    function test_Fees_PerformanceAccrualAndHWM() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 0, 2_000); // 20% perf, no mgmt
+        _depositFor(user, 1 ether);
+
+        uint256 navBefore = vault.totalAssets();
+        // Simulate yield: +10% FUSDEV in the vault -> NAV rises.
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
+        uint256 gain = vault.totalAssets() - navBefore;
+        assertGt(gain, 0, "nav rose");
+
+        vault.accrueFees();
+        uint256 feeShares = vault.balanceOf(feeRcpt);
+        assertGt(feeShares, 0, "perf fee minted");
+        assertApproxEqRel(
+            vault.convertToAssets(feeShares), gain * 2_000 / 10_000, 3e16, "perf ~20% gain"
+        );
+
+        // Second accrual with no new gain -> no additional fee (HWM holds).
+        uint256 prev = vault.balanceOf(feeRcpt);
+        vault.accrueFees();
+        assertEq(vault.balanceOf(feeRcpt), prev, "no double-charge above HWM");
+    }
+
+    /// @notice No performance fee while below the high-water mark (drawdown).
+    function test_Fees_NoPerfInDrawdown() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 0, 2_000);
+        _depositFor(user, 1 ether);
+
+        // First gain sets the HWM and charges.
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
+        vault.accrueFees();
+        uint256 afterFirst = vault.balanceOf(feeRcpt);
+        assertGt(afterFirst, 0, "charged on first gain");
+
+        // Drawdown: drop the yield-token price so NAV falls below the HWM.
+        yieldOracle.setPrice(YIELD_PRICE / 2);
+        vault.accrueFees();
+        assertEq(vault.balanceOf(feeRcpt), afterFirst, "no fee in drawdown");
+    }
+
+    /// @notice If the recipient isn't allowlisted, accrual SKIPS (no mint) and
+    ///         core flows are NOT bricked.
+    function test_Fees_RecipientNotAllowlistedSkips() public {
+        address feeRcpt = address(0xBAD);
+        vm.startPrank(admin);
+        vault.setFeeRecipient(feeRcpt); // deliberately NOT allowlisted
+        vault.setManagementFeeBps(200);
+        vault.setPerformanceFeeBps(2_000);
+        vm.stopPrank();
+
+        _depositFor(user, 1 ether); // must not revert
+        vm.warp(block.timestamp + 365 days);
+        vault.accrueFees(); // must not revert
+        assertEq(vault.balanceOf(feeRcpt), 0, "no shares minted to non-allowlisted recipient");
+    }
+
+    /// @notice Once recovered, fees stop accruing.
+    function test_Fees_NoAccrualAfterRecovered() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 0);
+        _depositFor(user, 1 ether);
+
+        MockERC20(address(PYUSD0)).mint(admin, 1_000_000 ether);
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+        vm.warp(block.timestamp + vault.recoveryDelay());
+        vm.startPrank(admin);
+        PYUSD0.approve(address(vault), type(uint256).max);
+        vault.executeEmergencyRecovery();
+        vm.stopPrank();
+
+        uint256 prev = vault.balanceOf(feeRcpt);
+        vm.warp(block.timestamp + 365 days);
+        vault.accrueFees();
+        assertEq(vault.balanceOf(feeRcpt), prev, "no accrual after recovered");
+    }
+
+    /// @notice Both fee legs in one accrual sum into a single dilution mint, and
+    ///         the recipient's claim ~= management + performance fee.
+    function test_Fees_CombinedAccrual() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 2_000); // 2%/yr mgmt + 20% perf
+        _depositFor(user, 1 ether);
+
+        uint256 nav0 = vault.totalAssets();
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
+        uint256 navAccrue = vault.totalAssets();
+        uint256 gain = navAccrue - nav0;
+        vm.warp(block.timestamp + 365 days);
+
+        vault.accrueFees();
+        uint256 feeShares = vault.balanceOf(feeRcpt);
+        assertGt(feeShares, 0, "combined fee minted");
+
+        uint256 expected = (navAccrue * 200 / 10_000) + (gain * 2_000 / 10_000);
+        assertApproxEqRel(vault.convertToAssets(feeShares), expected, 3e16, "claim ~= mgmt + perf");
+    }
+
+    /// @notice Enabling fees after a gain/elapsed window must NOT retroactively
+    ///         charge the pre-enable period (guards the unconditional clock/HWM
+    ///         advance; a gating change would make this fail).
+    function test_Fees_NoRetroactiveChargeOnEnable() public {
+        address feeRcpt = address(0xFEE5);
+        _depositFor(user, 1 ether); // fees OFF
+
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
+        vm.warp(block.timestamp + 365 days);
+
+        _enableFees(feeRcpt, 200, 2_000);
+        vault.accrueFees();
+        assertEq(vault.balanceOf(feeRcpt), 0, "no retroactive charge for the pre-enable window");
+    }
+
+    /// @notice Fees accrue on the redeem path, and a de-allowlisted recipient
+    ///         skips minting without bricking the redeem.
+    function test_Fees_AccruesOnRedeemAndDeAllowlistDoesNotBrick() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 0); // mgmt only
+        uint256 shares = _depositFor(user, 1 ether);
+
+        vm.warp(block.timestamp + 30 days);
+        vm.prank(user);
+        vault.redeem(shares / 2, user, user);
+        assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the redeem path");
+
+        bytes32 role = vault.EARLY_ACCESS_ROLE();
+        vm.prank(admin);
+        vault.revokeRole(role, feeRcpt);
+        vm.warp(block.timestamp + 30 days);
+        vm.prank(user);
+        vault.redeem(shares / 4, user, user); // must not revert
+    }
+
+    /// @notice `accrueFees` is permissionless; the fee setters are admin-gated.
+    function test_Fees_AccruePermissionlessSettersGated() public {
+        _depositFor(user, 1 ether);
+        vm.prank(stranger);
+        vault.accrueFees(); // permissionless
+
+        vm.prank(stranger);
+        vm.expectRevert();
+        vault.setFeeRecipient(stranger);
+        vm.prank(stranger);
+        vm.expectRevert();
+        vault.setManagementFeeBps(100);
+    }
 }
