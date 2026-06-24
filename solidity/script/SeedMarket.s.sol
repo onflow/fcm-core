@@ -31,10 +31,7 @@ contract SeedMarket is ConfiguredScript {
 
         vm.startBroadcast();
         address supplier = _broadcaster();
-        require(
-            IERC20(c.loanToken).balanceOf(supplier) >= amount,
-            "broadcaster holds less loan token than SEED_AMOUNT"
-        );
+        require(IERC20(c.loanToken).balanceOf(supplier) >= amount, "broadcaster holds less loan token than SEED_AMOUNT");
 
         IERC20(c.loanToken).approve(address(MORPHO), amount);
         (uint256 supplied,) = MORPHO.supply(_marketParams(c), amount, 0, supplier, "");

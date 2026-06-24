@@ -119,10 +119,7 @@ contract TvlLimitTest is Test {
     function _expectMaxDepositExceeded(address receiver, uint256 assets) internal {
         vm.expectRevert(
             abi.encodeWithSelector(
-                ERC4626.ERC4626ExceededMaxDeposit.selector,
-                receiver,
-                assets,
-                vault.maxDeposit(receiver)
+                ERC4626.ERC4626ExceededMaxDeposit.selector, receiver, assets, vault.maxDeposit(receiver)
             )
         );
     }

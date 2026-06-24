@@ -50,17 +50,9 @@ contract LiveCheck is Script {
         (, address caller,) = vm.readCallers();
 
         // Pre-flight: fail with a clear reason before any value moves.
-        require(
-            vault.hasRole(vault.EARLY_ACCESS_ROLE(), caller),
-            "caller lacks EARLY_ACCESS_ROLE on the vault"
-        );
-        require(
-            assetToken.balanceOf(caller) >= amount,
-            "caller does not hold CHECK_AMOUNT of the vault asset"
-        );
-        require(
-            vault.maxDeposit(caller) >= amount, "TVL headroom below CHECK_AMOUNT (is maxTvl set?)"
-        );
+        require(vault.hasRole(vault.EARLY_ACCESS_ROLE(), caller), "caller lacks EARLY_ACCESS_ROLE on the vault");
+        require(assetToken.balanceOf(caller) >= amount, "caller does not hold CHECK_AMOUNT of the vault asset");
+        require(vault.maxDeposit(caller) >= amount, "TVL headroom below CHECK_AMOUNT (is maxTvl set?)");
 
         uint256 assetBefore = assetToken.balanceOf(caller);
         uint256 sharesBefore = vault.balanceOf(caller);
@@ -70,10 +62,7 @@ contract LiveCheck is Script {
         assetToken.approve(address(vault), amount);
         uint256 shares = vault.deposit(amount, caller);
         require(shares > 0, "deposit minted zero shares");
-        require(
-            vault.balanceOf(caller) == sharesBefore + shares,
-            "share balance does not reflect minted shares"
-        );
+        require(vault.balanceOf(caller) == sharesBefore + shares, "share balance does not reflect minted shares");
         require(vault.totalAssets() > navBefore, "vault NAV did not grow on deposit");
 
         // Rebalance the position. Forced, so it drives toward the target
@@ -93,9 +82,7 @@ contract LiveCheck is Script {
             "asset balance delta does not match redeem output"
         );
         uint256 roundtripBps = redeemed * 10_000 / amount;
-        require(
-            roundtripBps >= minRoundtripBps, "round-trip value below MIN_ROUNDTRIP_BPS tolerance"
-        );
+        require(roundtripBps >= minRoundtripBps, "round-trip value below MIN_ROUNDTRIP_BPS tolerance");
 
         console.log("=== live check passed ===");
         console.log("deposited:   %s", amount);
@@ -122,7 +109,6 @@ contract LiveCheck is Script {
         Position memory pos = MORPHO.position(mp.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
         Market memory mkt = MORPHO.market(mp.id());
-        return uint256(pos.borrowShares)
-            .toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
+        return uint256(pos.borrowShares).toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
     }
 }

@@ -35,22 +35,41 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     using Math for uint256;
     using MarketLib for MarketParams;
 
+    struct InitParams {
+        IERC20 collateral;
+        IERC20 loanToken;
+        IERC20 yieldToken;
+        address marketOracle;
+        address marketIrm;
+        uint256 marketLltv;
+        uint24 feeYieldDebt;
+        uint24 feeAssetDebt;
+        uint256 healthFactorMin;
+        uint256 healthFactorMax;
+        uint256 healthFactorTarget;
+        address yieldOracle;
+        address admin;
+        uint256 recoveryDelay;
+        string name;
+        string symbol;
+    }
+
     /// @notice Members of this role may deposit assets, hold shares, and
     ///         transfer shares.
     bytes32 public constant EARLY_ACCESS_ROLE = keccak256("EARLY_ACCESS_ROLE");
 
-    // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
-    // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
+    /// @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
+    /// @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     uint8 internal constant DECIMALS_OFFSET = 6;
 
     /// @dev Basis-points denominator for `maxSlippageBps`.
     uint256 internal constant BPS = 10_000;
 
-    // @dev Address of the loan token (inner vault asset)
+    /// @dev Address of the loan token (inner vault asset)
     IERC20 public immutable loanToken;
-    // @dev Address of the yield token (inner vault share)
+    /// @dev Address of the yield token (inner vault share)
     IERC20 public immutable yieldToken;
-    // @dev Pool fee for swapping yield<->debt
+    /// @dev Pool fee for swapping yield<->debt
     uint24 public immutable feeYieldDebt;
     /// @notice Pool fee tier for the asset/debt pool, used to reconcile
     ///         redeem surplus from loan token back to the underlying asset.
@@ -66,9 +85,9 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///         per-deposit borrow. WAD-scaled; must satisfy
     ///         `healthFactorMin < healthFactorTarget < healthFactorMax`.
     uint256 public immutable healthFactorTarget;
-    // @dev Address of the oracle for the yield token.
-    //      We will deploy an oracle instance, which will provide the best available price information
-    //      for the given token. This may be a 3rd party oracle, onchain price information, or both.
+    /// @dev Address of the oracle for the yield token.
+    ///      We will deploy an oracle instance, which will provide the best available price information
+    ///      for the given token. This may be a 3rd party oracle, onchain price information, or both.
     address public immutable yieldOracle;
 
     MarketParams public market;
@@ -87,8 +106,6 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///              This can occur without any direct interactions with the vault.
     uint256 public maxTvl;
 
-    event MaxTvlSet(uint256 previousMaxTvl, uint256 newMaxTvl);
-
     /// @notice Max slippage (basis points) tolerated on the rebalance swaps
     ///         (lever and delever). The swap's `amountOutMinimum` is the
     ///         oracle-expected output discounted by this; a worse fill reverts
@@ -97,11 +114,10 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///         the ERC4626 router. Defaults to 1%, admin-adjustable.
     uint256 public maxSlippageBps;
 
+    event MaxTvlSet(uint256 previousMaxTvl, uint256 newMaxTvl);
+
     /// @notice Emitted when the admin updates `maxSlippageBps`.
     event MaxSlippageBpsSet(uint256 oldBps, uint256 newBps);
-
-    /// @dev Thrown when a slippage tolerance >= 100% (10_000 bps) is set.
-    error InvalidSlippage();
 
     // ── Timelocked emergency recovery (custodial, in-kind) ──────────────────
     /// @notice Delay (in seconds) between scheduling and executing a recovery.
@@ -130,25 +146,6 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @dev Deposits are frozen while a recovery is pending or after it executes.
     error EmergencyRecoveryActive();
     error EmergencyRecoveryNotReady();
-
-    struct InitParams {
-        IERC20 collateral;
-        IERC20 loanToken;
-        IERC20 yieldToken;
-        address marketOracle;
-        address marketIrm;
-        uint256 marketLltv;
-        uint24 feeYieldDebt;
-        uint24 feeAssetDebt;
-        uint256 healthFactorMin;
-        uint256 healthFactorMax;
-        uint256 healthFactorTarget;
-        address yieldOracle;
-        address admin;
-        uint256 recoveryDelay;
-        string name;
-        string symbol;
-    }
 
     /// @notice Emitted whenever the vault is re-balanced
     /// @param  caller             Address that invoked `rebalance`.
@@ -182,13 +179,11 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @param  debtPrice       Loan-token price in loan token (the 1e36 scale).
     /// @param  yieldPrice      Yield-token price in loan token, 1e36-scaled.
     event VaultState(
-        uint256 collateral,
-        uint256 debt,
-        uint256 yield,
-        uint256 collateralPrice,
-        uint256 debtPrice,
-        uint256 yieldPrice
+        uint256 collateral, uint256 debt, uint256 yield, uint256 collateralPrice, uint256 debtPrice, uint256 yieldPrice
     );
+
+    /// @dev Thrown when a slippage tolerance >= 100% (10_000 bps) is set.
+    error InvalidSlippage();
 
     /// @dev Emits a `VaultState` snapshot after the wrapped function body runs.
     ///      Placed after `_;` so the event reflects post-call state. Modifying
@@ -206,11 +201,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         );
     }
 
-    constructor(InitParams memory p)
-        ERC20(p.name, p.symbol)
-        ERC4626(p.collateral)
-        Ownable(p.admin)
-    {
+    constructor(InitParams memory p) ERC20(p.name, p.symbol) ERC4626(p.collateral) Ownable(p.admin) {
         require(p.healthFactorMin >= MarketLib.WAD, "HF min < WAD");
         require(p.healthFactorMin <= p.healthFactorTarget, "HF min > target");
         require(p.healthFactorTarget <= p.healthFactorMax, "HF target > max");
@@ -259,8 +250,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         return expectedOut.mulDiv(BPS - maxSlippageBps, BPS);
     }
 
-    // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
-    // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
+    /// @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
+    /// @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     function _decimalsOffset() internal pure override returns (uint8) {
         return DECIMALS_OFFSET;
     }
@@ -316,12 +307,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @param  assets   Amount of underlying asset to deposit.
     /// @param  receiver Account to credit with newly minted shares.
     /// @return shares   Vault shares minted to `receiver`.
-    function deposit(uint256 assets, address receiver)
-        public
-        override
-        logsVaultState
-        returns (uint256 shares)
-    {
+    function deposit(uint256 assets, address receiver) public override logsVaultState returns (uint256 shares) {
         // Freeze deposits while a recovery is pending (recoveryValidAt != 0) or done
         // (recovered) — don't let new funds in ahead of a sweep. Redeems stay open.
         if (recoveryValidAt != 0 || recovered) revert EmergencyRecoveryActive();
@@ -551,8 +537,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         uint256 currentDebt = market.debt();
         uint256 maxBorrow = market.maxBorrow(); // independent of current debt balance
         // we compute inline here rather than use MarketLib.healthFactor to save a SLOAD
-        uint256 hfBefore =
-            currentDebt == 0 ? type(uint256).max : maxBorrow.mulDiv(MarketLib.WAD, currentDebt);
+        uint256 hfBefore = currentDebt == 0 ? type(uint256).max : maxBorrow.mulDiv(MarketLib.WAD, currentDebt);
 
         if (!force) {
             if (hfBefore >= healthFactorMin && hfBefore <= healthFactorMax) {
@@ -582,10 +567,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///                    value used to compute `hfBefore` to avoid a
     ///                    second `MORPHO.position` SLOAD).
     /// @return additionalDebt Amount of loan token borrowed in this call.
-    function _rebalanceLever(uint256 maxBorrow, uint256 currentDebt)
-        internal
-        returns (uint256 additionalDebt)
-    {
+    function _rebalanceLever(uint256 maxBorrow, uint256 currentDebt) internal returns (uint256 additionalDebt) {
         uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorTarget);
         if (targetDebt <= currentDebt) return 0;
         additionalDebt = targetDebt - currentDebt;
@@ -595,14 +577,9 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // maxSlippageBps. Deposit's identical leg is intentionally unfloored
         // (user-facing slippage is the router's job); this leg is
         // vault-initiated, so the floor is the price-impact / sandwich guard.
-        uint256 expectedYield =
-            additionalDebt.mulDiv(MarketLib.ORACLE_PRICE_SCALE, IOracle(yieldOracle).price());
+        uint256 expectedYield = additionalDebt.mulDiv(MarketLib.ORACLE_PRICE_SCALE, IOracle(yieldOracle).price());
         SwapLib.swapExactInMin(
-            address(loanToken),
-            address(yieldToken),
-            feeYieldDebt,
-            additionalDebt,
-            _slippageFloor(expectedYield)
+            address(loanToken), address(yieldToken), feeYieldDebt, additionalDebt, _slippageFloor(expectedYield)
         );
     }
 
@@ -624,10 +601,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///                    after a liquidation that wiped collateral).
     /// @param currentDebt Current outstanding debt.
     /// @return repaid Amount of loan token repaid to Morpho in this call.
-    function _rebalanceDelever(uint256 maxBorrow, uint256 currentDebt)
-        internal
-        returns (uint256 repaid)
-    {
+    function _rebalanceDelever(uint256 maxBorrow, uint256 currentDebt) internal returns (uint256 repaid) {
         // conceptually, target debt is maxBorrow / hfTarget
         uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorTarget);
         if (targetDebt >= currentDebt) return 0;
@@ -649,11 +623,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // leg gets the price-impact / sandwich guard.
         uint256 expectedLoan = yieldToSell.mulDiv(yieldPrice, MarketLib.ORACLE_PRICE_SCALE);
         SwapLib.swapExactInMin(
-            address(yieldToken),
-            address(loanToken),
-            feeYieldDebt,
-            yieldToSell,
-            _slippageFloor(expectedLoan)
+            address(yieldToken), address(loanToken), feeYieldDebt, yieldToSell, _slippageFloor(expectedLoan)
         );
         uint256 loanGot = loanToken.balanceOf(address(this)) - loanBefore;
 
@@ -716,8 +686,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///      `rebalance`, not `deposit`.
     function _targetBorrowAgainst(uint256 newAssets) internal view returns (uint256) {
         if (newAssets == 0) return 0;
-        uint256 capFromNewAsset =
-            market.maxBorrowFor(newAssets).mulDiv(MarketLib.WAD, healthFactorTarget);
+        uint256 capFromNewAsset = market.maxBorrowFor(newAssets).mulDiv(MarketLib.WAD, healthFactorTarget);
         uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(healthFactorTarget);
         return capFromNewAsset < capFromTargetDebt ? capFromNewAsset : capFromTargetDebt;
     }

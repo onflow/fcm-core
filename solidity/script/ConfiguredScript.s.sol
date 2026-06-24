@@ -49,8 +49,7 @@ abstract contract ConfiguredScript is Script {
 
         c.chainId = vm.parseJsonUint(json, ".chainId");
         require(
-            c.chainId == block.chainid,
-            string.concat("config chainId does not match RPC chain (network=", network, ")")
+            c.chainId == block.chainid, string.concat("config chainId does not match RPC chain (network=", network, ")")
         );
 
         c.collateral = vm.parseJsonAddress(json, ".collateral");
@@ -90,20 +89,17 @@ abstract contract ConfiguredScript is Script {
     function _requireMarketExists(Config memory c) internal view returns (Market memory m) {
         m = MORPHO.market(_marketId(c));
         require(
-            m.lastUpdate != 0,
-            "Morpho market for config params does not exist; check marketOracle/marketIrm/marketLltv"
+            m.lastUpdate != 0, "Morpho market for config params does not exist; check marketOracle/marketIrm/marketLltv"
         );
     }
 
     /// @dev Both FlowSwap pools the vault trades on must exist.
     function _requirePoolsExist(Config memory c) internal view {
-        address yieldPool =
-            IUniswapV3Factory(c.swapFactory).getPool(c.yieldToken, c.loanToken, c.feeYieldDebt);
+        address yieldPool = IUniswapV3Factory(c.swapFactory).getPool(c.yieldToken, c.loanToken, c.feeYieldDebt);
         require(yieldPool != address(0), "yield/debt pool missing");
         require(yieldPool == c.yieldDebtPool, "config yieldDebtPool does not match factory");
         require(
-            IUniswapV3Factory(c.swapFactory).getPool(c.collateral, c.loanToken, c.feeAssetDebt)
-                != address(0),
+            IUniswapV3Factory(c.swapFactory).getPool(c.collateral, c.loanToken, c.feeAssetDebt) != address(0),
             "asset/debt pool missing"
         );
     }

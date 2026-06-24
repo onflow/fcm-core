@@ -256,9 +256,7 @@ contract FCMVaultTest is Test {
         uint256 assetsOut = vault.redeem(shares / 2, user, user);
 
         // ~half of each leg consumed (within 0.1% — virtual-share offset).
-        assertApproxEqRel(
-            WETH.balanceOf(address(MORPHO)), collateralBefore / 2, 1e15, "collateral halved"
-        );
+        assertApproxEqRel(WETH.balanceOf(address(MORPHO)), collateralBefore / 2, 1e15, "collateral halved");
         assertApproxEqRel(FUSDEV.balanceOf(address(vault)), fusdevBefore / 2, 1e15, "fusdev halved");
         assertApproxEqRel(assetsOut, amount / 2, 1e15, "assetsOut approx half");
 
@@ -523,9 +521,7 @@ contract FCMVaultTest is Test {
 
         uint256 healthAfter = _healthFactor();
         assertGt(healthAfter, 5e18, "health factor still well above target after bob");
-        assertApproxEqRel(
-            healthAfter, healthBefore, 1e15, "bob did not materially change health factor"
-        );
+        assertApproxEqRel(healthAfter, healthBefore, 1e15, "bob did not materially change health factor");
     }
 
     /// @dev When the position health factor is below the target (price has dropped,
@@ -593,9 +589,7 @@ contract FCMVaultTest is Test {
         bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                stranger,
-                vault.DEFAULT_ADMIN_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, vault.DEFAULT_ADMIN_ROLE()
             )
         );
         vm.prank(stranger);
@@ -632,9 +626,7 @@ contract FCMVaultTest is Test {
         WETH.approve(address(vault), amount);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                bob,
-                vault.EARLY_ACCESS_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
             )
         );
         vault.deposit(amount, bob);
@@ -672,9 +664,7 @@ contract FCMVaultTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                bob,
-                vault.EARLY_ACCESS_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
             )
         );
         vault.transfer(bob, shares);
@@ -697,9 +687,7 @@ contract FCMVaultTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                user,
-                vault.EARLY_ACCESS_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user, vault.EARLY_ACCESS_ROLE()
             )
         );
         vm.prank(user);
@@ -832,9 +820,7 @@ contract FCMVaultTest is Test {
         // Non-admin cannot set (DEFAULT_ADMIN_ROLE == bytes32(0)).
         vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSignature(
-                "AccessControlUnauthorizedAccount(address,bytes32)", stranger, bytes32(0)
-            )
+            abi.encodeWithSignature("AccessControlUnauthorizedAccount(address,bytes32)", stranger, bytes32(0))
         );
         vault.setMaxSlippageBps(300);
 
@@ -970,9 +956,7 @@ contract FCMVaultTest is Test {
         assertGt(_debt(), debtBefore, "rebalance borrowed more debt");
         assertGt(FUSDEV.balanceOf(address(vault)), yieldBefore, "rebalance bought more yield");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token after rebalance");
-        assertApproxEqRel(
-            _healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "rebalance restored target HF"
-        );
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "rebalance restored target HF");
 
         // Redeem everything.
         vm.prank(user);
@@ -1013,8 +997,7 @@ contract FCMVaultTest is Test {
         vm.prank(user);
         vault.redeem(shares / 2, user, user);
 
-        (uint256 collateral, uint256 debt, uint256 yield,,,) =
-            _assertVaultStateMatchesCurrentState();
+        (uint256 collateral, uint256 debt, uint256 yield,,,) = _assertVaultStateMatchesCurrentState();
         // A partial redeem leaves a live position behind.
         assertGt(collateral, 0, "collateral remains");
         assertGt(debt, 0, "debt remains");
@@ -1057,8 +1040,7 @@ contract FCMVaultTest is Test {
         vm.recordLogs();
         vault.rebalance(false);
 
-        (,, uint256 yield, uint256 collPrice,, uint256 yieldPrice) =
-            _assertVaultStateMatchesCurrentState();
+        (,, uint256 yield, uint256 collPrice,, uint256 yieldPrice) = _assertVaultStateMatchesCurrentState();
         assertEq(collPrice, 2300e36, "snapshot collateral price is the new oracle price");
         assertEq(yieldPrice, YIELD_PRICE, "snapshot yield price");
         assertGt(yield, 0, "yield leg present");
@@ -1164,8 +1146,8 @@ contract FCMVaultTest is Test {
         Position memory pos = MORPHO.position(marketId, address(vault));
         if (pos.borrowShares == 0) return 0;
         Market memory mkt = MORPHO.market(marketId);
-        return (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1))
-            / (uint256(mkt.totalBorrowShares) + 1e6);
+        return
+            (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1)) / (uint256(mkt.totalBorrowShares) + 1e6);
     }
 
     /// @dev Simulate a liquidation of the vault's position via the MockMorpho
@@ -1174,12 +1156,7 @@ contract FCMVaultTest is Test {
     function _liquidate(uint256 seizedCollateral, uint256 repaidAssets) internal {
         (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
         MockMorpho(address(MORPHO))
-            .liquidate(
-                MarketParams(lt, ct, oracle, irm, lltv_),
-                address(vault),
-                seizedCollateral,
-                repaidAssets
-            );
+            .liquidate(MarketParams(lt, ct, oracle, irm, lltv_), address(vault), seizedCollateral, repaidAssets);
     }
 
     function _baseParams() internal view returns (FCMVault.InitParams memory) {
@@ -1209,11 +1186,10 @@ contract FCMVaultTest is Test {
         Position memory pos = MORPHO.position(marketId, address(vault));
         Market memory mkt = MORPHO.market(marketId);
         if (pos.borrowShares == 0) return type(uint256).max;
-        uint256 debt = (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1))
-            / (uint256(mkt.totalBorrowShares) + 1e6);
-        uint256 maxBorrow = Math.mulDiv(
-            uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36), 1e18
-        );
+        uint256 debt =
+            (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1)) / (uint256(mkt.totalBorrowShares) + 1e6);
+        uint256 maxBorrow =
+            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36), 1e18);
         return Math.mulDiv(maxBorrow, 1e18, debt);
     }
 
