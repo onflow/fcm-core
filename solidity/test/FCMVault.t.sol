@@ -1103,7 +1103,9 @@ contract FCMVaultTest is Test {
         // maxDeposit reflects the halt (ERC-4626: must report 0 when disabled).
         assertEq(vault.maxDeposit(user), 0, "maxDeposit 0 after execute");
 
-        // And rebalancing no-ops (doesn't revert) on the drained vault.
+        // And rebalancing reverts on the recovered vault, so the off-chain
+        // rebalancer gets an explicit signal to stop.
+        vm.expectRevert(FCMVault.EmergencyRecoveryActive.selector);
         vault.rebalance(true);
     }
 

@@ -499,9 +499,10 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///
     /// @param  force If true, rebalance regardless of current health factor
     function rebalance(bool force) external {
-        // After a recovery the position is empty; no-op (don't revert) so the
-        // scheduled rebalancer doesn't error/retry on a drained vault.
-        if (recovered) return;
+        // After a recovery the position is terminal; revert with an explicit
+        // error so the off-chain rebalancer surfaces it and stops, rather than
+        // silently no-op'ing and running indefinitely.
+        if (recovered) revert EmergencyRecoveryActive();
         market.accrueInterest();
         uint256 currentDebt = market.debt();
         uint256 maxBorrow = market.maxBorrow(); // independent of current debt balance
