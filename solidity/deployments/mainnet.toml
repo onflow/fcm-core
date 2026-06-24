@@ -1,0 +1,37 @@
+# Flow EVM mainnet deployment config for FCMVault.
+# Consumed by script/ConfiguredScript.s.sol via DEPLOY_NETWORK (default: mainnet).
+
+chainId = 747
+
+# --- Tokens ---
+# WBTC
+collateral = "0x717DAE2BaF7656BE9a9B01deE31d571a9d4c9579"
+# PYUSD0
+loanToken  = "0x99aF3EeA856556646C98c8B9b2548Fe815240750"
+# FUSDEV
+yieldToken = "0xd069d989e2F44B70c65347d1853C0c67e10a9F8D"
+
+# --- Morpho market ---
+# Market deployed in transaction 0xa42935835667442dabe17f780bcfe2a298f6332c04ba7133af301049fadbe175
+marketOracle = "0x5B3e0BA14443B444D557C0C2F85592d88B88f5c8"
+marketIrm    = "0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546"
+# Market liquidation LTV (WAD, 1e18 = 100%). 0.86e18 = 86%.
+marketLltv   = "860000000000000000"
+
+# --- Rebalance band (WAD health factors, 1e18 = liquidation line) ---
+# HF = marketLltv / LTV, i.e. marketLltv(0.86e18) * 100 / LTV%. Higher LTV is
+# more leveraged = lower HF, so the 70% (most-leveraged) edge is healthFactorMin.
+healthFactorMin = "1228571428571428571"  # 860000000000000000 * 100 / 70  (LTV 70%)
+healthFactorMax = "1433333333333333333"  # 860000000000000000 * 100 / 60  (LTV 60%)
+# Two rebalance targets (re-entry points after a rebalance).
+healthFactorMinTarget = "1430948419301164725"  # 860000000000000000 * 100 / 60.1  (LTV 60.1%)
+healthFactorMaxTarget = "1230329041487839771"  # 860000000000000000 * 100 / 69.9  (LTV 69.9%)
+
+# --- FlowSwap V3 pool fee tiers ---
+feeYieldDebt = 100
+feeAssetDebt = 3000
+
+# --- Periphery ---
+yieldOracle  = "0x144F613490DD55C9844Ef139CFB9B63433dD349F"
+swapFactory  = "0xca6d7Bb03334bBf135902e1d919a5feccb461632"
+yieldDebtPool = "0x9196e243b7562B0866309013f2F9EB63F83A690f"
