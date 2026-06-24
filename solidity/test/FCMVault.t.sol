@@ -73,6 +73,7 @@ contract FCMVaultTest is Test {
                 healthFactorTarget: HEALTH_FACTOR_TARGET,
                 yieldOracle: address(yieldOracle),
                 admin: admin,
+                recoveryDelay: 7 days,
                 name: "Flow Credit Markets WETH",
                 symbol: "fcmWETH"
             })
@@ -1196,6 +1197,7 @@ contract FCMVaultTest is Test {
             healthFactorTarget: HEALTH_FACTOR_TARGET,
             yieldOracle: address(yieldOracle),
             admin: admin,
+            recoveryDelay: 7 days,
             name: "x",
             symbol: "x"
         });
@@ -1213,5 +1215,139 @@ contract FCMVaultTest is Test {
             uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36), 1e18
         );
         return Math.mulDiv(maxBorrow, 1e18, debt);
+    }
+
+    // ---- timelocked emergency recovery -----------------------------------
+
+    /// @dev Fund the owner with loanToken to repay the debt, then schedule and
+    ///      warp past the timelock so a recovery is executable.
+    function _armRecovery() internal {
+        MockERC20(address(PYUSD0)).mint(admin, 1_000_000 ether);
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+        vm.warp(block.timestamp + vault.recoveryDelay());
+    }
+
+    /// @notice Happy path: after the timelock, the owner funds the debt and the
+    ///         whole position (collateral + yield) is swept to the owner.
+    function test_Recovery_ExecuteSweepsPositionToOwner() public {
+        _depositFor(user, 1 ether);
+        _armRecovery();
+
+        vm.startPrank(admin);
+        PYUSD0.approve(address(vault), type(uint256).max);
+        vault.executeEmergencyRecovery();
+        vm.stopPrank();
+
+        assertTrue(vault.recovered(), "recovered flag set");
+        assertEq(WETH.balanceOf(address(vault)), 0, "no collateral left in vault");
+        assertEq(FUSDEV.balanceOf(address(vault)), 0, "no yield left in vault");
+        assertGt(WETH.balanceOf(admin), 0, "owner received collateral");
+        assertGt(FUSDEV.balanceOf(admin), 0, "owner received yield");
+    }
+
+    /// @notice Deposits are permanently blocked once a recovery has executed.
+    function test_Recovery_BlocksDepositsAfterExecute() public {
+        _depositFor(user, 1 ether);
+        _armRecovery();
+        vm.startPrank(admin);
+        PYUSD0.approve(address(vault), type(uint256).max);
+        vault.executeEmergencyRecovery();
+        vm.stopPrank();
+
+        MockERC20(address(WETH)).mint(user, 1 ether);
+        vm.startPrank(user);
+        WETH.approve(address(vault), 1 ether);
+        vm.expectRevert(FCMVault.EmergencyRecoveryActive.selector);
+        vault.deposit(1 ether, user);
+        vm.stopPrank();
+        // maxDeposit reflects the halt (ERC-4626: must report 0 when disabled).
+        assertEq(vault.maxDeposit(user), 0, "maxDeposit 0 after execute");
+
+        // And rebalancing reverts on the recovered vault, so the off-chain
+        // rebalancer gets an explicit signal to stop.
+        vm.expectRevert(FCMVault.EmergencyRecoveryActive.selector);
+        vault.rebalance(true);
+    }
+
+    /// @notice Deposits are frozen as soon as a recovery is scheduled (before
+    ///         execute), so new funds can't enter ahead of the sweep.
+    function test_Recovery_BlocksDepositsWhilePending() public {
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+
+        MockERC20(address(WETH)).mint(user, 1 ether);
+        vm.startPrank(user);
+        WETH.approve(address(vault), 1 ether);
+        vm.expectRevert(FCMVault.EmergencyRecoveryActive.selector);
+        vault.deposit(1 ether, user);
+        vm.stopPrank();
+        // maxDeposit reflects the halt (ERC-4626: must report 0 when disabled).
+        assertEq(vault.maxDeposit(user), 0, "maxDeposit 0 while pending");
+    }
+
+    /// @notice The owner can cancel a pending recovery during the timelock.
+    function test_Recovery_OwnerCanCancel() public {
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+        assertGt(vault.recoveryValidAt(), 0, "scheduled");
+
+        vm.prank(admin);
+        vault.cancelEmergencyRecovery();
+        assertEq(vault.recoveryValidAt(), 0, "cancelled");
+    }
+
+    /// @notice Execution reverts before the timelock elapses.
+    function test_Recovery_ExecuteRevertsBeforeDelay() public {
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+        vm.prank(admin);
+        vm.expectRevert(FCMVault.EmergencyRecoveryNotReady.selector);
+        vault.executeEmergencyRecovery();
+    }
+
+    /// @notice A holder can still redeem while a recovery is pending — the
+    ///         timelock window is a real exit opportunity, not a lockup.
+    function test_Recovery_RedeemStaysOpenWhilePending() public {
+        uint256 shares = _depositFor(user, 1 ether);
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+
+        vm.prank(user);
+        uint256 assets = vault.redeem(shares, user, user);
+        assertGt(assets, 0, "redeem works during pending recovery");
+    }
+
+    /// @notice The escape hatch (`redeemInKind`) also stays open while a
+    ///         recovery is pending — a holder can self-exit in kind throughout
+    ///         the timelock window.
+    function test_Recovery_RedeemInKindStaysOpenWhilePending() public {
+        uint256 shares = _depositFor(user, 1 ether);
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+
+        // Caller funds the debt slice and approves the vault.
+        MockERC20(address(PYUSD0)).mint(user, 1_000_000 ether);
+        vm.startPrank(user);
+        PYUSD0.approve(address(vault), type(uint256).max);
+        (uint256 collOut, uint256 yieldOut) = vault.redeemInKind(shares, user, user);
+        vm.stopPrank();
+
+        assertEq(vault.balanceOf(user), 0, "shares burned during pending recovery");
+        assertGt(collOut, 0, "collateral delivered in kind");
+        assertGt(yieldOut, 0, "yield delivered in kind");
+    }
+
+    /// @notice Only the owner may schedule or cancel a recovery.
+    function test_Recovery_AccessControl() public {
+        vm.prank(user);
+        vm.expectRevert();
+        vault.scheduleEmergencyRecovery();
+
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+        vm.prank(user);
+        vm.expectRevert();
+        vault.cancelEmergencyRecovery();
     }
 }

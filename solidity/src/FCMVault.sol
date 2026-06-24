@@ -103,6 +103,34 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @dev Thrown when a slippage tolerance >= 100% (10_000 bps) is set.
     error InvalidSlippage();
 
+    // ── Timelocked emergency recovery (custodial, in-kind) ──────────────────
+    /// @notice Delay (in seconds) between scheduling and executing a recovery.
+    uint256 public immutable recoveryDelay;
+    /// @notice Timestamp a scheduled recovery becomes executable; 0 = none pending.
+    uint256 public recoveryValidAt;
+    /// @notice Set once a recovery executes; permanently blocks new deposits.
+    bool public recovered;
+
+    /// @notice Emitted when a recovery is scheduled.
+    /// @param  caller  Owner that scheduled it.
+    /// @param  validAt Timestamp the recovery becomes executable (`now + recoveryDelay`).
+    event EmergencyRecoveryScheduled(address indexed caller, uint256 validAt);
+    /// @notice Emitted when a pending recovery is cancelled before execution.
+    /// @param  caller Owner that cancelled it.
+    event EmergencyRecoveryCancelled(address indexed caller);
+    /// @notice Emitted when a recovery executes and the position is swept to the owner.
+    /// @param  debtRepaid    Loan token the owner funded to clear the debt.
+    /// @param  collateralOut Collateral swept to the owner.
+    /// @param  yieldOut      Yield token swept to the owner.
+    /// @param  loanOut       Over-funded loan token remainder swept back to the owner.
+    event EmergencyRecoveryExecuted(
+        uint256 debtRepaid, uint256 collateralOut, uint256 yieldOut, uint256 loanOut
+    );
+
+    /// @dev Deposits are frozen while a recovery is pending or after it executes.
+    error EmergencyRecoveryActive();
+    error EmergencyRecoveryNotReady();
+
     struct InitParams {
         IERC20 collateral;
         IERC20 loanToken;
@@ -117,6 +145,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         uint256 healthFactorTarget;
         address yieldOracle;
         address admin;
+        uint256 recoveryDelay;
         string name;
         string symbol;
     }
@@ -209,6 +238,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         p.loanToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
         p.yieldToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
 
+        recoveryDelay = p.recoveryDelay;
         maxSlippageBps = 100; // 1% default; admin retunes per pool depth.
 
         _grantRole(DEFAULT_ADMIN_ROLE, p.admin);
@@ -292,6 +322,9 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         logsVaultState
         returns (uint256 shares)
     {
+        // Freeze deposits while a recovery is pending (recoveryValidAt != 0) or done
+        // (recovered) — don't let new funds in ahead of a sweep. Redeems stay open.
+        if (recoveryValidAt != 0 || recovered) revert EmergencyRecoveryActive();
         market.accrueInterest();
 
         uint256 navBefore = totalAssets();
@@ -510,6 +543,10 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///
     /// @param  force If true, rebalance regardless of current health factor
     function rebalance(bool force) external logsVaultState {
+        // After a recovery the position is terminal; revert with an explicit
+        // error so the off-chain rebalancer surfaces it and stops, rather than
+        // silently no-op'ing and running indefinitely.
+        if (recovered) revert EmergencyRecoveryActive();
         market.accrueInterest();
         uint256 currentDebt = market.debt();
         uint256 maxBorrow = market.maxBorrow(); // independent of current debt balance
@@ -698,6 +735,53 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         maxTvl = newMaxTvl;
     }
 
+    /// @notice Schedule a timelocked emergency recovery. Executable after
+    ///         `recoveryDelay`; the owner may cancel in the meantime.
+    function scheduleEmergencyRecovery() external onlyOwner {
+        recoveryValidAt = block.timestamp + recoveryDelay;
+        emit EmergencyRecoveryScheduled(msg.sender, recoveryValidAt);
+    }
+
+    /// @notice Cancel a pending recovery during its timelock window.
+    function cancelEmergencyRecovery() external onlyOwner {
+        recoveryValidAt = 0;
+        emit EmergencyRecoveryCancelled(msg.sender);
+    }
+
+    /// @notice Execute a scheduled recovery once its timelock elapses. The owner
+    ///         funds the full debt in `loanToken`; the position is fully unwound
+    ///         (no swap) and all assets are swept to the owner. Burns no shares and
+    ///         permanently blocks deposits. `redeem` stays callable throughout the
+    ///         window so holders may exit first.
+    function executeEmergencyRecovery() external onlyOwner {
+        if (recoveryValidAt == 0 || block.timestamp < recoveryValidAt) {
+            revert EmergencyRecoveryNotReady();
+        }
+        recoveryValidAt = 0;
+        recovered = true;
+
+        market.accrueInterest();
+
+        // Owner funds the full debt; repay by shares so the position zeros exactly.
+        uint256 debtRepaid = market.debt();
+        loanToken.safeTransferFrom(msg.sender, address(this), debtRepaid);
+        market.repayAll();
+
+        // Free all collateral now that the debt is cleared.
+        uint256 collateralOut = market.collateral();
+        if (collateralOut > 0) market.withdrawCollateral(collateralOut);
+
+        // Sweep everything to the owner, in kind.
+        address to = owner();
+        uint256 yieldOut = yieldToken.balanceOf(address(this));
+        uint256 loanOut = loanToken.balanceOf(address(this)); // over-funded remainder
+        if (collateralOut > 0) IERC20(asset()).safeTransfer(to, collateralOut);
+        if (yieldOut > 0) yieldToken.safeTransfer(to, yieldOut);
+        if (loanOut > 0) loanToken.safeTransfer(to, loanOut);
+
+        emit EmergencyRecoveryExecuted(debtRepaid, collateralOut, yieldOut, loanOut);
+    }
+
     /// @inheritdoc IERC4626
     /// @notice Remaining headroom under the TVL limit, clamped to 0 when full.
     /// @dev Even if the inner vault has hit its own deposit limit, we may still
@@ -705,6 +789,10 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///      However, if we implement 'direct deposit' to the inner vault,
     ///      its own maxDeposit() will bind.
     function maxDeposit(address receiver) public view override returns (uint256) {
+        // The emergency recovery deposit freeze is enforced by the guard in deposit();
+        // maxDeposit mirrors it as 0 because ERC-4626 requires reporting 0 when deposits
+        // are disabled.
+        if (recoveryValidAt != 0 || recovered) return 0;
         if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
         uint256 cachedTotalAssets = totalAssets();
         return maxTvl > cachedTotalAssets ? maxTvl - cachedTotalAssets : 0;
