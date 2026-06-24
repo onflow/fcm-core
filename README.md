@@ -63,8 +63,7 @@ make mainnet-remove-rebalancer VAULT=0x…
 
 Calldata is hardcoded to `rebalance(false)` and scheduler priority to Medium.
 The deployer must hold enough FLOW for the per-tick scheduling fee plus the
-account storage minimum. The scheduling fee scales with `EXECUTION_EFFORT`, so the deployer
-must be funded for the full run. 
+account storage minimum.
 
 ### Deployed contracts (Flow EVM mainnet)
 
