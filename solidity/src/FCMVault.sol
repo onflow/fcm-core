@@ -244,46 +244,97 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         maxSlippageBps = newBps;
     }
 
-    /// @dev Discount an oracle-expected swap output by `maxSlippageBps` to get
-    ///      the `amountOutMinimum` floor for a rebalance swap.
-    function _slippageFloor(uint256 expectedOut) internal view returns (uint256) {
-        return expectedOut.mulDiv(BPS - maxSlippageBps, BPS);
-    }
-
-    /// @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
-    /// @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
-    function _decimalsOffset() internal pure override returns (uint8) {
-        return DECIMALS_OFFSET;
-    }
-
-    function _totalClaims() internal view returns (uint256) {
-        return totalSupply() + 10 ** _decimalsOffset();
-    }
-
-    /// @notice Returns the vault's net asset value (NAV) denominated in the
-    ///         underlying asset (collateral token).
-    /// @dev    NAV = collateral + yield − debt, with both yield and debt
-    ///         converted into asset units using oracle prices:
-    ///         - collateral: read directly from the Morpho position.
-    ///         - yield: balance of `yieldToken` held by the vault, priced
-    ///           through `yieldOracle` and the market oracle (see
-    ///           `_yieldToAsset`).
-    ///         - debt: outstanding loan-token debt on the Morpho market,
-    ///           valued at the market oracle price (see `MarketLib.debt`).
+    /// @notice Drive the vault's leveraged Morpho position back toward
+    ///         `healthFactorTarget`.
+    /// @dev    Normal (non-forced) behavior:
+    ///         - If `hf ∈ [healthFactorMin, healthFactorMax]`, the call is a
+    ///           no-op
+    ///         - If `hf > healthFactorMax`, the position is under-levered:
+    ///           borrow exactly `addDebt = (maxBorrow / target) - debt` of
+    ///           the loan token and swap it to the yield token.
+    ///         - If `hf < healthFactorMin`, the position is over-levered:
+    ///           sell exactly enough yield token to repay
+    ///           `repayAmount = debt - (maxBorrow / target)` of debt.
     ///
-    ///         Returns 0 if debt exceeds gross value (an underwater
-    ///         position). This is a stale read by default — callers that
-    ///         need an up-to-the-block NAV must accrue interest on the
-    ///         market in the same tx first (see `deposit`).
-    function totalAssets() public view override returns (uint256) {
-        uint256 assetAmount = market.collateral();
-        uint256 yieldInAsset = _yieldToAsset(yieldToken.balanceOf(address(this)));
-        uint256 debtInAsset = market.debtToCollateral(market.debt());
-        uint256 gross = assetAmount + yieldInAsset;
-        if (gross > debtInAsset) {
-            return gross - debtInAsset;
+    /// @param  force If true, rebalance regardless of current health factor
+    function rebalance(bool force) external logsVaultState {
+        // After a recovery the position is terminal; revert with an explicit
+        // error so the off-chain rebalancer surfaces it and stops, rather than
+        // silently no-op'ing and running indefinitely.
+        if (recovered) revert EmergencyRecoveryActive();
+        market.accrueInterest();
+        uint256 currentDebt = market.debt();
+        uint256 maxBorrow = market.maxBorrow(); // independent of current debt balance
+        // we compute inline here rather than use MarketLib.healthFactor to save a SLOAD
+        uint256 hfBefore = currentDebt == 0 ? type(uint256).max : maxBorrow.mulDiv(MarketLib.WAD, currentDebt);
+
+        if (!force) {
+            if (hfBefore >= healthFactorMin && hfBefore <= healthFactorMax) {
+                return;
+            }
         }
-        return 0;
+
+        if (hfBefore > healthFactorTarget) {
+            _rebalanceLever(maxBorrow, currentDebt);
+        } else if (hfBefore < healthFactorTarget) {
+            _rebalanceDelever(maxBorrow, currentDebt);
+        }
+
+        emit Rebalanced(msg.sender, hfBefore, market.healthFactor());
+    }
+
+    /// @notice Set the TVL limit. Default at deploy time is 0 (no deposits).
+    /// @param newMaxTvl the new TVL limit; applies only to new deposits.
+    function setMaxTvl(uint256 newMaxTvl) external onlyOwner {
+        emit MaxTvlSet(maxTvl, newMaxTvl);
+        maxTvl = newMaxTvl;
+    }
+
+    /// @notice Schedule a timelocked emergency recovery. Executable after
+    ///         `recoveryDelay`; the owner may cancel in the meantime.
+    function scheduleEmergencyRecovery() external onlyOwner {
+        recoveryValidAt = block.timestamp + recoveryDelay;
+        emit EmergencyRecoveryScheduled(msg.sender, recoveryValidAt);
+    }
+
+    /// @notice Cancel a pending recovery during its timelock window.
+    function cancelEmergencyRecovery() external onlyOwner {
+        recoveryValidAt = 0;
+        emit EmergencyRecoveryCancelled(msg.sender);
+    }
+
+    /// @notice Execute a scheduled recovery once its timelock elapses. The owner
+    ///         funds the full debt in `loanToken`; the position is fully unwound
+    ///         (no swap) and all assets are swept to the owner. Burns no shares and
+    ///         permanently blocks deposits. `redeem` stays callable throughout the
+    ///         window so holders may exit first.
+    function executeEmergencyRecovery() external onlyOwner {
+        if (recoveryValidAt == 0 || block.timestamp < recoveryValidAt) {
+            revert EmergencyRecoveryNotReady();
+        }
+        recoveryValidAt = 0;
+        recovered = true;
+
+        market.accrueInterest();
+
+        // Owner funds the full debt; repay by shares so the position zeros exactly.
+        uint256 debtRepaid = market.debt();
+        loanToken.safeTransferFrom(msg.sender, address(this), debtRepaid);
+        market.repayAll();
+
+        // Free all collateral now that the debt is cleared.
+        uint256 collateralOut = market.collateral();
+        if (collateralOut > 0) market.withdrawCollateral(collateralOut);
+
+        // Sweep everything to the owner, in kind.
+        address to = owner();
+        uint256 yieldOut = yieldToken.balanceOf(address(this));
+        uint256 loanOut = loanToken.balanceOf(address(this)); // over-funded remainder
+        if (collateralOut > 0) IERC20(asset()).safeTransfer(to, collateralOut);
+        if (yieldOut > 0) yieldToken.safeTransfer(to, yieldOut);
+        if (loanOut > 0) loanToken.safeTransfer(to, loanOut);
+
+        emit EmergencyRecoveryExecuted(debtRepaid, collateralOut, yieldOut, loanOut);
     }
 
     /// @notice Deposit `assets` of the underlying asset into the vault and
@@ -394,6 +445,140 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         emit Withdraw(msg.sender, receiver, owner, assets, shares);
     }
 
+    /// @notice Escape hatch — swap-free, in-kind redemption: the caller
+    ///         repays `owner`'s pro-rata debt slice in `loanToken` and burns
+    ///         `owner`'s `shares`; `receiver` receives the pro-rata collateral and
+    ///         yield tokens directly. Needs no swap — the yield leg is delivered
+    ///         in kind rather than sold on the AMM; the collateral leg still
+    ///         settles through Morpho. Rounding favors the vault: the debt slice
+    ///         rounds up, collateral/yield slices round down.
+    ///
+    ///         Reverts if `msg.sender != owner` and allowance is insufficient, if
+    ///         the caller has not approved this vault for the debt slice, or if the
+    ///         position is underwater (Morpho blocks the collateral withdrawal).
+    /// @param  shares        Vault shares to burn.
+    /// @param  receiver      Account credited with the collateral + yield in kind.
+    /// @param  owner         Account whose shares are burned and whose pro-rata
+    ///                       debt the caller repays.
+    /// @return collateralOut Collateral tokens delivered to `receiver`.
+    /// @return yieldOut      Yield tokens delivered to `receiver`.
+    function redeemInKind(uint256 shares, address receiver, address owner)
+        public
+        logsVaultState
+        returns (uint256 collateralOut, uint256 yieldOut)
+    {
+        if (shares == 0) return (0, 0);
+        if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
+
+        market.accrueInterest();
+        uint256 claims = _totalClaims();
+
+        // Caller repays the pro-rata debt slice (rounded up — never under-repays);
+        // the caller supplies the loanToken, so no swap is needed.
+        uint256 debtRepaid = market.debt().mulDiv(shares, claims, Math.Rounding.Ceil);
+        if (debtRepaid > 0) {
+            loanToken.safeTransferFrom(msg.sender, address(this), debtRepaid);
+            market.repay(debtRepaid);
+        }
+
+        // Pro-rata collateral + yield, delivered in kind (rounded down).
+        collateralOut = market.collateral().mulDiv(shares, claims);
+        yieldOut = yieldToken.balanceOf(address(this)).mulDiv(shares, claims);
+
+        _burn(owner, shares);
+
+        if (collateralOut > 0) {
+            market.withdrawCollateral(collateralOut);
+            IERC20(asset()).safeTransfer(receiver, collateralOut);
+        }
+        if (yieldOut > 0) yieldToken.safeTransfer(receiver, yieldOut);
+
+        emit RedeemInKind(msg.sender, receiver, owner, shares, debtRepaid, collateralOut, yieldOut);
+    }
+
+    /// @notice Returns the vault's net asset value (NAV) denominated in the
+    ///         underlying asset (collateral token).
+    /// @dev    NAV = collateral + yield − debt, with both yield and debt
+    ///         converted into asset units using oracle prices:
+    ///         - collateral: read directly from the Morpho position.
+    ///         - yield: balance of `yieldToken` held by the vault, priced
+    ///           through `yieldOracle` and the market oracle (see
+    ///           `_yieldToAsset`).
+    ///         - debt: outstanding loan-token debt on the Morpho market,
+    ///           valued at the market oracle price (see `MarketLib.debt`).
+    ///
+    ///         Returns 0 if debt exceeds gross value (an underwater
+    ///         position). This is a stale read by default — callers that
+    ///         need an up-to-the-block NAV must accrue interest on the
+    ///         market in the same tx first (see `deposit`).
+    function totalAssets() public view override returns (uint256) {
+        uint256 assetAmount = market.collateral();
+        uint256 yieldInAsset = _yieldToAsset(yieldToken.balanceOf(address(this)));
+        uint256 debtInAsset = market.debtToCollateral(market.debt());
+        uint256 gross = assetAmount + yieldInAsset;
+        if (gross > debtInAsset) {
+            return gross - debtInAsset;
+        }
+        return 0;
+    }
+
+    /// @inheritdoc IERC4626
+    /// @notice Remaining headroom under the TVL limit, clamped to 0 when full.
+    /// @dev Even if the inner vault has hit its own deposit limit, we may still
+    ///      be able to obtain shares of it on the AMM to satisfy the deposit.
+    ///      However, if we implement 'direct deposit' to the inner vault,
+    ///      its own maxDeposit() will bind.
+    function maxDeposit(address receiver) public view override returns (uint256) {
+        // The emergency recovery deposit freeze is enforced by the guard in deposit();
+        // maxDeposit mirrors it as 0 because ERC-4626 requires reporting 0 when deposits
+        // are disabled.
+        if (recoveryValidAt != 0 || recovered) return 0;
+        if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
+        uint256 cachedTotalAssets = totalAssets();
+        return maxTvl > cachedTotalAssets ? maxTvl - cachedTotalAssets : 0;
+    }
+
+    /// @inheritdoc IERC4626
+    /// @notice Mint is disabled in favor of deposit.
+    function maxMint(address receiver) public view override returns (uint256) {
+        if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
+        return 0;
+    }
+
+    /// @notice Not implemented. Use `deposit` instead.
+    /// @dev    `mint` would need to invert the borrow-and-swap leg to solve
+    ///         for the asset input that produces an exact share output —
+    ///         non-trivial because the yield leg goes through an AMM whose
+    ///         realized price is only known after execution.
+    function mint(
+        uint256,
+        /*shares*/
+        address /*receiver*/
+    )
+        public
+        pure
+        override
+        returns (uint256)
+    {
+        revert("not implemented");
+    }
+
+    // TODO: reverts
+    function withdraw(
+        uint256,
+        /*assets*/
+        address,
+        /*receiver*/
+        address /*owner*/
+    )
+        public
+        pure
+        override
+        returns (uint256)
+    {
+        revert("not implemented");
+    }
+
     /// @dev Unwind a slice of the vault's position,
     ///      anchored on `p = shares / _totalClaims()` and the realized AMM
     ///      execution price on the yield leg.
@@ -462,96 +647,6 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
             uint256 scaledColl = collSlice.mulDiv(loanGot, debtSlice);
             if (scaledColl > 0) market.withdrawCollateral(scaledColl);
         }
-    }
-
-    /// @notice Escape hatch — swap-free, in-kind redemption: the caller
-    ///         repays `owner`'s pro-rata debt slice in `loanToken` and burns
-    ///         `owner`'s `shares`; `receiver` receives the pro-rata collateral and
-    ///         yield tokens directly. Needs no swap — the yield leg is delivered
-    ///         in kind rather than sold on the AMM; the collateral leg still
-    ///         settles through Morpho. Rounding favors the vault: the debt slice
-    ///         rounds up, collateral/yield slices round down.
-    ///
-    ///         Reverts if `msg.sender != owner` and allowance is insufficient, if
-    ///         the caller has not approved this vault for the debt slice, or if the
-    ///         position is underwater (Morpho blocks the collateral withdrawal).
-    /// @param  shares        Vault shares to burn.
-    /// @param  receiver      Account credited with the collateral + yield in kind.
-    /// @param  owner         Account whose shares are burned and whose pro-rata
-    ///                       debt the caller repays.
-    /// @return collateralOut Collateral tokens delivered to `receiver`.
-    /// @return yieldOut      Yield tokens delivered to `receiver`.
-    function redeemInKind(uint256 shares, address receiver, address owner)
-        public
-        logsVaultState
-        returns (uint256 collateralOut, uint256 yieldOut)
-    {
-        if (shares == 0) return (0, 0);
-        if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
-
-        market.accrueInterest();
-        uint256 claims = _totalClaims();
-
-        // Caller repays the pro-rata debt slice (rounded up — never under-repays);
-        // the caller supplies the loanToken, so no swap is needed.
-        uint256 debtRepaid = market.debt().mulDiv(shares, claims, Math.Rounding.Ceil);
-        if (debtRepaid > 0) {
-            loanToken.safeTransferFrom(msg.sender, address(this), debtRepaid);
-            market.repay(debtRepaid);
-        }
-
-        // Pro-rata collateral + yield, delivered in kind (rounded down).
-        collateralOut = market.collateral().mulDiv(shares, claims);
-        yieldOut = yieldToken.balanceOf(address(this)).mulDiv(shares, claims);
-
-        _burn(owner, shares);
-
-        if (collateralOut > 0) {
-            market.withdrawCollateral(collateralOut);
-            IERC20(asset()).safeTransfer(receiver, collateralOut);
-        }
-        if (yieldOut > 0) yieldToken.safeTransfer(receiver, yieldOut);
-
-        emit RedeemInKind(msg.sender, receiver, owner, shares, debtRepaid, collateralOut, yieldOut);
-    }
-
-    /// @notice Drive the vault's leveraged Morpho position back toward
-    ///         `healthFactorTarget`.
-    /// @dev    Normal (non-forced) behavior:
-    ///         - If `hf ∈ [healthFactorMin, healthFactorMax]`, the call is a
-    ///           no-op
-    ///         - If `hf > healthFactorMax`, the position is under-levered:
-    ///           borrow exactly `addDebt = (maxBorrow / target) - debt` of
-    ///           the loan token and swap it to the yield token.
-    ///         - If `hf < healthFactorMin`, the position is over-levered:
-    ///           sell exactly enough yield token to repay
-    ///           `repayAmount = debt - (maxBorrow / target)` of debt.
-    ///
-    /// @param  force If true, rebalance regardless of current health factor
-    function rebalance(bool force) external logsVaultState {
-        // After a recovery the position is terminal; revert with an explicit
-        // error so the off-chain rebalancer surfaces it and stops, rather than
-        // silently no-op'ing and running indefinitely.
-        if (recovered) revert EmergencyRecoveryActive();
-        market.accrueInterest();
-        uint256 currentDebt = market.debt();
-        uint256 maxBorrow = market.maxBorrow(); // independent of current debt balance
-        // we compute inline here rather than use MarketLib.healthFactor to save a SLOAD
-        uint256 hfBefore = currentDebt == 0 ? type(uint256).max : maxBorrow.mulDiv(MarketLib.WAD, currentDebt);
-
-        if (!force) {
-            if (hfBefore >= healthFactorMin && hfBefore <= healthFactorMax) {
-                return;
-            }
-        }
-
-        if (hfBefore > healthFactorTarget) {
-            _rebalanceLever(maxBorrow, currentDebt);
-        } else if (hfBefore < healthFactorTarget) {
-            _rebalanceDelever(maxBorrow, currentDebt);
-        }
-
-        emit Rebalanced(msg.sender, hfBefore, market.healthFactor());
     }
 
     /// @dev Lever-up branch of `rebalance`: position is under-levered
@@ -632,38 +727,31 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         if (repayAmount > 0) market.repay(repayAmount);
     }
 
-    /// @notice Not implemented. Use `deposit` instead.
-    /// @dev    `mint` would need to invert the borrow-and-swap leg to solve
-    ///         for the asset input that produces an exact share output —
-    ///         non-trivial because the yield leg goes through an AMM whose
-    ///         realized price is only known after execution.
-    function mint(
-        uint256,
-        /*shares*/
-        address /*receiver*/
-    )
-        public
-        pure
-        override
-        returns (uint256)
-    {
-        revert("not implemented");
+    /// @dev Hook fires on every share movement (mint / transfer / burn).
+    ///      - Mint (`from == 0`): the receiver must be allowlisted.
+    ///      - Transfer (both non-zero): both sender and receiver must be allowlisted.
+    ///      - Burn (`to == 0`): always allowed, preserving the exit path for
+    ///        de-allowlisted holders.
+    function _update(address from, address to, uint256 value) internal override {
+        if (to != address(0)) {
+            if (!hasRole(EARLY_ACCESS_ROLE, to)) {
+                revert IAccessControl.AccessControlUnauthorizedAccount(to, EARLY_ACCESS_ROLE);
+            }
+            if (from != address(0) && !hasRole(EARLY_ACCESS_ROLE, from)) {
+                revert IAccessControl.AccessControlUnauthorizedAccount(from, EARLY_ACCESS_ROLE);
+            }
+        }
+        super._update(from, to, value);
     }
 
-    // TODO: reverts
-    function withdraw(
-        uint256,
-        /*assets*/
-        address,
-        /*receiver*/
-        address /*owner*/
-    )
-        public
-        pure
-        override
-        returns (uint256)
-    {
-        revert("not implemented");
+    /// @dev Discount an oracle-expected swap output by `maxSlippageBps` to get
+    ///      the `amountOutMinimum` floor for a rebalance swap.
+    function _slippageFloor(uint256 expectedOut) internal view returns (uint256) {
+        return expectedOut.mulDiv(BPS - maxSlippageBps, BPS);
+    }
+
+    function _totalClaims() internal view returns (uint256) {
+        return totalSupply() + 10 ** _decimalsOffset();
     }
 
     /// @dev How much loan token to borrow against `newAssets` while keeping
@@ -697,97 +785,9 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         return yieldAmount.mulDiv(IOracle(yieldOracle).price(), market.oraclePrice());
     }
 
-    /// @notice Set the TVL limit. Default at deploy time is 0 (no deposits).
-    /// @param newMaxTvl the new TVL limit; applies only to new deposits.
-    function setMaxTvl(uint256 newMaxTvl) external onlyOwner {
-        emit MaxTvlSet(maxTvl, newMaxTvl);
-        maxTvl = newMaxTvl;
-    }
-
-    /// @notice Schedule a timelocked emergency recovery. Executable after
-    ///         `recoveryDelay`; the owner may cancel in the meantime.
-    function scheduleEmergencyRecovery() external onlyOwner {
-        recoveryValidAt = block.timestamp + recoveryDelay;
-        emit EmergencyRecoveryScheduled(msg.sender, recoveryValidAt);
-    }
-
-    /// @notice Cancel a pending recovery during its timelock window.
-    function cancelEmergencyRecovery() external onlyOwner {
-        recoveryValidAt = 0;
-        emit EmergencyRecoveryCancelled(msg.sender);
-    }
-
-    /// @notice Execute a scheduled recovery once its timelock elapses. The owner
-    ///         funds the full debt in `loanToken`; the position is fully unwound
-    ///         (no swap) and all assets are swept to the owner. Burns no shares and
-    ///         permanently blocks deposits. `redeem` stays callable throughout the
-    ///         window so holders may exit first.
-    function executeEmergencyRecovery() external onlyOwner {
-        if (recoveryValidAt == 0 || block.timestamp < recoveryValidAt) {
-            revert EmergencyRecoveryNotReady();
-        }
-        recoveryValidAt = 0;
-        recovered = true;
-
-        market.accrueInterest();
-
-        // Owner funds the full debt; repay by shares so the position zeros exactly.
-        uint256 debtRepaid = market.debt();
-        loanToken.safeTransferFrom(msg.sender, address(this), debtRepaid);
-        market.repayAll();
-
-        // Free all collateral now that the debt is cleared.
-        uint256 collateralOut = market.collateral();
-        if (collateralOut > 0) market.withdrawCollateral(collateralOut);
-
-        // Sweep everything to the owner, in kind.
-        address to = owner();
-        uint256 yieldOut = yieldToken.balanceOf(address(this));
-        uint256 loanOut = loanToken.balanceOf(address(this)); // over-funded remainder
-        if (collateralOut > 0) IERC20(asset()).safeTransfer(to, collateralOut);
-        if (yieldOut > 0) yieldToken.safeTransfer(to, yieldOut);
-        if (loanOut > 0) loanToken.safeTransfer(to, loanOut);
-
-        emit EmergencyRecoveryExecuted(debtRepaid, collateralOut, yieldOut, loanOut);
-    }
-
-    /// @inheritdoc IERC4626
-    /// @notice Remaining headroom under the TVL limit, clamped to 0 when full.
-    /// @dev Even if the inner vault has hit its own deposit limit, we may still
-    ///      be able to obtain shares of it on the AMM to satisfy the deposit.
-    ///      However, if we implement 'direct deposit' to the inner vault,
-    ///      its own maxDeposit() will bind.
-    function maxDeposit(address receiver) public view override returns (uint256) {
-        // The emergency recovery deposit freeze is enforced by the guard in deposit();
-        // maxDeposit mirrors it as 0 because ERC-4626 requires reporting 0 when deposits
-        // are disabled.
-        if (recoveryValidAt != 0 || recovered) return 0;
-        if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
-        uint256 cachedTotalAssets = totalAssets();
-        return maxTvl > cachedTotalAssets ? maxTvl - cachedTotalAssets : 0;
-    }
-
-    /// @inheritdoc IERC4626
-    /// @notice Mint is disabled in favor of deposit.
-    function maxMint(address receiver) public view override returns (uint256) {
-        if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
-        return 0;
-    }
-
-    /// @dev Hook fires on every share movement (mint / transfer / burn).
-    ///      - Mint (`from == 0`): the receiver must be allowlisted.
-    ///      - Transfer (both non-zero): both sender and receiver must be allowlisted.
-    ///      - Burn (`to == 0`): always allowed, preserving the exit path for
-    ///        de-allowlisted holders.
-    function _update(address from, address to, uint256 value) internal override {
-        if (to != address(0)) {
-            if (!hasRole(EARLY_ACCESS_ROLE, to)) {
-                revert IAccessControl.AccessControlUnauthorizedAccount(to, EARLY_ACCESS_ROLE);
-            }
-            if (from != address(0) && !hasRole(EARLY_ACCESS_ROLE, from)) {
-                revert IAccessControl.AccessControlUnauthorizedAccount(from, EARLY_ACCESS_ROLE);
-            }
-        }
-        super._update(from, to, value);
+    /// @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
+    /// @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
+    function _decimalsOffset() internal pure override returns (uint8) {
+        return DECIMALS_OFFSET;
     }
 }
