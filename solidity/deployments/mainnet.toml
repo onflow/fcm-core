@@ -23,13 +23,13 @@ marketLltv   = "860000000000000000"
 # more leveraged = lower HF, so the 70% (most-leveraged) edge is healthFactorMin.
 # `rebalance()` acts only outside the [min, max] band and returns the position
 # to the re-entry target just inside the breached bound:
-#   hf < min -> delever up to healthFactorMaxTarget (just inside min)
-#   hf > max -> lever down to healthFactorMinTarget (just inside max)
-# Ordering: min <= maxTarget <= minTarget <= max.
-healthFactorMin = "1228571428571428571"  # 860000000000000000 * 100 / 70    (LTV 70%)
-healthFactorMaxTarget = "1230329041487839771"  # 860000000000000000 * 100 / 69.9  (LTV 69.9%)
-healthFactorMinTarget = "1430948419301164725"  # 860000000000000000 * 100 / 60.1  (LTV 60.1%)
-healthFactorMax = "1433333333333333333"  # 860000000000000000 * 100 / 60    (LTV 60%)
+#   hf < min -> delever up   to healthFactorMinTarget (just above min)
+#   hf > max -> lever   down to healthFactorMaxTarget (just below max)
+# Ordering: min <= minTarget <= maxTarget <= max.
+healthFactorMin = "1228571428571428571"       # 860000000000000000 * 100 / 70    (LTV 70%)
+healthFactorMinTarget = "1230329041487839771"  # 860000000000000000 * 100 / 69.9  (LTV 69.9%)
+healthFactorMaxTarget = "1430948419301164725"  # 860000000000000000 * 100 / 60.1  (LTV 60.1%)
+healthFactorMax = "1433333333333333333"       # 860000000000000000 * 100 / 60    (LTV 60%)
 
 # --- FlowSwap V3 pool fee tiers ---
 feeYieldDebt = 100
