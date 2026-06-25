@@ -61,7 +61,7 @@ drain on an unused or misconfigured rebalancer:
 make mainnet-remove-rebalancer VAULT=0x…
 ```
 
-Calldata is hardcoded to `rebalance(false)` and scheduler priority to Medium.
+Calldata is hardcoded to `rebalance()` and scheduler priority to Medium.
 The deployer must hold enough FLOW for the per-tick scheduling fee plus the
 account storage minimum.
 
