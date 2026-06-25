@@ -28,7 +28,6 @@ contract TvlLimitTest is Test {
     uint256 internal constant YIELD_PRICE = 1e36;
     uint256 internal constant LLTV = 0.86e18;
     uint256 internal constant HEALTH_FACTOR_MIN = 1.25e18;
-    uint256 internal constant HEALTH_FACTOR_TARGET = 1.45e18;
     uint256 internal constant HEALTH_FACTOR_MAX = 1.65e18;
     uint24 internal constant FEE = 100;
     uint24 internal constant FEE_ASSET_DEBT = 3000;
@@ -75,7 +74,6 @@ contract TvlLimitTest is Test {
                 feeAssetDebt: FEE_ASSET_DEBT,
                 healthFactorMin: HEALTH_FACTOR_MIN,
                 healthFactorMax: HEALTH_FACTOR_MAX,
-                healthFactorTarget: HEALTH_FACTOR_TARGET,
                 yieldOracle: address(yieldOracle),
                 admin: admin,
                 recoveryDelay: 7 days,

@@ -31,8 +31,10 @@ contract FCMVaultTest is Test {
     uint256 internal constant YIELD_PRICE = 1e36;
     uint256 internal constant LLTV = 0.86e18;
     uint256 internal constant HEALTH_FACTOR_MIN = 1.25e18;
-    uint256 internal constant HEALTH_FACTOR_TARGET = 1.45e18;
     uint256 internal constant HEALTH_FACTOR_MAX = 1.65e18;
+    // Deposits lever fresh collateral to the midpoint of the band; rebalance
+    // acts only at the bounds.
+    uint256 internal constant DEPOSIT_TARGET_HF = (HEALTH_FACTOR_MIN + HEALTH_FACTOR_MAX) / 2;
     uint24 internal constant FEE = 100;
     uint24 internal constant FEE_ASSET_DEBT = 3000;
 
@@ -70,7 +72,6 @@ contract FCMVaultTest is Test {
                 feeAssetDebt: FEE_ASSET_DEBT,
                 healthFactorMin: HEALTH_FACTOR_MIN,
                 healthFactorMax: HEALTH_FACTOR_MAX,
-                healthFactorTarget: HEALTH_FACTOR_TARGET,
                 yieldOracle: address(yieldOracle),
                 admin: admin,
                 recoveryDelay: 7 days,
@@ -107,9 +108,9 @@ contract FCMVaultTest is Test {
     }
 
     /// @dev A deposit must (1) pull the collateral from the depositor into Morpho,
-    ///      (2) borrow loan token against it at the configured target health factor,
+    ///      (2) borrow loan token against it at the band-midpoint health factor,
     ///      and (3) swap the borrowed loan token into yield token, leaving no loan
-    ///      token idle in the vault. Expected borrow = `assets * price * lltv / target HF`.
+    ///      token idle in the vault. Expected borrow = `assets * price * lltv / midpoint HF`.
     function test_Deposit_PullsCollateralAndBorrowsDebt() public {
         uint256 amount = 1 ether;
         MockERC20(address(WETH)).mint(user, amount);
@@ -479,17 +480,17 @@ contract FCMVaultTest is Test {
     ///      collateral, not the entire available headroom in the protocol.
     ///
     ///      Setup: Alice makes a large deposit, then the collateral price 5×es,
-    ///      leaving the position with a health factor >> target (~7×). A 99%
+    ///      leaving the position with a health factor >> midpoint (~7×). A 99%
     ///      swap fee is then set so the rebalancing cost is maximally visible.
     ///
     ///      Bob makes a tiny 0.001 ETH deposit. If deposit were to rebalance
-    ///      the whole protocol to target health factor, it would borrow
+    ///      the whole protocol to the midpoint health factor, it would borrow
     ///      ~474k PYUSD0 and wipe out the vault's NAV at a 99% swap fee.
     ///      Instead, borrow is capped to Bob's proportional contribution
     ///      (~5.93 PYUSD0), so:
     ///        - Bob still receives shares.
     ///        - Vault NAV increases (Bob contributed positive value).
-    ///        - Health factor stays far above target, not pulled down to it.
+    ///        - Health factor stays far above the midpoint, not pulled down to it.
     function test_Deposit_DepositDoesNotRebalanceProtocol() public {
         address alice = address(0xA);
         address bobLocal = address(0xB);
@@ -504,7 +505,7 @@ contract FCMVaultTest is Test {
         // 5× price increase → health factor jumps from 1.45 to ~7.25.
         marketOracle.setPrice(10_000e36);
 
-        // Brutal swap fee: if deposit rebalanced to target HF it would borrow
+        // Brutal swap fee: if deposit rebalanced to the midpoint HF it would borrow
         // ~474k PYUSD0, lose 99% to fees, and crater the vault NAV.
         MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(9_900);
 
@@ -710,10 +711,9 @@ contract FCMVaultTest is Test {
     // Rebalance
     // ---------------------------------------------------------------------
 
-    /// @notice After a fresh deposit, HF lands exactly at the configured
-    ///         target (1.45), which is inside [min=1.25, max=1.65]. A
-    ///         non-forced rebalance is a no-op: debt, collateral, and FUSDEV
-    ///         balance are unchanged.
+    /// @notice After a fresh deposit, HF lands at the band midpoint (1.45),
+    ///         which is inside [min=1.25, max=1.65]. A rebalance is a no-op:
+    ///         debt, collateral, and FUSDEV balance are unchanged.
     function test_Rebalance_NoopInsideBand() public {
         _depositFor(user, 1 ether);
 
@@ -721,7 +721,7 @@ contract FCMVaultTest is Test {
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
         uint256 hfBefore = _healthFactor();
 
-        vault.rebalance(false);
+        vault.rebalance();
 
         assertEq(WETH.balanceOf(address(MORPHO)), collBefore, "coll unchanged");
         assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev unchanged");
@@ -730,9 +730,10 @@ contract FCMVaultTest is Test {
 
     /// @notice When the collateral price rises enough to push HF above max
     ///         (1.65), `rebalance` borrows additional loan token and swaps
-    ///         it into yield token, driving HF back to target (1.45). The
-    ///         vault's collateral and the position's borrow shares both
-    ///         move in the expected directions.
+    ///         it into yield token, driving HF back down to the upper bound
+    ///         (1.65) — the nearest bound, not a central target. The vault's
+    ///         collateral and the position's borrow shares both move in the
+    ///         expected directions.
     function test_Rebalance_LeversWhenAboveMax() public {
         _depositFor(user, 1 ether);
 
@@ -742,10 +743,10 @@ contract FCMVaultTest is Test {
 
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance(false);
+        vault.rebalance();
 
-        // HF returns to target (within rounding from share math).
-        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "hf at target");
+        // HF returns to the upper bound (within rounding from share math).
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_MAX, 1e15, "hf at max");
         // Lever path: more yield token now held.
         assertGt(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev grew");
         // No idle loan token left behind by the lever swap.
@@ -754,7 +755,8 @@ contract FCMVaultTest is Test {
 
     /// @notice When the collateral price drops enough to push HF below min
     ///         (1.25), `rebalance` sells yield token for loan token and
-    ///         repays just enough debt to land HF back at target.
+    ///         repays just enough debt to land HF back at the lower bound
+    ///         (1.25) — the nearest bound, not a central target.
     function test_Rebalance_DeleversWhenBelowMin() public {
         _depositFor(user, 1 ether);
 
@@ -764,9 +766,9 @@ contract FCMVaultTest is Test {
 
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance(false);
+        vault.rebalance();
 
-        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "hf at target");
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_MIN, 1e15, "hf at min");
         // Delever path: yield token shrunk.
         assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev shrank");
         // Repay leg consumed all realized loan token.
@@ -788,7 +790,7 @@ contract FCMVaultTest is Test {
         MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3% > 1% floor
 
         vm.expectRevert("Too little received");
-        vault.rebalance(false);
+        vault.rebalance();
     }
 
     /// @notice Same guard on the lever leg.
@@ -800,7 +802,7 @@ contract FCMVaultTest is Test {
         MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3% > 1% floor
 
         vm.expectRevert("Too little received");
-        vault.rebalance(false);
+        vault.rebalance();
     }
 
     /// @notice Loosening `maxSlippageBps` lets a previously-reverting rebalance
@@ -816,7 +818,7 @@ contract FCMVaultTest is Test {
         vm.prank(admin);
         vault.setMaxSlippageBps(500); // 5% > 3%, so the 3% haircut now passes
 
-        vault.rebalance(false);
+        vault.rebalance();
         assertGt(_healthFactor(), hfBefore, "delever raised HF");
     }
 
@@ -844,42 +846,35 @@ contract FCMVaultTest is Test {
         vault.setMaxSlippageBps(10_000);
     }
 
-    /// @notice `force=true` rebalances when HF is inside the dead band but
-    ///         not exactly at target. Here we nudge HF slightly off-target
-    ///         (still inside [min, max]); a non-forced call is a no-op, a
-    ///         forced call pulls HF back to target.
-    function test_Rebalance_ForceRebalancesInsideBand() public {
+    /// @notice `rebalance` is a no-op anywhere strictly inside the band, not
+    ///         just at the midpoint. Here we nudge HF off-center (above the
+    ///         midpoint but still below max); the call leaves the position
+    ///         untouched. There is no longer any way to force a rebalance
+    ///         inside the band — the smallest-swap policy only acts at a bound.
+    function test_Rebalance_NoopWhenOffCenterButInBand() public {
         _depositFor(user, 1 ether);
 
-        // Small collateral price increase leaves HF inside [1.25, 1.65] but above target.
+        // Small collateral price increase leaves HF inside [1.25, 1.65] but above the midpoint.
         marketOracle.setPrice(2100e36);
         uint256 hfBefore = _healthFactor();
-        assertGt(hfBefore, HEALTH_FACTOR_TARGET, "above target");
+        assertGt(hfBefore, DEPOSIT_TARGET_HF, "above midpoint");
         assertLt(hfBefore, HEALTH_FACTOR_MAX, "still inside band");
-
-        // Without force the call is a no-op.
-        vault.rebalance(false);
-        assertEq(_healthFactor(), hfBefore, "non-forced: noop");
-
-        // With force the position is driven to target.
-        vault.rebalance(true);
-        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "forced: at target");
-    }
-
-    /// @notice `force=true` is still a no-op when HF is exactly at target —
-    ///         neither lever nor delever branch fires, so no swap or borrow
-    ///         is issued.
-    function test_Rebalance_ForceAtTargetIsNoop() public {
-        _depositFor(user, 1 ether);
-        assertApproxEqAbs(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "at target");
 
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
         uint256 collBefore = WETH.balanceOf(address(MORPHO));
 
-        vault.rebalance(true);
+        vault.rebalance();
 
+        assertEq(_healthFactor(), hfBefore, "hf unchanged");
         assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev unchanged");
         assertEq(WETH.balanceOf(address(MORPHO)), collBefore, "coll unchanged");
+    }
+
+    /// @notice A fresh deposit levers collateral to the band midpoint
+    ///         `(min + max) / 2`, leaving symmetric headroom to both bounds.
+    function test_Deposit_LandsAtBandMidpoint() public {
+        _depositFor(user, 1 ether);
+        assertApproxEqRel(_healthFactor(), DEPOSIT_TARGET_HF, 1e15, "deposit lands at midpoint");
     }
 
     /// @notice Liquidation recovery: a liquidator seizes most of the vault's
@@ -900,17 +895,16 @@ contract FCMVaultTest is Test {
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
         // Best-effort: should succeed even though target is unreachable.
-        vault.rebalance(false);
+        vault.rebalance();
 
         // rebalance made progress: debt repaid and yield consumed.
         assertLt(_debt(), debtBefore, "debt reduced");
         assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield consumed");
     }
 
-    /// @notice Constructor rejects HF configurations where the dead band is
-    ///         malformed (target < min, target > max) or the lower bound is
-    ///         below WAD (which would allow rebalancing into a liquidatable
-    ///         position).
+    /// @notice Constructor rejects HF configurations where the band is
+    ///         malformed (min > max) or the lower bound is below WAD (which
+    ///         would allow rebalancing into a liquidatable position).
     function test_Rebalance_ConstructorValidatesHfBand() public {
         FCMVault.InitParams memory p = _baseParams();
         p.healthFactorMin = 0.9e18;
@@ -918,15 +912,8 @@ contract FCMVaultTest is Test {
         new FCMVault(p);
 
         p = _baseParams();
-        p.healthFactorMin = 1.6e18;
-        p.healthFactorTarget = 1.5e18;
-        vm.expectRevert(bytes("HF min > target"));
-        new FCMVault(p);
-
-        p = _baseParams();
-        p.healthFactorTarget = 2e18;
-        p.healthFactorMax = 1.6e18;
-        vm.expectRevert(bytes("HF target > max"));
+        p.healthFactorMin = 1.7e18; // > max (1.65)
+        vm.expectRevert(bytes("HF min > max"));
         new FCMVault(p);
     }
 
@@ -939,9 +926,9 @@ contract FCMVaultTest is Test {
     ///
     ///         The rebalance step is set up to perform a real balancing
     ///         operation: a collateral price rise pushes HF above
-    ///         max, so a non-forced rebalance must borrow more
-    ///         debt and buy more yield. We assert debt and yield
-    ///         grew and HF returned to target.
+    ///         max, so the rebalance must borrow more debt and buy more
+    ///         yield. We assert debt and yield grew and HF returned to the
+    ///         upper bound.
     ///
     ///         NAV is price-invariant in this rig (collateral is measured in
     ///         token units; the yield and debt legs scale together), so the
@@ -956,7 +943,7 @@ contract FCMVaultTest is Test {
         assertEq(WETH.balanceOf(address(MORPHO)), amount, "collateral supplied to morpho");
         assertGt(FUSDEV.balanceOf(address(vault)), 0, "yield bought with borrowed debt");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token after deposit");
-        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "deposit lands at target HF");
+        assertApproxEqRel(_healthFactor(), DEPOSIT_TARGET_HF, 1e15, "deposit lands at midpoint HF");
 
         // Rebalance: price rise lifts HF above max, forcing a real lever-up.
         marketOracle.setPrice(2300e36);
@@ -965,13 +952,13 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance(false);
+        vault.rebalance();
 
         assertGt(_debt(), debtBefore, "rebalance borrowed more debt");
         assertGt(FUSDEV.balanceOf(address(vault)), yieldBefore, "rebalance bought more yield");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token after rebalance");
         assertApproxEqRel(
-            _healthFactor(), HEALTH_FACTOR_TARGET, 1e15, "rebalance restored target HF"
+            _healthFactor(), HEALTH_FACTOR_MAX, 1e15, "rebalance restored HF to upper bound"
         );
 
         // Redeem everything.
@@ -1043,7 +1030,7 @@ contract FCMVaultTest is Test {
         _depositFor(user, 1 ether);
 
         vm.recordLogs();
-        vault.rebalance(false); // HF at target → no-op body, but modifier emits
+        vault.rebalance(); // HF in band → no-op body, but modifier emits
 
         _assertVaultStateMatchesCurrentState();
     }
@@ -1055,7 +1042,7 @@ contract FCMVaultTest is Test {
         marketOracle.setPrice(2300e36); // push HF above max so rebalance levers
 
         vm.recordLogs();
-        vault.rebalance(false);
+        vault.rebalance();
 
         (,, uint256 yield, uint256 collPrice,, uint256 yieldPrice) =
             _assertVaultStateMatchesCurrentState();
@@ -1194,7 +1181,6 @@ contract FCMVaultTest is Test {
             feeAssetDebt: FEE_ASSET_DEBT,
             healthFactorMin: HEALTH_FACTOR_MIN,
             healthFactorMax: HEALTH_FACTOR_MAX,
-            healthFactorTarget: HEALTH_FACTOR_TARGET,
             yieldOracle: address(yieldOracle),
             admin: admin,
             recoveryDelay: 7 days,
@@ -1267,7 +1253,7 @@ contract FCMVaultTest is Test {
         // And rebalancing reverts on the recovered vault, so the off-chain
         // rebalancer gets an explicit signal to stop.
         vm.expectRevert(FCMVault.EmergencyRecoveryActive.selector);
-        vault.rebalance(true);
+        vault.rebalance();
     }
 
     /// @notice Deposits are frozen as soon as a recovery is scheduled (before
