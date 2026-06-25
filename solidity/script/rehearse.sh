@@ -33,7 +33,7 @@ RPC=http://127.0.0.1:${ANVIL_PORT}
 KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 ADDR=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 
-# Mainnet contracts (see deployments/mainnet.json and the root README)
+# Mainnet contracts (see deployments/mainnet.toml and the root README)
 WETH=0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590
 PYUSD0=0x99aF3EeA856556646C98c8B9b2548Fe815240750
 MARKET_ORACLE=0xD744044044C0Dd0c73BeA440747115674Ebae030
