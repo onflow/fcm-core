@@ -11,10 +11,10 @@ import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
 import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 
 /// @title Rebalance
-/// @notice Drives a LIVE FCMVault's leveraged Morpho position back toward its
-///         configured target health factor. `rebalance` is permissionless, so
-///         any account with FLOW for gas can run this; the broadcaster needs
-///         no special role.
+/// @notice Drives a LIVE FCMVault's leveraged Morpho position back inside its
+///         configured health-factor band, rebalancing to the nearest bound.
+///         `rebalance` is permissionless, so any account with FLOW for gas can
+///         run this; the broadcaster needs no special role.
 ///
 ///         The market oracle (Pyth) must be fresh — push an update with
 ///         `make mainnet-update-oracle` first, otherwise the oracle read
@@ -28,8 +28,6 @@ import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 ///
 ///         Env:
 ///           VAULT  (required) FCMVault address
-///           FORCE  rebalance even when HF is inside the dead band
-///                  (default false — only acts when HF is outside [min, max])
 ///
 ///         Usage (dry-run first by dropping --broadcast):
 ///           VAULT=0x... forge script script/Rebalance.s.sol \
@@ -40,13 +38,12 @@ contract Rebalance is Script {
 
     function run() public {
         FCMVault vault = FCMVault(vm.envAddress("VAULT"));
-        bool force = vm.envOr("FORCE", false);
 
         uint256 hfBefore = _healthFactor(vault);
         uint256 debtBefore = _debt(vault);
 
         vm.startBroadcast();
-        vault.rebalance(force);
+        vault.rebalance();
         vm.stopBroadcast();
 
         uint256 hfAfter = _healthFactor(vault);
@@ -54,14 +51,14 @@ contract Rebalance is Script {
 
         console.log("=== rebalance complete ===");
         console.log("vault:      %s", address(vault));
-        console.log("force:      %s", force);
-        console.log("HF target:  %s", vault.healthFactorTarget());
+        console.log("HF min:     %s", vault.healthFactorMin());
+        console.log("HF max:     %s", vault.healthFactorMax());
         console.log("HF before:  %s", hfBefore);
         console.log("HF after:   %s", hfAfter);
         console.log("debt before: %s", debtBefore);
         console.log("debt after:  %s", debtAfter);
         if (debtAfter == debtBefore) {
-            console.log("no-op: HF was inside [min, max] (pass FORCE=true to rebalance anyway)");
+            console.log("no-op: HF was inside [min, max]");
         }
     }
 

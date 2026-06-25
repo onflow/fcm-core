@@ -36,7 +36,6 @@ abstract contract ConfiguredScript is Script {
         uint24 feeAssetDebt;
         uint256 healthFactorMin;
         uint256 healthFactorMax;
-        uint256 healthFactorTarget;
         address yieldOracle;
         address swapFactory;
         address yieldDebtPool;
@@ -63,7 +62,6 @@ abstract contract ConfiguredScript is Script {
         c.feeAssetDebt = uint24(vm.parseJsonUint(json, ".feeAssetDebt"));
         c.healthFactorMin = vm.parseJsonUint(json, ".healthFactorMin");
         c.healthFactorMax = vm.parseJsonUint(json, ".healthFactorMax");
-        c.healthFactorTarget = vm.parseJsonUint(json, ".healthFactorTarget");
         c.yieldOracle = vm.parseJsonAddress(json, ".yieldOracle");
         c.swapFactory = vm.parseJsonAddress(json, ".swapFactory");
         c.yieldDebtPool = vm.parseJsonAddress(json, ".yieldDebtPool");
