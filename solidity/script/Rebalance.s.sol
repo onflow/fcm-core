@@ -12,7 +12,8 @@ import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 
 /// @title Rebalance
 /// @notice Drives a LIVE FCMVault's leveraged Morpho position back inside its
-///         configured health-factor band, rebalancing to the nearest bound.
+///         configured health-factor band, rebalancing to the re-entry target
+///         just inside the breached bound.
 ///         `rebalance` is permissionless, so any account with FLOW for gas can
 ///         run this; the broadcaster needs no special role.
 ///

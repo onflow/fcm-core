@@ -21,10 +21,15 @@ marketLltv   = "860000000000000000"
 # --- Rebalance band (WAD health factors, 1e18 = liquidation line) ---
 # HF = marketLltv / LTV, i.e. marketLltv(0.86e18) * 100 / LTV%. Higher LTV is
 # more leveraged = lower HF, so the 70% (most-leveraged) edge is healthFactorMin.
-# `rebalance()` acts only outside this band and returns the position to the
-# nearest bound: below min -> delever up to min; above max -> lever down to max.
-healthFactorMin = "1228571428571428571"  # 860000000000000000 * 100 / 70  (LTV 70%)
-healthFactorMax = "1433333333333333333"  # 860000000000000000 * 100 / 60  (LTV 60%)
+# `rebalance()` acts only outside the [min, max] band and returns the position
+# to the re-entry target just inside the breached bound:
+#   hf < min -> delever up to healthFactorMaxTarget (just inside min)
+#   hf > max -> lever down to healthFactorMinTarget (just inside max)
+# Ordering: min <= maxTarget <= minTarget <= max.
+healthFactorMin = "1228571428571428571"  # 860000000000000000 * 100 / 70    (LTV 70%)
+healthFactorMaxTarget = "1230329041487839771"  # 860000000000000000 * 100 / 69.9  (LTV 69.9%)
+healthFactorMinTarget = "1430948419301164725"  # 860000000000000000 * 100 / 60.1  (LTV 60.1%)
+healthFactorMax = "1433333333333333333"  # 860000000000000000 * 100 / 60    (LTV 60%)
 
 # --- FlowSwap V3 pool fee tiers ---
 feeYieldDebt = 100

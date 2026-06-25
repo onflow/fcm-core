@@ -77,7 +77,8 @@ contract LiveCheck is Script {
         require(vault.totalAssets() > navBefore, "vault NAV did not grow on deposit");
 
         // Rebalance the position. Acts only when HF is outside the [min, max]
-        // band, driving it back to the nearest bound; against live state it
+        // band, driving it to the re-entry target just inside the breached
+        // bound; against live state it
         // may be a no-op, which is fine.
         uint256 debtBeforeRebalance = _debt(vault);
         vault.rebalance();

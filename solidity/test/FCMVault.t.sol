@@ -32,6 +32,11 @@ contract FCMVaultTest is Test {
     uint256 internal constant LLTV = 0.86e18;
     uint256 internal constant HEALTH_FACTOR_MIN = 1.25e18;
     uint256 internal constant HEALTH_FACTOR_MAX = 1.65e18;
+    // Re-entry targets just inside each bound: a delever lands at maxTarget
+    // (just above min), a lever lands at minTarget (just below max).
+    // Ordering: min <= maxTarget <= minTarget <= max.
+    uint256 internal constant HEALTH_FACTOR_MAX_TARGET = 1.30e18;
+    uint256 internal constant HEALTH_FACTOR_MIN_TARGET = 1.60e18;
     // Deposits lever fresh collateral to the midpoint of the band; rebalance
     // acts only at the bounds.
     uint256 internal constant DEPOSIT_TARGET_HF = (HEALTH_FACTOR_MIN + HEALTH_FACTOR_MAX) / 2;
@@ -72,6 +77,8 @@ contract FCMVaultTest is Test {
                 feeAssetDebt: FEE_ASSET_DEBT,
                 healthFactorMin: HEALTH_FACTOR_MIN,
                 healthFactorMax: HEALTH_FACTOR_MAX,
+                healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
+                healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
                 yieldOracle: address(yieldOracle),
                 admin: admin,
                 recoveryDelay: 7 days,
@@ -730,10 +737,10 @@ contract FCMVaultTest is Test {
 
     /// @notice When the collateral price rises enough to push HF above max
     ///         (1.65), `rebalance` borrows additional loan token and swaps
-    ///         it into yield token, driving HF back down to the upper bound
-    ///         (1.65) — the nearest bound, not a central target. The vault's
-    ///         collateral and the position's borrow shares both move in the
-    ///         expected directions.
+    ///         it into yield token, driving HF down to the re-entry target
+    ///         just inside the upper bound (`healthFactorMinTarget`, 1.60) —
+    ///         not a central target. The vault's collateral and the position's
+    ///         borrow shares both move in the expected directions.
     function test_Rebalance_LeversWhenAboveMax() public {
         _depositFor(user, 1 ether);
 
@@ -745,8 +752,8 @@ contract FCMVaultTest is Test {
 
         vault.rebalance();
 
-        // HF returns to the upper bound (within rounding from share math).
-        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_MAX, 1e15, "hf at max");
+        // HF returns to the upper re-entry target (within rounding from share math).
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_MIN_TARGET, 1e15, "hf at minTarget");
         // Lever path: more yield token now held.
         assertGt(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev grew");
         // No idle loan token left behind by the lever swap.
@@ -755,8 +762,9 @@ contract FCMVaultTest is Test {
 
     /// @notice When the collateral price drops enough to push HF below min
     ///         (1.25), `rebalance` sells yield token for loan token and
-    ///         repays just enough debt to land HF back at the lower bound
-    ///         (1.25) — the nearest bound, not a central target.
+    ///         repays just enough debt to land HF at the re-entry target just
+    ///         inside the lower bound (`healthFactorMaxTarget`, 1.30) — not a
+    ///         central target.
     function test_Rebalance_DeleversWhenBelowMin() public {
         _depositFor(user, 1 ether);
 
@@ -768,7 +776,7 @@ contract FCMVaultTest is Test {
 
         vault.rebalance();
 
-        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_MIN, 1e15, "hf at min");
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_MAX_TARGET, 1e15, "hf at maxTarget");
         // Delever path: yield token shrunk.
         assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev shrank");
         // Repay leg consumed all realized loan token.
@@ -902,18 +910,32 @@ contract FCMVaultTest is Test {
         assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield consumed");
     }
 
-    /// @notice Constructor rejects HF configurations where the band is
-    ///         malformed (min > max) or the lower bound is below WAD (which
-    ///         would allow rebalancing into a liquidatable position).
+    /// @notice Constructor rejects HF configurations where the band/targets are
+    ///         malformed or the lower bound is below WAD (which would allow
+    ///         rebalancing into a liquidatable position). The four values must
+    ///         satisfy `WAD <= min <= maxTarget <= minTarget <= max`.
     function test_Rebalance_ConstructorValidatesHfBand() public {
         FCMVault.InitParams memory p = _baseParams();
         p.healthFactorMin = 0.9e18;
         vm.expectRevert(bytes("HF min < WAD"));
         new FCMVault(p);
 
+        // min above the lower re-entry target.
         p = _baseParams();
-        p.healthFactorMin = 1.7e18; // > max (1.65)
-        vm.expectRevert(bytes("HF min > max"));
+        p.healthFactorMin = 1.35e18; // > maxTarget (1.30)
+        vm.expectRevert(bytes("HF min > maxTarget"));
+        new FCMVault(p);
+
+        // targets crossed (maxTarget above minTarget).
+        p = _baseParams();
+        p.healthFactorMaxTarget = 1.62e18; // > minTarget (1.60)
+        vm.expectRevert(bytes("HF maxTarget > minTarget"));
+        new FCMVault(p);
+
+        // upper re-entry target above the upper bound.
+        p = _baseParams();
+        p.healthFactorMinTarget = 1.7e18; // > max (1.65)
+        vm.expectRevert(bytes("HF minTarget > max"));
         new FCMVault(p);
     }
 
@@ -928,7 +950,7 @@ contract FCMVaultTest is Test {
     ///         operation: a collateral price rise pushes HF above
     ///         max, so the rebalance must borrow more debt and buy more
     ///         yield. We assert debt and yield grew and HF returned to the
-    ///         upper bound.
+    ///         upper re-entry target.
     ///
     ///         NAV is price-invariant in this rig (collateral is measured in
     ///         token units; the yield and debt legs scale together), so the
@@ -958,7 +980,7 @@ contract FCMVaultTest is Test {
         assertGt(FUSDEV.balanceOf(address(vault)), yieldBefore, "rebalance bought more yield");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token after rebalance");
         assertApproxEqRel(
-            _healthFactor(), HEALTH_FACTOR_MAX, 1e15, "rebalance restored HF to upper bound"
+            _healthFactor(), HEALTH_FACTOR_MIN_TARGET, 1e15, "rebalance restored HF to upper re-entry target"
         );
 
         // Redeem everything.
@@ -1181,6 +1203,8 @@ contract FCMVaultTest is Test {
             feeAssetDebt: FEE_ASSET_DEBT,
             healthFactorMin: HEALTH_FACTOR_MIN,
             healthFactorMax: HEALTH_FACTOR_MAX,
+            healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
+            healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
             yieldOracle: address(yieldOracle),
             admin: admin,
             recoveryDelay: 7 days,

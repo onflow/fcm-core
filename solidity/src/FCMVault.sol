@@ -56,14 +56,27 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///         redeem surplus from loan token back to the underlying asset.
     uint24 public immutable feeAssetDebt;
     /// @notice Health factor below which `rebalance` will delever (sell yield
-    ///         to repay debt), driving the position back up to exactly this
-    ///         bound. WAD-scaled.
+    ///         to repay debt). The position is over-levered below this bound.
+    ///         WAD-scaled.
     uint256 public immutable healthFactorMin;
     /// @notice Health factor above which `rebalance` will lever up (borrow
-    ///         more debt and swap to yield), driving the position back down to
-    ///         exactly this bound. WAD-scaled; must satisfy
-    ///         `WAD <= healthFactorMin <= healthFactorMax`.
+    ///         more debt and swap to yield). The position is under-levered
+    ///         above this bound. WAD-scaled.
     uint256 public immutable healthFactorMax;
+    /// @notice Re-entry target for a delever: when `hf < healthFactorMin`,
+    ///         `rebalance` repays just enough debt to raise the health factor
+    ///         to this value, which sits just inside the lower bound. Landing
+    ///         here rather than exactly on `healthFactorMin` leaves a small
+    ///         margin so routine drift does not immediately re-trigger.
+    ///         WAD-scaled.
+    uint256 public immutable healthFactorMaxTarget;
+    /// @notice Re-entry target for a lever-up: when `hf > healthFactorMax`,
+    ///         `rebalance` borrows just enough to lower the health factor to
+    ///         this value, which sits just inside the upper bound. WAD-scaled.
+    ///         The four health factors must satisfy
+    ///         `WAD <= healthFactorMin <= healthFactorMaxTarget
+    ///          <= healthFactorMinTarget <= healthFactorMax`.
+    uint256 public immutable healthFactorMinTarget;
     // @dev Address of the oracle for the yield token.
     //      We will deploy an oracle instance, which will provide the best available price information
     //      for the given token. This may be a 3rd party oracle, onchain price information, or both.
@@ -140,6 +153,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         uint24 feeAssetDebt;
         uint256 healthFactorMin;
         uint256 healthFactorMax;
+        uint256 healthFactorMaxTarget;
+        uint256 healthFactorMinTarget;
         address yieldOracle;
         address admin;
         uint256 recoveryDelay;
@@ -209,7 +224,9 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         Ownable(p.admin)
     {
         require(p.healthFactorMin >= MarketLib.WAD, "HF min < WAD");
-        require(p.healthFactorMin <= p.healthFactorMax, "HF min > max");
+        require(p.healthFactorMin <= p.healthFactorMaxTarget, "HF min > maxTarget");
+        require(p.healthFactorMaxTarget <= p.healthFactorMinTarget, "HF maxTarget > minTarget");
+        require(p.healthFactorMinTarget <= p.healthFactorMax, "HF minTarget > max");
 
         loanToken = p.loanToken;
         yieldToken = p.yieldToken;
@@ -217,6 +234,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         feeAssetDebt = p.feeAssetDebt;
         healthFactorMin = p.healthFactorMin;
         healthFactorMax = p.healthFactorMax;
+        healthFactorMaxTarget = p.healthFactorMaxTarget;
+        healthFactorMinTarget = p.healthFactorMinTarget;
         yieldOracle = p.yieldOracle;
 
         market = MarketParams({
@@ -526,23 +545,27 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
     /// @notice Drive the vault's leveraged Morpho position back inside the
     ///         `[healthFactorMin, healthFactorMax]` band, rebalancing only to
-    ///         the nearest bound rather than to a central target.
+    ///         the re-entry target just inside the nearest bound rather than to
+    ///         a central target.
     /// @dev    Behavior:
     ///         - If `hf ∈ [healthFactorMin, healthFactorMax]`, the call is a
     ///           no-op.
     ///         - If `hf > healthFactorMax`, the position is under-levered:
-    ///           borrow exactly `addDebt = (maxBorrow / max) - debt` of the
-    ///           loan token and swap it to the yield token, landing HF at
-    ///           `healthFactorMax`.
+    ///           borrow exactly `addDebt = (maxBorrow / minTarget) - debt` of
+    ///           the loan token and swap it to the yield token, landing HF at
+    ///           `healthFactorMinTarget` (just inside the upper bound).
     ///         - If `hf < healthFactorMin`, the position is over-levered:
     ///           sell exactly enough yield token to repay
-    ///           `repayAmount = debt - (maxBorrow / min)` of debt, landing HF
-    ///           at `healthFactorMin`.
+    ///           `repayAmount = debt - (maxBorrow / maxTarget)` of debt,
+    ///           landing HF at `healthFactorMaxTarget` (just inside the lower
+    ///           bound).
     ///
-    ///         Rebalancing to the nearest bound (not a central target)
-    ///         minimizes swap volume per rebalance. Swap cost is price impact
-    ///         plus pool fees, both proportional to swap size, so the smallest
-    ///         swap that restores the band is the cheapest way back.
+    ///         Rebalancing to the re-entry target nearest the breached bound
+    ///         (not a central target) minimizes swap volume per rebalance. Swap
+    ///         cost is price impact plus pool fees, both proportional to swap
+    ///         size, so the smallest swap that restores the band is the
+    ///         cheapest way back. The target sits a hair inside the bound so a
+    ///         rebalanced position does not sit exactly on the trigger line.
     function rebalance() external logsVaultState {
         // After a recovery the position is terminal; revert with an explicit
         // error so the off-chain rebalancer surfaces it and stops, rather than
@@ -569,12 +592,13 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
     /// @dev Lever-up branch of `rebalance`: position is under-levered
     ///      (`hf > healthFactorMax`). Borrow exactly the debt slice that lands
-    ///      the position at `healthFactorMax` and swap it into yield token.
+    ///      the position at `healthFactorMinTarget` and swap it into yield token.
     ///
-    ///      `targetDebt = maxBorrow * WAD / healthFactorMax` is the debt
+    ///      `targetDebt = maxBorrow * WAD / healthFactorMinTarget` is the debt
     ///      level that, against the current collateral, produces an HF of
-    ///      exactly `healthFactorMax`. Since `hf > max`, `currentDebt <
-    ///      targetDebt`. The borrow leg adds `targetDebt - currentDebt`.
+    ///      exactly `healthFactorMinTarget` (just inside the upper bound).
+    ///      Since `hf > max >= minTarget`, `currentDebt < targetDebt`. The
+    ///      borrow leg adds `targetDebt - currentDebt`.
     /// @param maxBorrow   Current maximum-borrowable amount at LLTV (independent of current debt)
     /// @param currentDebt Current outstanding debt (caller passes the same
     ///                    value used to compute `hfBefore` to avoid a
@@ -584,7 +608,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         internal
         returns (uint256 additionalDebt)
     {
-        uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorMax);
+        uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorMinTarget);
         if (targetDebt <= currentDebt) return 0;
         additionalDebt = targetDebt - currentDebt;
 
@@ -606,17 +630,17 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
     /// @dev Delever branch of `rebalance`: position is over-levered
     ///      (`hf < healthFactorMin`). Sell yield token for loan token to repay
-    ///      enough debt to land the position back at `healthFactorMin`.
+    ///      enough debt to land the position back at `healthFactorMaxTarget`.
     ///
     ///      Sizing:
-    ///        targetDebt    = maxBorrow * WAD / healthFactorMin
+    ///        targetDebt    = maxBorrow * WAD / healthFactorMaxTarget
     ///        repayAmount   = currentDebt - targetDebt
     ///        yieldToSell   = repayAmount * 1e36 / yieldOraclePrice
     ///
     ///      `yieldToSell` is the oracle-implied yield amount whose loan-token
     ///      value equals `repayAmount`. AMM slippage shows up as a small
-    ///      under-shoot (post-rebalance HF is slightly below `healthFactorMin`
-    ///      if the swap realized less than oracle).
+    ///      under-shoot (post-rebalance HF is slightly below
+    ///      `healthFactorMaxTarget` if the swap realized less than oracle).
     ///
     /// @param maxBorrow   Current maximum-borrowable amount at LLTV (may be 0
     ///                    after a liquidation that wiped collateral).
@@ -626,8 +650,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         internal
         returns (uint256 repaid)
     {
-        // conceptually, target debt is maxBorrow / healthFactorMin
-        uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorMin);
+        // conceptually, target debt is maxBorrow / healthFactorMaxTarget
+        uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorMaxTarget);
         if (targetDebt >= currentDebt) return 0;
         uint256 repayAmount = currentDebt - targetDebt;
 
