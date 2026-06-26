@@ -35,8 +35,8 @@ contract FCMVaultTest is Test {
     // Re-entry targets just inside each bound: a delever lands at minTarget
     // (just above min), a lever lands at maxTarget (just below max).
     // Ordering: min <= minTarget <= maxTarget <= max.
-    uint256 internal constant HEALTH_FACTOR_MIN_TARGET = 1.30e18;
-    uint256 internal constant HEALTH_FACTOR_MAX_TARGET = 1.60e18;
+    uint256 internal constant HEALTH_FACTOR_MIN_TARGET = 1.3e18;
+    uint256 internal constant HEALTH_FACTOR_MAX_TARGET = 1.6e18;
     // Deposits lever fresh collateral to the midpoint of the band; rebalance
     // acts only at the bounds.
     uint256 internal constant DEPOSIT_TARGET_HF = (HEALTH_FACTOR_MIN + HEALTH_FACTOR_MAX) / 2;
@@ -980,7 +980,10 @@ contract FCMVaultTest is Test {
         assertGt(FUSDEV.balanceOf(address(vault)), yieldBefore, "rebalance bought more yield");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token after rebalance");
         assertApproxEqRel(
-            _healthFactor(), HEALTH_FACTOR_MAX_TARGET, 1e15, "rebalance restored HF to upper re-entry target"
+            _healthFactor(),
+            HEALTH_FACTOR_MAX_TARGET,
+            1e15,
+            "rebalance restored HF to upper re-entry target"
         );
 
         // Redeem everything.

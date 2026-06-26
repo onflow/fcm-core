@@ -561,11 +561,11 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///           bound).
     ///
     ///         Rebalancing to the re-entry target nearest the breached bound
-    ///         (not a central target) minimizes swap volume per rebalance. Swap
-    ///         cost is price impact plus pool fees, both proportional to swap
-    ///         size, so the smallest swap that restores the band is the
-    ///         cheapest way back. The target sits a hair inside the bound so a
-    ///         rebalanced position does not sit exactly on the trigger line.
+    ///         minimizes swap volume per rebalance. Swap cost is price impact
+    ///         plus pool fees - both are proportional to swap volume.
+    ///         So, the smallest swap that restores health within the band incurs
+    ///         the lowest average-case cost. By convention, there is a small
+    ///         buffer between the band's bound and the target.
     function rebalance() external logsVaultState {
         // After a recovery the position is terminal; revert with an explicit
         // error so the off-chain rebalancer surfaces it and stops, rather than
@@ -748,8 +748,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     function _targetBorrowAgainst(uint256 newAssets) internal view returns (uint256) {
         if (newAssets == 0) return 0;
         uint256 targetHf = _depositTargetHf();
-        uint256 capFromNewAsset =
-            market.maxBorrowFor(newAssets).mulDiv(MarketLib.WAD, targetHf);
+        uint256 capFromNewAsset = market.maxBorrowFor(newAssets).mulDiv(MarketLib.WAD, targetHf);
         uint256 capFromTargetDebt = market.maxBorrowAtHealthFactor(targetHf);
         return capFromNewAsset < capFromTargetDebt ? capFromNewAsset : capFromTargetDebt;
     }
