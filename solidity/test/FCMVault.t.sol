@@ -1600,7 +1600,9 @@ contract FCMVaultTest is Test {
 
         // Tight tolerance: a naive (non-grossed) mint would land ~9.09%, far outside.
         uint256 recipientValue = vault.convertToAssets(vault.balanceOf(feeRcpt));
-        assertApproxEqRel(recipientValue, vault.totalAssets() / 10, 1e15, "recipient holds true 10%");
+        assertApproxEqRel(
+            recipientValue, vault.totalAssets() / 10, 1e15, "recipient holds true 10%"
+        );
     }
 
     /// @notice Fees accrue on the `rebalance` path — the hook runs before the
