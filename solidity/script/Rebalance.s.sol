@@ -12,10 +12,9 @@ import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 
 /// @title Rebalance
 /// @notice Drives a LIVE FCMVault's leveraged Morpho position back inside its
-///         configured health-factor band, rebalancing to the re-entry target
-///         just inside the breached bound.
+///         configured health-factor band, rebalancing to the re-entry target.
 ///         `rebalance` is permissionless, so any account with FLOW for gas can
-///         run this; the broadcaster needs no special role.
+///         run this.
 ///
 ///         The market oracle (Pyth) must be fresh — push an update with
 ///         `make mainnet-update-oracle` first, otherwise the oracle read
