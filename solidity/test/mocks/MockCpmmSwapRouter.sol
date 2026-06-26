@@ -1,35 +1,32 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.19;
 
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+
 import {ISwapRouter} from "../../src/interfaces/ISwapRouter.sol";
 import {MockERC20} from "./MockERC20.sol";
 
-/// @dev Constant-product (x*y=k) swap mock used to exercise price-impact-
-///      dependent slippage. Unlike `MockSwapRouter` — a flat per-unit rate no
-///      trade size can escape — here a smaller trade gets a better average
-///      price, so a swap that breaches a slippage floor at full size can clear
-///      it at a reduced size. That is exactly the property partial rebalancing
-///      relies on, so this mock is what the partial-progress tests etch over
-///      the swap router.
+/// @dev Constant-product (x*y=k) swap mock that honors `sqrtPriceLimitX96` the
+///      way a real Uniswap V3 pool does: it fills only up to the point where the
+///      marginal price reaches the limit, then stops — a *partial fill* — and
+///      consumes only the input it actually used, leaving the remainder with the
+///      caller. This is what exercises the vault's price-limit-based partial
+///      rebalancing; the flat `MockSwapRouter` cannot, since it has no price.
 ///
-///      Mechanics: `out = reserveOut * amountIn / (reserveIn + amountIn)`, the
-///      standard constant-product fill. The marginal (spot) rate is
-///      `reserveOut / reserveIn`; the realized average rate
-///      `reserveOut / (reserveIn + amountIn)` degrades as `amountIn` grows, so
-///      the slippage versus spot is `amountIn / (reserveIn + amountIn)`. With
-///      equal reserves the spot rate is 1:1, matching a 1e36 yield oracle.
+///      Reserves are virtual and static (set via `setReserves`, not updated
+///      after a swap): the mock models a fixed-depth curve, which is all the
+///      tests need (one committed swap per rebalance) and keeps fills exactly
+///      reproducible. Pair both sides to the same value for a 1:1 spot price,
+///      matching a 1e36 yield oracle and a `MockUniswapV3Pool` left at `Q96`.
 ///
-///      Reserves are virtual: like the flat mock it mints/burns tokens and does
-///      NOT update reserves after a swap, so it models a fixed-depth curve
-///      (price impact within a single swap, no inventory accounting). The
-///      partial-rebalance tests only need one committed swap per rebalance, so
-///      that is sufficient and keeps the expected output exactly computable.
+///      Price convention matches the pool: `token0` is the lower-addressed
+///      token, `P = reserve1 / reserve0`, `sqrtPriceX96 = sqrt(P) * 2**96`.
 contract MockCpmmSwapRouter {
+    uint256 internal constant Q96 = 1 << 96;
+
     /// @dev Virtual reserve per token, keyed by token address.
     mapping(address => uint256) public reserveOf;
 
-    /// @notice Set the virtual reserve for a token. Set both sides of a pair to
-    ///         the same value for a 1:1 spot rate.
     function setReserves(address token, uint256 reserve) external {
         reserveOf[token] = reserve;
     }
@@ -39,14 +36,35 @@ contract MockCpmmSwapRouter {
         payable
         returns (uint256 amountOut)
     {
-        uint256 reserveIn = reserveOf[p.tokenIn];
-        uint256 reserveOut = reserveOf[p.tokenOut];
-        require(reserveIn > 0 && reserveOut > 0, "reserves unset");
+        bool zeroForOne = p.tokenIn < p.tokenOut;
+        (address token0, address token1) =
+            zeroForOne ? (p.tokenIn, p.tokenOut) : (p.tokenOut, p.tokenIn);
+        uint256 r0 = reserveOf[token0];
+        uint256 r1 = reserveOf[token1];
+        require(r0 > 0 && r1 > 0, "reserves unset");
+        uint256 k = r0 * r1;
+        uint256 rootK = Math.sqrt(k);
 
-        amountOut = reserveOut * p.amountIn / (reserveIn + p.amountIn);
-        require(amountOut >= p.amountOutMinimum, "Too little received");
+        // Cap the consumed input at the amount that moves the marginal price to
+        // sqrtPriceLimitX96 (0 = no limit). Selling token0 grows r0 and lowers
+        // the price; selling token1 grows r1 and raises it.
+        uint256 consumed = p.amountIn;
+        if (p.sqrtPriceLimitX96 != 0) {
+            uint256 reserveInLimit = zeroForOne
+                ? Math.mulDiv(rootK, Q96, p.sqrtPriceLimitX96)  // r0 at the lower price bound
+                : Math.mulDiv(rootK, p.sqrtPriceLimitX96, Q96); // r1 at the upper price bound
+            uint256 reserveIn = zeroForOne ? r0 : r1;
+            uint256 maxConsumed = reserveInLimit > reserveIn ? reserveInLimit - reserveIn : 0;
+            if (consumed > maxConsumed) consumed = maxConsumed;
+        }
+        if (consumed == 0) return 0;
 
-        MockERC20(p.tokenIn).burn(msg.sender, p.amountIn);
+        // out = reserveOut - k / (reserveIn + consumed)
+        amountOut = zeroForOne
+            ? r1 - Math.mulDiv(r0, r1, r0 + consumed)
+            : r0 - Math.mulDiv(r0, r1, r1 + consumed);
+
+        MockERC20(p.tokenIn).burn(msg.sender, consumed);
         MockERC20(p.tokenOut).mint(p.recipient, amountOut);
     }
 }

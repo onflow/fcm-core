@@ -16,6 +16,7 @@ import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 
 import {MarketLib} from "./libraries/MarketLib.sol";
 import {SwapLib} from "./libraries/SwapLib.sol";
+import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
 
 // Morpho Blue singleton address for Flow EVM
 IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
@@ -46,17 +47,16 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @dev Basis-points denominator for `maxSlippageBps`.
     uint256 internal constant BPS = 10_000;
 
-    /// @dev Maximum number of halvings a rebalance swap may attempt after the
-    ///      full-size attempt before giving up (see `SwapLib.swapExactInPartial`).
-    ///      The smallest size tried is `target >> MAX_PARTIAL_HALVINGS`
-    ///      (~1/1024 of the target). Beyond that, the residual swap is treated
-    ///      as infeasible — the slippage is a uniform per-unit cost no smaller
-    ///      trade can escape — and the rebalance no-ops. The price-impact case
-    ///      typically clears in the first one or two attempts; the full count is
-    ///      only reached near the no-feasible-size boundary, so the worst-case
-    ///      gas (this many reverting swaps) is rare. The off-chain rebalancer's
-    ///      EVM gas limit must accommodate it.
-    uint256 internal constant MAX_PARTIAL_HALVINGS = 10;
+    /// @dev Q64.96 fixed-point one (`2**96`) and its square (`2**192`), used to
+    ///      build the `sqrtPriceX96` price limit for rebalance swaps.
+    uint256 internal constant ONE_X96 = 1 << 96;
+    uint256 internal constant ONE_X192 = 1 << 192;
+
+    /// @dev Uniswap V3 tick-math bounds on a valid `sqrtPriceLimitX96`. A limit
+    ///      outside `(MIN_SQRT_RATIO, MAX_SQRT_RATIO)` is rejected by the pool;
+    ///      the vault treats such a limit as "no feasible swap" and skips.
+    uint160 internal constant MIN_SQRT_RATIO = 4295128739;
+    uint160 internal constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
 
     // @dev Address of the loan token (inner vault asset)
     IERC20 public immutable loanToken;
@@ -64,6 +64,11 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     IERC20 public immutable yieldToken;
     // @dev Pool fee for swapping yield<->debt
     uint24 public immutable feeYieldDebt;
+    /// @notice The FlowSwap V3 yield/debt pool the rebalance swaps route
+    ///         through. Read for its live `slot0` marginal price so a rebalance
+    ///         can derive a `sqrtPriceLimitX96` from the oracle and skip when the
+    ///         pool is already priced past the slippage bound.
+    address public immutable yieldDebtPool;
     /// @notice Pool fee tier for the asset/debt pool, used to reconcile
     ///         redeem surplus from loan token back to the underlying asset.
     uint24 public immutable feeAssetDebt;
@@ -112,12 +117,15 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
     event MaxTvlSet(uint256 previousMaxTvl, uint256 newMaxTvl);
 
-    /// @notice Max slippage (basis points) tolerated on the rebalance swaps
-    ///         (lever and delever). The swap's `amountOutMinimum` is the
-    ///         oracle-expected output discounted by this; a worse fill reverts
-    ///         the rebalance. Applies only to vault-initiated rebalances —
-    ///         deposit/redeem slippage is the caller's responsibility, set via
-    ///         the ERC4626 router. Defaults to 1%, admin-adjustable.
+    /// @notice Max price impact (basis points) tolerated on the rebalance swaps
+    ///         (lever and delever). It sets each swap's `sqrtPriceLimitX96` to
+    ///         the oracle price discounted by this amount, so the pool fills
+    ///         only while its marginal price stays within tolerance and
+    ///         partial-fills (or skips) past it — rather than reverting. Bounds
+    ///         price impact, not the pool's fixed LP fee. Applies only to
+    ///         vault-initiated rebalances — deposit/redeem slippage is the
+    ///         caller's responsibility, set via the ERC4626 router. Defaults to
+    ///         1%, admin-adjustable.
     uint256 public maxSlippageBps;
 
     /// @notice Emitted when the admin updates `maxSlippageBps`.
@@ -163,6 +171,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         uint256 marketLltv;
         uint24 feeYieldDebt;
         uint24 feeAssetDebt;
+        address yieldDebtPool;
         uint256 healthFactorMin;
         uint256 healthFactorMax;
         uint256 healthFactorMinTarget;
@@ -240,10 +249,13 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         require(p.healthFactorMinTarget <= p.healthFactorMaxTarget, "HF minTarget > maxTarget");
         require(p.healthFactorMaxTarget <= p.healthFactorMax, "HF maxTarget > max");
 
+        require(p.yieldDebtPool != address(0), "yieldDebtPool zero");
+
         loanToken = p.loanToken;
         yieldToken = p.yieldToken;
         feeYieldDebt = p.feeYieldDebt;
         feeAssetDebt = p.feeAssetDebt;
+        yieldDebtPool = p.yieldDebtPool;
         healthFactorMin = p.healthFactorMin;
         healthFactorMax = p.healthFactorMax;
         healthFactorMinTarget = p.healthFactorMinTarget;
@@ -279,10 +291,77 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         maxSlippageBps = newBps;
     }
 
-    /// @dev Discount an oracle-expected swap output by `maxSlippageBps` to get
-    ///      the `amountOutMinimum` floor for a rebalance swap.
-    function _slippageFloor(uint256 expectedOut) internal view returns (uint256) {
-        return expectedOut.mulDiv(BPS - maxSlippageBps, BPS);
+    /// @dev The `sqrtPriceX96` marginal-price limit for a rebalance swap on the
+    ///      yield/debt pool: the oracle price discounted by `maxSlippageBps`,
+    ///      expressed in the pool's `sqrt(token1/token0) * 2**96` coordinate.
+    ///      The pool fills a swap only while its marginal price is on the
+    ///      good side of this limit, so the realized average price is bounded
+    ///      by `maxSlippageBps` of *price impact* relative to the oracle.
+    ///
+    ///      Token decimals are already baked into the yield oracle price (the
+    ///      Morpho/IOracle convention: `yield * price / 1e36 = loan` in raw
+    ///      units), so the raw `token1/token0` ratio is read straight off it
+    ///      with no decimal adjustment here. The slippage discount is applied
+    ///      in sqrt space: a price-decreasing (`zeroForOne`) swap multiplies the
+    ///      oracle sqrt price by `sqrt(1 - slip)`, a price-increasing swap
+    ///      divides by it.
+    /// @param  zeroForOne True when selling token0 for token1 (price falls).
+    /// @return The Q64.96 limit, unclamped — callers range/side-check it.
+    function _oracleSqrtPriceLimitX96(bool zeroForOne) internal view returns (uint256) {
+        // P_oracle = token1 / token0 in raw units. yieldOracle.price() (`py`)
+        // is the raw loan-per-yield ratio scaled by 1e36.
+        uint256 py = IOracle(yieldOracle).price();
+        uint256 num;
+        uint256 den;
+        if (address(yieldToken) < address(loanToken)) {
+            // token0 = yield, token1 = loan -> P = loan/yield = py / 1e36
+            num = py;
+            den = MarketLib.ORACLE_PRICE_SCALE;
+        } else {
+            // token0 = loan, token1 = yield -> P = yield/loan = 1e36 / py
+            num = MarketLib.ORACLE_PRICE_SCALE;
+            den = py;
+        }
+
+        // sqrt(P_oracle) * 2**96 = sqrt(P_oracle * 2**192).
+        uint256 sqrtOracleX96 = Math.sqrt(Math.mulDiv(num, ONE_X192, den));
+        // sqrt(1 - slip) * 2**96, slip = maxSlippageBps / BPS.
+        uint256 sqrtSlipX96 = Math.sqrt(Math.mulDiv(BPS - maxSlippageBps, ONE_X192, BPS));
+
+        return zeroForOne
+            ? Math.mulDiv(sqrtOracleX96, sqrtSlipX96, ONE_X96)  // * sqrt(1 - slip)
+            : Math.mulDiv(sqrtOracleX96, ONE_X96, sqrtSlipX96); // / sqrt(1 - slip)
+    }
+
+    /// @dev Resolve the `sqrtPriceLimitX96` for a rebalance swap of `tokenIn`
+    ///      (yield or loan) on the yield/debt pool, and decide whether the swap
+    ///      is feasible at all. `ok` is false when the limit is out of tick-math
+    ///      range, or when the pool's live marginal price is already on the bad
+    ///      side of the limit (so any swap would either be a no-op or revert
+    ///      `SPL`) — in that case the caller skips the swap and the rebalance
+    ///      makes no progress this call.
+    /// @param  tokenIn The token the swap sells.
+    /// @return limit   The Q64.96 price limit to pass to the pool.
+    /// @return ok      Whether a swap should be attempted.
+    function _yieldDebtSwapLimit(address tokenIn) internal view returns (uint160 limit, bool ok) {
+        // token0 is the lower-addressed token; selling it is `zeroForOne`.
+        address token0 =
+            address(yieldToken) < address(loanToken) ? address(yieldToken) : address(loanToken);
+        bool zeroForOne = (tokenIn == token0);
+
+        uint256 raw = _oracleSqrtPriceLimitX96(zeroForOne);
+        if (raw <= MIN_SQRT_RATIO || raw >= MAX_SQRT_RATIO) return (0, false);
+
+        (uint160 spot,,,,,,) = IUniswapV3Pool(yieldDebtPool).slot0();
+        // The limit must sit on the side the price moves toward: below spot for
+        // a price-decreasing swap, above spot for a price-increasing one. If the
+        // pool is already past it, there is no room to trade within tolerance.
+        if (zeroForOne) {
+            if (raw >= spot) return (0, false);
+        } else {
+            if (raw <= spot) return (0, false);
+        }
+        return (uint160(raw), true);
     }
 
     // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
@@ -579,17 +658,23 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///         the lowest average-case cost. By convention, there is a small
     ///         buffer between the band's bound and the target.
     ///
-    ///         Partial rebalancing: if the swap that would land the position at
-    ///         the re-entry target is too large to clear the `maxSlippageBps`
-    ///         floor, the rebalance does not revert — it swaps the largest
-    ///         feasible fraction (see `SwapLib.swapExactInPartial`) and lands
-    ///         partway to the target. Because price impact grows with size,
-    ///         successive rebalances each clear a larger fraction, so the
-    ///         position converges to the band over several calls rather than in
-    ///         one. When the slippage is a uniform per-unit cost no trade size
-    ///         can escape, the rebalance makes no progress (a swap-free no-op);
-    ///         the off-chain rebalancer surfaces the unchanged health factor via
-    ///         the emitted `Rebalanced`/`VaultState` events.
+    ///         Partial rebalancing: the rebalance swap carries a
+    ///         `sqrtPriceLimitX96` derived from the oracle price and
+    ///         `maxSlippageBps` (see `_yieldDebtSwapLimit`). If reaching the
+    ///         re-entry target would push the pool past that price, the pool
+    ///         fills only up to it — a partial fill — and the position lands
+    ///         partway to the target instead of reverting. Because price impact
+    ///         grows with size, successive rebalances each fill more as the gap
+    ///         shrinks, so the position converges over several calls. When the
+    ///         pool's marginal price is already past the bound (e.g. an adverse
+    ///         oracle/pool divergence or a fresh sandwich), the swap is skipped
+    ///         and the rebalance is a swap-free no-op; the off-chain rebalancer
+    ///         surfaces the unchanged health factor via the emitted
+    ///         `Rebalanced`/`VaultState` events.
+    ///
+    ///         Note the bound is on the pool's *marginal price* relative to the
+    ///         oracle, i.e. on price impact. The pool's fixed LP fee is a
+    ///         separate, known cost and is not part of this bound.
     function rebalance() external logsVaultState {
         // After a recovery the position is terminal; revert with an explicit
         // error so the off-chain rebalancer surfaces it and stops, rather than
@@ -624,20 +709,22 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///      Since `hf > max >= maxTarget`, `currentDebt < targetDebt`. The
     ///      borrow leg adds `targetDebt - currentDebt`.
     ///
-    ///      Partial: the full `additionalDebt` is borrowed up front, then the
-    ///      loan->yield swap runs best-effort under the slippage floor. If the
-    ///      floor caps the swap below the full size, only the swapped portion
-    ///      stays levered; the unswapped loan token is immediately repaid, so
-    ///      the position lands partway to `healthFactorMaxTarget` with no idle
-    ///      loan token left behind. Borrowing first and repaying the remainder
-    ///      (rather than sizing the borrow to the swap) avoids needing the swap
-    ///      output before the tokens to swap exist.
+    ///      Partial: the full `borrowAmount` is borrowed up front, then the
+    ///      loan->yield swap runs under a `sqrtPriceLimitX96` derived from the
+    ///      oracle and `maxSlippageBps`. If the swap would push the pool past
+    ///      that price, the pool fills only up to it (a partial fill) and the
+    ///      unspent loan token is immediately repaid, so the position lands
+    ///      partway to `healthFactorMaxTarget` with no idle loan token left
+    ///      behind. Borrowing first and repaying the remainder (rather than
+    ///      sizing the borrow to the fill) avoids needing the swap output before
+    ///      the tokens to swap exist. When the pool is already priced past the
+    ///      bound, the swap is skipped and the borrow is fully repaid (no-op).
     /// @param maxBorrow   Current maximum-borrowable amount at LLTV (independent of current debt)
     /// @param currentDebt Current outstanding debt (caller passes the same
     ///                    value used to compute `hfBefore` to avoid a
     ///                    second `MORPHO.position` SLOAD).
     /// @return additionalDebt Net new debt taken on in this call (the loan token
-    ///                    actually swapped into yield; 0 if no size cleared).
+    ///                    actually swapped into yield; 0 if nothing filled).
     function _rebalanceLever(uint256 maxBorrow, uint256 currentDebt)
         internal
         returns (uint256 additionalDebt)
@@ -646,29 +733,25 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         if (targetDebt <= currentDebt) return 0;
         uint256 borrowAmount = targetDebt - currentDebt;
 
+        (uint160 limit, bool ok) = _yieldDebtSwapLimit(address(loanToken));
+        if (!ok) return 0; // pool already past the slippage bound — no-op.
+
+        // Borrow first, then swap loan->yield bounded by the price limit. The
+        // pool partial-fills up to the limit; whatever loan it does not consume
+        // stays with the vault and is repaid below, so we only lever by the
+        // amount actually converted to yield. The price limit is the
+        // price-impact / sandwich guard; deposit's identical leg is unfloored
+        // (user-facing slippage is the router's job).
+        uint256 loanBefore = loanToken.balanceOf(address(this));
         market.borrow(borrowAmount);
-        // Floor the loan->yield swap at the oracle-expected yield out, less
-        // maxSlippageBps. Deposit's identical leg is intentionally unfloored
-        // (user-facing slippage is the router's job); this leg is
-        // vault-initiated, so the floor is the price-impact / sandwich guard.
-        // Best-effort: swaps the largest feasible fraction rather than reverting.
-        uint256 expectedYield =
-            borrowAmount.mulDiv(MarketLib.ORACLE_PRICE_SCALE, IOracle(yieldOracle).price());
-        (uint256 loanSwapped,) = SwapLib.swapExactInPartial(
-            address(loanToken),
-            address(yieldToken),
-            feeYieldDebt,
-            borrowAmount,
-            _slippageFloor(expectedYield),
-            MAX_PARTIAL_HALVINGS
+        SwapLib.swapExactInToLimit(
+            address(loanToken), address(yieldToken), feeYieldDebt, borrowAmount, limit
         );
 
-        // Repay any loan token the swap could not place within the floor, so
-        // no idle loan token lingers and the position only levers by the amount
-        // actually converted to yield.
-        uint256 leftover = borrowAmount - loanSwapped;
+        // Repay the loan token the swap left behind, so no idle loan lingers.
+        uint256 leftover = loanToken.balanceOf(address(this)) - loanBefore;
         if (leftover > 0) market.repay(leftover);
-        additionalDebt = loanSwapped;
+        additionalDebt = borrowAmount - leftover;
     }
 
     /// @dev Delever branch of `rebalance`: position is over-levered
@@ -685,10 +768,13 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///      under-shoot (post-rebalance HF is slightly below
     ///      `healthFactorMinTarget` if the swap realized less than oracle).
     ///
-    ///      Partial: the yield->loan swap runs best-effort under the slippage
-    ///      floor. If the floor caps the swap below `yieldToSell`, only the
-    ///      realized loan token is repaid and the position lands partway to
-    ///      `healthFactorMinTarget` rather than reverting.
+    ///      Partial: the yield->loan swap runs under a `sqrtPriceLimitX96`
+    ///      derived from the oracle and `maxSlippageBps`. If selling the full
+    ///      `yieldToSell` would push the pool past that price, the pool fills
+    ///      only up to it and the vault repays just the realized loan token, so
+    ///      the position lands partway to `healthFactorMinTarget` rather than
+    ///      reverting. When the pool is already priced past the bound the swap
+    ///      is skipped entirely (no-op).
     ///
     /// @param maxBorrow   Current maximum-borrowable amount at LLTV (may be 0
     ///                    after a liquidation that wiped collateral).
@@ -712,20 +798,15 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         if (yieldToSell > yieldBalance) yieldToSell = yieldBalance;
         if (yieldToSell == 0) return 0;
 
-        // Floor the yield->loan swap at the oracle-expected loan out for the
-        // (possibly-capped) yieldToSell, less maxSlippageBps. Redeem's identical
-        // leg is intentionally unfloored (router's job); this vault-initiated
-        // leg gets the price-impact / sandwich guard. Best-effort: swaps the
-        // largest feasible fraction rather than reverting, so a too-large
-        // delever still repays as much as the floor allows.
-        uint256 expectedLoan = yieldToSell.mulDiv(yieldPrice, MarketLib.ORACLE_PRICE_SCALE);
-        (, uint256 loanGot) = SwapLib.swapExactInPartial(
-            address(yieldToken),
-            address(loanToken),
-            feeYieldDebt,
-            yieldToSell,
-            _slippageFloor(expectedLoan),
-            MAX_PARTIAL_HALVINGS
+        (uint160 limit, bool ok) = _yieldDebtSwapLimit(address(yieldToken));
+        if (!ok) return 0; // pool already past the slippage bound — no-op.
+
+        // Sell yield->loan bounded by the price limit. The pool partial-fills
+        // up to it, so a too-large delever still repays as much as the bound
+        // allows. The price limit is the price-impact / sandwich guard; redeem's
+        // identical leg is unfloored (router's job).
+        uint256 loanGot = SwapLib.swapExactInToLimit(
+            address(yieldToken), address(loanToken), feeYieldDebt, yieldToSell, limit
         );
 
         // Cap repayment at outstanding debt

@@ -17,6 +17,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockMorpho} from "./mocks/MockMorpho.sol";
 import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
 import {MockCpmmSwapRouter} from "./mocks/MockCpmmSwapRouter.sol";
+import {MockUniswapV3Pool} from "./mocks/MockUniswapV3Pool.sol";
 import {MockOracle} from "./mocks/MockOracle.sol";
 import {MockIrm} from "./mocks/MockIrm.sol";
 
@@ -47,6 +48,7 @@ contract FCMVaultTest is Test {
     FCMVault internal vault;
     MockOracle internal marketOracle;
     MockOracle internal yieldOracle;
+    MockUniswapV3Pool internal yieldPool;
 
     address internal admin = address(0x12345);
     address internal user = address(0xA11CE);
@@ -65,6 +67,10 @@ contract FCMVaultTest is Test {
 
         marketOracle = new MockOracle(WETH_PRICE);
         yieldOracle = new MockOracle(YIELD_PRICE);
+        // Yield/debt pool spot defaults to 1:1 (Q96), matching the 1e36 yield
+        // oracle so a rebalance's oracle-derived price limit sits on the
+        // tradeable side of spot.
+        yieldPool = new MockUniswapV3Pool();
 
         vault = new FCMVault(
             FCMVault.InitParams({
@@ -76,6 +82,7 @@ contract FCMVaultTest is Test {
                 marketLltv: LLTV,
                 feeYieldDebt: FEE,
                 feeAssetDebt: FEE_ASSET_DEBT,
+                yieldDebtPool: address(yieldPool),
                 healthFactorMin: HEALTH_FACTOR_MIN,
                 healthFactorMax: HEALTH_FACTOR_MAX,
                 healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
@@ -784,27 +791,27 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
-    // ---- rebalance slippage floor ----------------------------------------
+    // ---- rebalance price-limit guard -------------------------------------
 
-    /// @notice A uniform AMM haircut that exceeds `maxSlippageBps` makes the
-    ///         delever a swap-free no-op rather than a revert. The 3% haircut is
-    ///         per-unit (constant-rate mock), so no smaller trade can clear the
-    ///         1% floor — partial rebalancing finds no feasible size and the
-    ///         position is left untouched, surfaced via the emitted events.
-    ///         (Price-impact slippage, where a smaller trade *does* clear the
-    ///         floor, is exercised in the partial-progress tests below.)
-    function test_Rebalance_DeleverNoopWhenUniformSlippageExceedsFloor() public {
+    /// @notice When the pool's marginal price is already past the oracle-derived
+    ///         slippage bound, the delever swap is skipped entirely (a swap-free
+    ///         no-op) rather than trading at a bad price. Selling yield raises
+    ///         the yield/loan price, so a pool spot already above the bound
+    ///         leaves no room to sell within tolerance.
+    function test_Rebalance_DeleverSkipsWhenSpotPastBound() public {
         _depositFor(user, 1 ether);
         marketOracle.setPrice(1700e36); // push HF below min -> delever path
         uint256 hfBefore = _healthFactor();
         assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
 
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3% > 1% floor
+        // Pool yield/loan price 2% above oracle — past the 1% bound for selling
+        // yield (a price-raising swap), so the swap is skipped.
+        _setPoolPrice(102, 100);
 
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance(); // no revert; no feasible size, so no progress
+        vault.rebalance(); // no revert; spot past bound, so no swap
 
         assertEq(_healthFactor(), hfBefore, "hf unchanged");
         assertEq(_debt(), debtBefore, "debt unchanged");
@@ -812,21 +819,23 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
-    /// @notice Same uniform-slippage no-op on the lever leg: the position is
-    ///         left untouched and no idle loan token lingers (the unswappable
-    ///         borrow is repaid in full).
-    function test_Rebalance_LeverNoopWhenUniformSlippageExceedsFloor() public {
+    /// @notice Same price-limit skip on the lever leg: buying yield lowers the
+    ///         yield/loan price, so a pool spot already below the bound leaves no
+    ///         room to buy within tolerance. No swap runs, no idle loan lingers.
+    function test_Rebalance_LeverSkipsWhenSpotPastBound() public {
         _depositFor(user, 1 ether);
         marketOracle.setPrice(2300e36); // push HF above max -> lever path
         uint256 hfBefore = _healthFactor();
         assertGt(hfBefore, HEALTH_FACTOR_MAX, "above max");
 
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3% > 1% floor
+        // Pool yield/loan price 2% below oracle — past the 1% bound for buying
+        // yield (a price-lowering swap), so the swap is skipped.
+        _setPoolPrice(98, 100);
 
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance(); // no revert; no feasible size, so no progress
+        vault.rebalance(); // no revert; spot past bound, so no swap
 
         assertEq(_healthFactor(), hfBefore, "hf unchanged");
         assertEq(_debt(), debtBefore, "debt unchanged");
@@ -836,11 +845,20 @@ contract FCMVaultTest is Test {
 
     // ---- partial rebalancing (price-impact pool) -------------------------
 
+    /// @dev Set the yield/debt pool's spot to `num/den` (yield/loan price) in
+    ///      `sqrtPriceX96` form, so tests can place spot on either side of the
+    ///      oracle-derived bound. Default (1/1) is `Q96`.
+    function _setPoolPrice(uint256 num, uint256 den) internal {
+        yieldPool.setSqrtPriceX96(uint160(Math.sqrt(Math.mulDiv(num, 1 << 192, den))));
+    }
+
     /// @dev Etch a constant-product swap router over the swap-router address and
     ///      seed both sides of the yield/debt pair with `reserve`, giving a 1:1
-    ///      spot rate (matching the 1e36 yield oracle) plus size-dependent price
-    ///      impact. Call AFTER any flat-rate deposit so deposit's unfloored swap
-    ///      runs at the clean 1:1 rate; the CPMM then governs the rebalance.
+    ///      spot rate (matching the 1e36 yield oracle and the pool mock's
+    ///      default Q96 spot) plus size-dependent price impact. Call AFTER any
+    ///      flat-rate deposit so deposit's unfloored swap runs at the clean 1:1
+    ///      rate; the CPMM then governs the rebalance, honoring the
+    ///      `sqrtPriceLimitX96` the vault derives from the oracle.
     function _installCpmmRouter(uint256 reserve) internal {
         vm.etch(address(SwapLib.SWAP_ROUTER), address(new MockCpmmSwapRouter()).code);
         MockCpmmSwapRouter r = MockCpmmSwapRouter(address(SwapLib.SWAP_ROUTER));
@@ -848,11 +866,11 @@ contract FCMVaultTest is Test {
         r.setReserves(address(FUSDEV), reserve);
     }
 
-    /// @notice Partial delever: when the full delever swap would breach the
-    ///         slippage floor on a shallow price-impact pool, `rebalance` sells
-    ///         the largest feasible fraction instead of reverting. HF rises
-    ///         toward — but falls short of — the lower re-entry target, debt and
-    ///         yield both shrink, and no idle loan token is left behind.
+    /// @notice Partial delever: when selling the full delever amount would push
+    ///         a shallow pool past the price bound, the pool fills only up to the
+    ///         bound (a partial fill) instead of reverting. HF rises toward — but
+    ///         falls short of — the lower re-entry target, debt and yield both
+    ///         shrink, and no idle loan token is left behind.
     function test_Rebalance_PartialDeleverMakesProgress() public {
         _depositFor(user, 1 ether);
 
@@ -860,8 +878,8 @@ contract FCMVaultTest is Test {
         uint256 hfBefore = _healthFactor();
         assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
 
-        // Shallow pool: the full delever (~61e18 yield) far exceeds the ~1%
-        // depth (~reserve/99 ≈ 10e18), so only a reduced fraction clears.
+        // Shallow pool: the full delever (~61e18 yield) moves the price well past
+        // the 1% bound, so the pool fills only the fraction within tolerance.
         _installCpmmRouter(1000e18);
 
         uint256 debtBefore = _debt();
@@ -877,10 +895,10 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
-    /// @notice Partial lever: when the full lever swap would breach the floor,
-    ///         `rebalance` swaps the largest feasible fraction and repays the
-    ///         remainder of the borrow, so HF falls toward — but not all the way
-    ///         to — the upper re-entry target, with no idle loan token left.
+    /// @notice Partial lever: when the full lever swap would push the pool past
+    ///         the price bound, the pool fills only up to it and the vault repays
+    ///         the unspent borrow, so HF falls toward — but not all the way to —
+    ///         the upper re-entry target, with no idle loan token left.
     function test_Rebalance_PartialLeverMakesProgress() public {
         _depositFor(user, 1 ether);
 
@@ -905,9 +923,9 @@ contract FCMVaultTest is Test {
 
     /// @notice Convergence: repeated partial delevers drive the position back
     ///         inside the band. As each step repays debt, the remaining gap
-    ///         shrinks until a full-size swap finally clears the floor, landing
-    ///         the position at (just below) the lower re-entry target. A single
-    ///         rebalance is not enough; several together are.
+    ///         shrinks until the full intended sell fits within the price bound,
+    ///         landing the position at (just below) the lower re-entry target. A
+    ///         single rebalance is not enough; several together are.
     function test_Rebalance_PartialDeleverConvergesOverTicks() public {
         _depositFor(user, 1 ether);
 
@@ -935,21 +953,91 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle after convergence");
     }
 
-    /// @notice Loosening `maxSlippageBps` lets a previously-reverting rebalance
-    ///         through: with the floor raised to 5%, a 3% haircut is tolerated.
+    /// @notice Loosening `maxSlippageBps` widens the price bound, admitting a
+    ///         pool spot that was previously past it. With the pool 2% above
+    ///         oracle, a 1% bound skips the delever (no-op); raising the bound to
+    ///         5% moves the limit past spot and the delever proceeds.
     function test_Rebalance_RespectsLoosenedSlippage() public {
         _depositFor(user, 1 ether);
         marketOracle.setPrice(1700e36);
         uint256 hfBefore = _healthFactor();
         assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
 
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3%
+        // Pool 2% above oracle: past the default 1% bound for selling yield.
+        _setPoolPrice(102, 100);
 
+        // Default 1% bound: spot is past it, so the delever is a no-op.
+        vault.rebalance();
+        assertEq(_healthFactor(), hfBefore, "1% bound skips: HF unchanged");
+
+        // Loosen to 5%: the bound now sits past spot, so the delever proceeds.
         vm.prank(admin);
-        vault.setMaxSlippageBps(500); // 5% > 3%, so the 3% haircut now passes
+        vault.setMaxSlippageBps(500);
 
         vault.rebalance();
-        assertGt(_healthFactor(), hfBefore, "delever raised HF");
+        assertGt(_healthFactor(), hfBefore, "5% bound admits the delever: HF raised");
+    }
+
+    // ---- price-limit math (security-critical conversion) -----------------
+
+    /// @notice The oracle -> `sqrtPriceLimitX96` conversion matches the
+    ///         oracle price discounted by `maxSlippageBps`, in both swap
+    ///         directions, and tracks the oracle's magnitude (decimals baked in).
+    function test_PriceLimit_OracleMathMatchesOracleAndSlippage() public {
+        FCMVaultHarness h = new FCMVaultHarness(_baseParams());
+        uint256 q96 = 1 << 96;
+
+        // Default oracle is 1:1 (P_oracle = 1, oracle sqrt price = Q96) and the
+        // default bound is 1%. A price-decreasing (zeroForOne) swap multiplies
+        // the oracle sqrt price by sqrt(1 - slip); a price-increasing one
+        // divides by it.
+        uint256 sqrtFloor = Math.sqrt(Math.mulDiv(10_000 - 100, 1 << 192, 10_000)); // Q96*sqrt(0.99)
+        assertEq(
+            h.exposed_oracleSqrtPriceLimitX96(true), sqrtFloor, "zeroForOne = Q96*sqrt(1-slip)"
+        );
+        assertEq(
+            h.exposed_oracleSqrtPriceLimitX96(false),
+            Math.mulDiv(q96, q96, sqrtFloor),
+            "oneForZero = Q96/sqrt(1-slip)"
+        );
+
+        // The two directions differ by exactly the slippage factor 1/(1-slip).
+        assertApproxEqRel(
+            Math.mulDiv(h.exposed_oracleSqrtPriceLimitX96(false), 1e18, sqrtFloor),
+            uint256(1e18) * 10_000 / (10_000 - 100),
+            1e12,
+            "directions differ by 1/(1-slip)"
+        );
+
+        // Magnitude tracks the oracle: with yield worth 4 loan, P_oracle = 1/4
+        // (yield is token1 here), so limit(true)*limit(false) ~= P_oracle*2**192.
+        yieldOracle.setPrice(4e36);
+        uint256 lo = h.exposed_oracleSqrtPriceLimitX96(true);
+        uint256 hi = h.exposed_oracleSqrtPriceLimitX96(false);
+        assertApproxEqRel(lo * hi, (uint256(1) << 192) / 4, 1e12, "product ~= P_oracle*2**192");
+    }
+
+    /// @notice The swap-limit feasibility flag flips with the pool's live spot:
+    ///         feasible when spot is on the tradeable side of the bound, skipped
+    ///         once spot is already past it.
+    function test_PriceLimit_SkipFlagTracksSpot() public {
+        FCMVaultHarness h = new FCMVaultHarness(_baseParams());
+
+        // Default spot (Q96) is within bound for both legs.
+        (, bool okSellYield) = h.exposed_yieldDebtSwapLimit(address(FUSDEV));
+        (, bool okBuyYield) = h.exposed_yieldDebtSwapLimit(address(PYUSD0));
+        assertTrue(okSellYield, "delever feasible at 1:1 spot");
+        assertTrue(okBuyYield, "lever feasible at 1:1 spot");
+
+        // Spot 2% above oracle: selling yield (price-raising) is past the bound.
+        yieldPool.setSqrtPriceX96(uint160(Math.sqrt(Math.mulDiv(102, 1 << 192, 100))));
+        (, okSellYield) = h.exposed_yieldDebtSwapLimit(address(FUSDEV));
+        assertFalse(okSellYield, "delever skipped when spot 2% high");
+
+        // Spot 2% below oracle: buying yield (price-lowering) is past the bound.
+        yieldPool.setSqrtPriceX96(uint160(Math.sqrt(Math.mulDiv(98, 1 << 192, 100))));
+        (, okBuyYield) = h.exposed_yieldDebtSwapLimit(address(PYUSD0));
+        assertFalse(okBuyYield, "lever skipped when spot 2% low");
     }
 
     /// @notice `maxSlippageBps` defaults to 1%, is admin-only, and rejects
@@ -1326,6 +1414,7 @@ contract FCMVaultTest is Test {
             marketLltv: LLTV,
             feeYieldDebt: FEE,
             feeAssetDebt: FEE_ASSET_DEBT,
+            yieldDebtPool: address(yieldPool),
             healthFactorMin: HEALTH_FACTOR_MIN,
             healthFactorMax: HEALTH_FACTOR_MAX,
             healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
@@ -1484,5 +1573,19 @@ contract FCMVaultTest is Test {
         vm.prank(user);
         vm.expectRevert();
         vault.cancelEmergencyRecovery();
+    }
+}
+
+/// @dev Exposes the vault's internal price-limit math so the security-critical
+///      oracle -> `sqrtPriceLimitX96` conversion can be asserted directly.
+contract FCMVaultHarness is FCMVault {
+    constructor(FCMVault.InitParams memory p) FCMVault(p) {}
+
+    function exposed_oracleSqrtPriceLimitX96(bool zeroForOne) external view returns (uint256) {
+        return _oracleSqrtPriceLimitX96(zeroForOne);
+    }
+
+    function exposed_yieldDebtSwapLimit(address tokenIn) external view returns (uint160, bool) {
+        return _yieldDebtSwapLimit(tokenIn);
     }
 }
