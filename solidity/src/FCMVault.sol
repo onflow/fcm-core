@@ -140,8 +140,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
     // ── Management & performance fees ──────────────────────────────────────
     /// @notice Flat yearly management fee on NAV, in basis points. 0 = off.
-    /// @dev    Accrued as `NAV * bps * Δt` (snapshot, not time-weighted); kept
-    ///         tight by frequent accrual.
+    /// @dev    Linear accrual of the annual rate; bounded by the 10% cap.
     uint256 public managementFeeBps;
     /// @notice Performance fee on per-share gains above the high-water mark, in
     ///         basis points. 0 = off.
@@ -357,7 +356,17 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
         address recipient = feeRecipient;
         if (recipient != address(0) && hasRole(EARLY_ACCESS_ROLE, recipient) && nav > 0) {
+            // Bill exactly `rate * Δt` since the last accrual, then advance the clock
+            // (accrual is irregular: every interaction + permissionless accrueFees).
+            // The billable gap is capped at one year, so the fee is
+            // provably <= the annual rate `r` (= bps/1e4) however long the vault
+            // sits unaccrued - idle time past a year is forgiven, bounding a single
+            // catch-up dilution after long dormancy. Within a year the realized drag
+            // lies in `[1 - e^(-r), r]`: `r` at one accrual/year, `1 - e^(-r)` in the
+            // continuous limit (negligible span <= ~r^2/2: ~0.02% at bps=200,
+            // ~0.48% at the 1000 cap).
             uint256 elapsed = block.timestamp - lastFeeAccrual;
+            if (elapsed > SECONDS_PER_YEAR) elapsed = SECONDS_PER_YEAR;
 
             uint256 managementFee;
             if (managementFeeBps > 0 && elapsed > 0) {
