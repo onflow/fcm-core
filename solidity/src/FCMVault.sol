@@ -375,7 +375,11 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
             uint256 performanceFee;
             if (performanceFeeBps > 0 && pps > perfHighWaterMark) {
-                // NAV gain above the high-water mark, then the fee share of it.
+                // Fee on the gain in pps above the all-time HWM. pps is UNREALIZED and
+                // oracle-marked, so a transient mark move can crystallize a fee on paper
+                // profit that later reverses - kept, not refunded. The mint goes to the
+                // recipient, not the triggerer, so a permissionless accrueFees call can't
+                // pay its caller; the strict HWM charges net all-time highs only.
                 uint256 gain = (pps - perfHighWaterMark).mulDiv(claims, MarketLib.WAD);
                 performanceFee = gain.mulDiv(performanceFeeBps, BPS);
             }

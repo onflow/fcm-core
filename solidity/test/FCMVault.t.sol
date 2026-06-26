@@ -1554,4 +1554,80 @@ contract FCMVaultTest is Test {
         vm.expectRevert();
         vault.setManagementFeeBps(100);
     }
+
+    /// @notice The management accrual clamps the billable gap at one year: a
+    ///         multi-year dormancy bills a single year's fee, not the full
+    ///         elapsed span (unclamped, 3 years at 2%/yr would dilute ~6%).
+    function test_Fees_ManagementClampedAtOneYear() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 0); // 2%/yr, no perf
+        _depositFor(user, 1 ether);
+
+        uint256 nav = vault.totalAssets();
+        vm.warp(block.timestamp + 3 * 365 days);
+        vault.accrueFees();
+
+        assertApproxEqRel(
+            vault.convertToAssets(vault.balanceOf(feeRcpt)),
+            nav * 200 / 10_000,
+            2e16,
+            "one year billed, not three"
+        );
+    }
+
+    /// @notice The HWM is seeded at the initial price-per-share, so the first
+    ///         deposit is not counted as performance — an immediate accrual
+    ///         after the first deposit mints nothing.
+    function test_Fees_NoPerfOnFirstDeposit() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 0, 2_000); // perf only
+        _depositFor(user, 1 ether);
+
+        vault.accrueFees();
+        assertEq(vault.balanceOf(feeRcpt), 0, "first deposit is not performance");
+    }
+
+    /// @notice The dilution gross-up delivers the true rate: a 10%/yr management
+    ///         fee over one year leaves the recipient holding exactly 10% of NAV
+    ///         (not 10/1.1 ≈ 9.09%, which a non-grossed-up mint would give).
+    function test_Fees_GrossUpDeliversTrueRate() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 1_000, 0); // 10%/yr, no perf
+        _depositFor(user, 1 ether);
+
+        vm.warp(block.timestamp + 365 days);
+        vault.accrueFees();
+
+        // Tight tolerance: a naive (non-grossed) mint would land ~9.09%, far outside.
+        uint256 recipientValue = vault.convertToAssets(vault.balanceOf(feeRcpt));
+        assertApproxEqRel(recipientValue, vault.totalAssets() / 10, 1e15, "recipient holds true 10%");
+    }
+
+    /// @notice Fees accrue on the `rebalance` path — the hook runs before the
+    ///         dead-band no-op check, so even a no-op rebalance meters the fee.
+    function test_Fees_AccruesOnRebalance() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 0); // mgmt only
+        _depositFor(user, 1 ether);
+
+        vm.warp(block.timestamp + 30 days);
+        vault.rebalance(false); // no-op inside band, but accrues fees
+        assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the rebalance path");
+    }
+
+    /// @notice Fees accrue on the `redeemInKind` escape-hatch path.
+    function test_Fees_AccruesOnRedeemInKind() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 0); // mgmt only
+        uint256 shares = _depositFor(user, 1 ether);
+
+        vm.warp(block.timestamp + 30 days);
+        MockERC20(address(PYUSD0)).mint(user, 1_000_000 ether);
+        vm.startPrank(user);
+        PYUSD0.approve(address(vault), type(uint256).max);
+        vault.redeemInKind(shares / 2, user, user);
+        vm.stopPrank();
+
+        assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the redeemInKind path");
+    }
 }
