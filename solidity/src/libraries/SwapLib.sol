@@ -73,4 +73,71 @@ library SwapLib {
             })
         );
     }
+
+    /// @notice Best-effort partial swap: try to swap `amountIn` honoring an
+    ///         `amountOutMinimum` floor; if the swap would breach the floor,
+    ///         halve both the input and the floor and retry, up to `maxHalvings`
+    ///         times. Returns the input actually swapped and the output received,
+    ///         or `(0, 0)` if no size down to `amountIn >> maxHalvings` cleared
+    ///         the floor.
+    /// @dev    Used by vault-initiated rebalances so a swap too large to clear
+    ///         the slippage floor still makes partial progress instead of
+    ///         reverting the whole rebalance.
+    ///
+    ///         The floor is halved alongside the input because it derives from
+    ///         an oracle-expected output that is linear in the input, whereas
+    ///         realized AMM price impact grows with size. A smaller swap
+    ///         therefore faces a proportionally-smaller floor *and* less price
+    ///         impact, so it can clear a bound the full size could not. When the
+    ///         shortfall is a uniform per-unit cost (a flat fee or an
+    ///         oracle/pool spot divergence) rather than price impact, no size
+    ///         clears the floor and the call returns `(0, 0)` — the caller
+    ///         no-ops rather than trading at a bad price.
+    ///
+    ///         The retry wraps the router call in try/catch, so *any* revert
+    ///         (slippage or otherwise) triggers a smaller retry; a pool that
+    ///         fails at every attempted size yields `(0, 0)`. Caller MUST have
+    ///         approved `SWAP_ROUTER` for `tokenIn`.
+    /// @param  tokenIn          Token being sold.
+    /// @param  tokenOut         Token being bought.
+    /// @param  fee              Pool fee tier.
+    /// @param  amountIn         Desired (full) amount of `tokenIn` to sell.
+    /// @param  amountOutMinimum Slippage floor for the full `amountIn`; halved
+    ///                          in lockstep with the input on each retry.
+    /// @param  maxHalvings      Maximum number of halvings to attempt after the
+    ///                          full-size attempt (smallest size is
+    ///                          `amountIn >> maxHalvings`).
+    /// @return amountInUsed     Input actually swapped (0 if none cleared).
+    /// @return amountOut        Realized output received (0 if none cleared).
+    function swapExactInPartial(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountIn,
+        uint256 amountOutMinimum,
+        uint256 maxHalvings
+    ) internal returns (uint256 amountInUsed, uint256 amountOut) {
+        for (uint256 i = 0; i <= maxHalvings; i++) {
+            if (amountIn == 0) break;
+            try SWAP_ROUTER.exactInputSingle(
+                ISwapRouter.ExactInputSingleParams({
+                    tokenIn: tokenIn,
+                    tokenOut: tokenOut,
+                    fee: fee,
+                    recipient: address(this),
+                    amountIn: amountIn,
+                    amountOutMinimum: amountOutMinimum,
+                    sqrtPriceLimitX96: 0
+                })
+            ) returns (
+                uint256 out
+            ) {
+                return (amountIn, out);
+            } catch {
+                amountIn /= 2;
+                amountOutMinimum /= 2;
+            }
+        }
+        return (0, 0);
+    }
 }
