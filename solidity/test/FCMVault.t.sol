@@ -16,6 +16,7 @@ import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockMorpho} from "./mocks/MockMorpho.sol";
 import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
+import {MockCpmmSwapRouter} from "./mocks/MockCpmmSwapRouter.sol";
 import {MockOracle} from "./mocks/MockOracle.sol";
 import {MockIrm} from "./mocks/MockIrm.sol";
 
@@ -831,6 +832,107 @@ contract FCMVaultTest is Test {
         assertEq(_debt(), debtBefore, "debt unchanged");
         assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "yield unchanged");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
+    }
+
+    // ---- partial rebalancing (price-impact pool) -------------------------
+
+    /// @dev Etch a constant-product swap router over the swap-router address and
+    ///      seed both sides of the yield/debt pair with `reserve`, giving a 1:1
+    ///      spot rate (matching the 1e36 yield oracle) plus size-dependent price
+    ///      impact. Call AFTER any flat-rate deposit so deposit's unfloored swap
+    ///      runs at the clean 1:1 rate; the CPMM then governs the rebalance.
+    function _installCpmmRouter(uint256 reserve) internal {
+        vm.etch(address(SwapLib.SWAP_ROUTER), address(new MockCpmmSwapRouter()).code);
+        MockCpmmSwapRouter r = MockCpmmSwapRouter(address(SwapLib.SWAP_ROUTER));
+        r.setReserves(address(PYUSD0), reserve);
+        r.setReserves(address(FUSDEV), reserve);
+    }
+
+    /// @notice Partial delever: when the full delever swap would breach the
+    ///         slippage floor on a shallow price-impact pool, `rebalance` sells
+    ///         the largest feasible fraction instead of reverting. HF rises
+    ///         toward — but falls short of — the lower re-entry target, debt and
+    ///         yield both shrink, and no idle loan token is left behind.
+    function test_Rebalance_PartialDeleverMakesProgress() public {
+        _depositFor(user, 1 ether);
+
+        marketOracle.setPrice(1700e36); // push HF below min -> delever path
+        uint256 hfBefore = _healthFactor();
+        assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
+
+        // Shallow pool: the full delever (~61e18 yield) far exceeds the ~1%
+        // depth (~reserve/99 ≈ 10e18), so only a reduced fraction clears.
+        _installCpmmRouter(1000e18);
+
+        uint256 debtBefore = _debt();
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance();
+
+        uint256 hfAfter = _healthFactor();
+        assertGt(hfAfter, hfBefore, "delever raised HF");
+        assertLt(hfAfter, HEALTH_FACTOR_MIN_TARGET, "fell short of target (partial)");
+        assertLt(_debt(), debtBefore, "debt partially repaid");
+        assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield partially sold");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
+    }
+
+    /// @notice Partial lever: when the full lever swap would breach the floor,
+    ///         `rebalance` swaps the largest feasible fraction and repays the
+    ///         remainder of the borrow, so HF falls toward — but not all the way
+    ///         to — the upper re-entry target, with no idle loan token left.
+    function test_Rebalance_PartialLeverMakesProgress() public {
+        _depositFor(user, 1 ether);
+
+        marketOracle.setPrice(2300e36); // push HF above max -> lever path
+        uint256 hfBefore = _healthFactor();
+        assertGt(hfBefore, HEALTH_FACTOR_MAX, "above max");
+
+        _installCpmmRouter(1000e18);
+
+        uint256 debtBefore = _debt();
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance();
+
+        uint256 hfAfter = _healthFactor();
+        assertLt(hfAfter, hfBefore, "lever lowered HF");
+        assertGt(hfAfter, HEALTH_FACTOR_MAX_TARGET, "fell short of target (partial)");
+        assertGt(_debt(), debtBefore, "debt partially increased");
+        assertGt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield partially bought");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle (remainder repaid)");
+    }
+
+    /// @notice Convergence: repeated partial delevers drive the position back
+    ///         inside the band. As each step repays debt, the remaining gap
+    ///         shrinks until a full-size swap finally clears the floor, landing
+    ///         the position at (just below) the lower re-entry target. A single
+    ///         rebalance is not enough; several together are.
+    function test_Rebalance_PartialDeleverConvergesOverTicks() public {
+        _depositFor(user, 1 ether);
+
+        marketOracle.setPrice(1700e36);
+        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
+
+        _installCpmmRouter(1000e18);
+
+        // One rebalance alone does not restore the band.
+        vault.rebalance();
+        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "single partial still below min");
+
+        // Successive rebalances converge: each clears a larger fraction as the
+        // gap shrinks. Bounded loop; convergence is reached well within it.
+        for (uint256 i = 0; i < 20; i++) {
+            vault.rebalance();
+            if (_healthFactor() >= HEALTH_FACTOR_MIN) break;
+        }
+
+        uint256 hf = _healthFactor();
+        assertGe(hf, HEALTH_FACTOR_MIN, "converged back into band");
+        // Landed at the lower re-entry target (slightly under, from CPMM
+        // undershoot vs the oracle-implied size), not overshooting it.
+        assertLe(hf, HEALTH_FACTOR_MIN_TARGET, "did not overshoot target");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle after convergence");
     }
 
     /// @notice Loosening `maxSlippageBps` lets a previously-reverting rebalance
