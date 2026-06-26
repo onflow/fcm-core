@@ -785,32 +785,52 @@ contract FCMVaultTest is Test {
 
     // ---- rebalance slippage floor ----------------------------------------
 
-    /// @notice The delever swap reverts when realized slippage exceeds
-    ///         `maxSlippageBps`: a 3% AMM haircut trips the default 1% floor,
-    ///         so the rebalance reverts rather than executing at a bad price
-    ///         (the price-impact / sandwich guard). Deposit/redeem have no such
-    ///         floor — that slippage is the caller's via the router.
-    function test_Rebalance_DeleverRevertsWhenSlippageExceedsFloor() public {
+    /// @notice A uniform AMM haircut that exceeds `maxSlippageBps` makes the
+    ///         delever a swap-free no-op rather than a revert. The 3% haircut is
+    ///         per-unit (constant-rate mock), so no smaller trade can clear the
+    ///         1% floor — partial rebalancing finds no feasible size and the
+    ///         position is left untouched, surfaced via the emitted events.
+    ///         (Price-impact slippage, where a smaller trade *does* clear the
+    ///         floor, is exercised in the partial-progress tests below.)
+    function test_Rebalance_DeleverNoopWhenUniformSlippageExceedsFloor() public {
         _depositFor(user, 1 ether);
         marketOracle.setPrice(1700e36); // push HF below min -> delever path
-        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
+        uint256 hfBefore = _healthFactor();
+        assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
 
         MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3% > 1% floor
 
-        vm.expectRevert("Too little received");
-        vault.rebalance();
+        uint256 debtBefore = _debt();
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance(); // no revert; no feasible size, so no progress
+
+        assertEq(_healthFactor(), hfBefore, "hf unchanged");
+        assertEq(_debt(), debtBefore, "debt unchanged");
+        assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "yield unchanged");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
-    /// @notice Same guard on the lever leg.
-    function test_Rebalance_LeverRevertsWhenSlippageExceedsFloor() public {
+    /// @notice Same uniform-slippage no-op on the lever leg: the position is
+    ///         left untouched and no idle loan token lingers (the unswappable
+    ///         borrow is repaid in full).
+    function test_Rebalance_LeverNoopWhenUniformSlippageExceedsFloor() public {
         _depositFor(user, 1 ether);
         marketOracle.setPrice(2300e36); // push HF above max -> lever path
-        assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "above max");
+        uint256 hfBefore = _healthFactor();
+        assertGt(hfBefore, HEALTH_FACTOR_MAX, "above max");
 
         MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3% > 1% floor
 
-        vm.expectRevert("Too little received");
-        vault.rebalance();
+        uint256 debtBefore = _debt();
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance(); // no revert; no feasible size, so no progress
+
+        assertEq(_healthFactor(), hfBefore, "hf unchanged");
+        assertEq(_debt(), debtBefore, "debt unchanged");
+        assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "yield unchanged");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
     /// @notice Loosening `maxSlippageBps` lets a previously-reverting rebalance

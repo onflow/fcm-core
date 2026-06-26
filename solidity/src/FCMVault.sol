@@ -46,6 +46,18 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @dev Basis-points denominator for `maxSlippageBps`.
     uint256 internal constant BPS = 10_000;
 
+    /// @dev Maximum number of halvings a rebalance swap may attempt after the
+    ///      full-size attempt before giving up (see `SwapLib.swapExactInPartial`).
+    ///      The smallest size tried is `target >> MAX_PARTIAL_HALVINGS`
+    ///      (~1/1024 of the target). Beyond that, the residual swap is treated
+    ///      as infeasible — the slippage is a uniform per-unit cost no smaller
+    ///      trade can escape — and the rebalance no-ops. The price-impact case
+    ///      typically clears in the first one or two attempts; the full count is
+    ///      only reached near the no-feasible-size boundary, so the worst-case
+    ///      gas (this many reverting swaps) is rare. The off-chain rebalancer's
+    ///      EVM gas limit must accommodate it.
+    uint256 internal constant MAX_PARTIAL_HALVINGS = 10;
+
     // @dev Address of the loan token (inner vault asset)
     IERC20 public immutable loanToken;
     // @dev Address of the yield token (inner vault share)
@@ -566,6 +578,18 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///         So, the smallest swap that restores health within the band incurs
     ///         the lowest average-case cost. By convention, there is a small
     ///         buffer between the band's bound and the target.
+    ///
+    ///         Partial rebalancing: if the swap that would land the position at
+    ///         the re-entry target is too large to clear the `maxSlippageBps`
+    ///         floor, the rebalance does not revert — it swaps the largest
+    ///         feasible fraction (see `SwapLib.swapExactInPartial`) and lands
+    ///         partway to the target. Because price impact grows with size,
+    ///         successive rebalances each clear a larger fraction, so the
+    ///         position converges to the band over several calls rather than in
+    ///         one. When the slippage is a uniform per-unit cost no trade size
+    ///         can escape, the rebalance makes no progress (a swap-free no-op);
+    ///         the off-chain rebalancer surfaces the unchanged health factor via
+    ///         the emitted `Rebalanced`/`VaultState` events.
     function rebalance() external logsVaultState {
         // After a recovery the position is terminal; revert with an explicit
         // error so the off-chain rebalancer surfaces it and stops, rather than
@@ -599,33 +623,52 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///      exactly `healthFactorMaxTarget` (just below the upper bound).
     ///      Since `hf > max >= maxTarget`, `currentDebt < targetDebt`. The
     ///      borrow leg adds `targetDebt - currentDebt`.
+    ///
+    ///      Partial: the full `additionalDebt` is borrowed up front, then the
+    ///      loan->yield swap runs best-effort under the slippage floor. If the
+    ///      floor caps the swap below the full size, only the swapped portion
+    ///      stays levered; the unswapped loan token is immediately repaid, so
+    ///      the position lands partway to `healthFactorMaxTarget` with no idle
+    ///      loan token left behind. Borrowing first and repaying the remainder
+    ///      (rather than sizing the borrow to the swap) avoids needing the swap
+    ///      output before the tokens to swap exist.
     /// @param maxBorrow   Current maximum-borrowable amount at LLTV (independent of current debt)
     /// @param currentDebt Current outstanding debt (caller passes the same
     ///                    value used to compute `hfBefore` to avoid a
     ///                    second `MORPHO.position` SLOAD).
-    /// @return additionalDebt Amount of loan token borrowed in this call.
+    /// @return additionalDebt Net new debt taken on in this call (the loan token
+    ///                    actually swapped into yield; 0 if no size cleared).
     function _rebalanceLever(uint256 maxBorrow, uint256 currentDebt)
         internal
         returns (uint256 additionalDebt)
     {
         uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorMaxTarget);
         if (targetDebt <= currentDebt) return 0;
-        additionalDebt = targetDebt - currentDebt;
+        uint256 borrowAmount = targetDebt - currentDebt;
 
-        market.borrow(additionalDebt);
+        market.borrow(borrowAmount);
         // Floor the loan->yield swap at the oracle-expected yield out, less
         // maxSlippageBps. Deposit's identical leg is intentionally unfloored
         // (user-facing slippage is the router's job); this leg is
         // vault-initiated, so the floor is the price-impact / sandwich guard.
+        // Best-effort: swaps the largest feasible fraction rather than reverting.
         uint256 expectedYield =
-            additionalDebt.mulDiv(MarketLib.ORACLE_PRICE_SCALE, IOracle(yieldOracle).price());
-        SwapLib.swapExactInMin(
+            borrowAmount.mulDiv(MarketLib.ORACLE_PRICE_SCALE, IOracle(yieldOracle).price());
+        (uint256 loanSwapped,) = SwapLib.swapExactInPartial(
             address(loanToken),
             address(yieldToken),
             feeYieldDebt,
-            additionalDebt,
-            _slippageFloor(expectedYield)
+            borrowAmount,
+            _slippageFloor(expectedYield),
+            MAX_PARTIAL_HALVINGS
         );
+
+        // Repay any loan token the swap could not place within the floor, so
+        // no idle loan token lingers and the position only levers by the amount
+        // actually converted to yield.
+        uint256 leftover = borrowAmount - loanSwapped;
+        if (leftover > 0) market.repay(leftover);
+        additionalDebt = loanSwapped;
     }
 
     /// @dev Delever branch of `rebalance`: position is over-levered
@@ -641,6 +684,11 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///      value equals `repayAmount`. AMM slippage shows up as a small
     ///      under-shoot (post-rebalance HF is slightly below
     ///      `healthFactorMinTarget` if the swap realized less than oracle).
+    ///
+    ///      Partial: the yield->loan swap runs best-effort under the slippage
+    ///      floor. If the floor caps the swap below `yieldToSell`, only the
+    ///      realized loan token is repaid and the position lands partway to
+    ///      `healthFactorMinTarget` rather than reverting.
     ///
     /// @param maxBorrow   Current maximum-borrowable amount at LLTV (may be 0
     ///                    after a liquidation that wiped collateral).
@@ -664,24 +712,25 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         if (yieldToSell > yieldBalance) yieldToSell = yieldBalance;
         if (yieldToSell == 0) return 0;
 
-        uint256 loanBefore = loanToken.balanceOf(address(this));
         // Floor the yield->loan swap at the oracle-expected loan out for the
         // (possibly-capped) yieldToSell, less maxSlippageBps. Redeem's identical
         // leg is intentionally unfloored (router's job); this vault-initiated
-        // leg gets the price-impact / sandwich guard.
+        // leg gets the price-impact / sandwich guard. Best-effort: swaps the
+        // largest feasible fraction rather than reverting, so a too-large
+        // delever still repays as much as the floor allows.
         uint256 expectedLoan = yieldToSell.mulDiv(yieldPrice, MarketLib.ORACLE_PRICE_SCALE);
-        SwapLib.swapExactInMin(
+        (, uint256 loanGot) = SwapLib.swapExactInPartial(
             address(yieldToken),
             address(loanToken),
             feeYieldDebt,
             yieldToSell,
-            _slippageFloor(expectedLoan)
+            _slippageFloor(expectedLoan),
+            MAX_PARTIAL_HALVINGS
         );
-        uint256 loanGot = loanToken.balanceOf(address(this)) - loanBefore;
 
         // Cap repayment at outstanding debt
-        repayAmount = loanGot > currentDebt ? currentDebt : loanGot;
-        if (repayAmount > 0) market.repay(repayAmount);
+        repaid = loanGot > currentDebt ? currentDebt : loanGot;
+        if (repaid > 0) market.repay(repaid);
     }
 
     /// @notice Not implemented. Use `deposit` instead.
