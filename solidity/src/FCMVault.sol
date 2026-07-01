@@ -329,9 +329,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
         // Discount the price toward the side the swap moves it: a
         // price-decreasing swap allows down to price*(1-slip); a price-increasing
-        // swap allows up to price/(1-slip). Scaling the fraction is exact and
-        // happens before the single sqrt below, so no separate sqrt(1-slip)
-        // term is needed (sqrt(P)*sqrt(1-slip) = sqrt(P*(1-slip))).
+        // swap allows up to price/(1-slip).
         if (zeroForOne) {
             numerator *= (BPS - maxSlippageBps);
             denominator *= BPS;
@@ -348,7 +346,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // a price-decreasing swap, above spot for a price-increasing one. If the
         // pool is already past it, there is no room to trade within tolerance.
         (uint160 spot,,,,,,) = IUniswapV3Pool(yieldDebtPool).slot0();
-        if (zeroForOne ? raw >= spot : raw <= spot) return (0, false);
+        if (zeroForOne && raw >= spot) return (0, false)
+        if (!zeroForOne && raw <= spot) return (0, false)
 
         return (uint160(raw), true);
     }
