@@ -781,8 +781,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
         // Sell yield->loan bounded by the price limit. The pool partial-fills
         // up to it, so a too-large delever still repays as much as the bound
-        // allows. The price limit is the price-impact / sandwich guard; redeem's
-        // identical leg is unfloored (router's job).
+        // allows.
         uint256 loanGot = SwapLib.swapExactInToLimit(
             address(yieldToken), address(loanToken), feeYieldDebt, yieldToSell, limit
         );
