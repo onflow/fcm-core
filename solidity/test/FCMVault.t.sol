@@ -845,11 +845,24 @@ contract FCMVaultTest is Test {
 
     // ---- partial rebalancing (price-impact pool) -------------------------
 
+    /// @dev The price ratio `num/den` in Q64.192 fixed point (`num/den * 2**192`),
+    ///      i.e. the square of a `sqrtPriceX96`. `_priceX192(1, 4)` is a 1:4 price.
+    function _priceX192(uint256 num, uint256 den) internal pure returns (uint256) {
+        return Math.mulDiv(num, 1 << 192, den);
+    }
+
+    /// @dev The `sqrtPriceX96` encoding of the price ratio `num/den`
+    ///      (`sqrt(num/den) * 2**96`). `_sqrtPriceX96(99, 100)` is the sqrt price
+    ///      at 99% of a 1:1 price; `_sqrtPriceX96(1, 1)` is `Q96`.
+    function _sqrtPriceX96(uint256 num, uint256 den) internal pure returns (uint256) {
+        return Math.sqrt(_priceX192(num, den));
+    }
+
     /// @dev Set the yield/debt pool's spot to `num/den` (yield/loan price) in
     ///      `sqrtPriceX96` form, so tests can place spot on either side of the
     ///      oracle-derived bound. Default (1/1) is `Q96`.
     function _setPoolPrice(uint256 num, uint256 den) internal {
-        yieldPool.setSqrtPriceX96(uint160(Math.sqrt(Math.mulDiv(num, 1 << 192, den))));
+        yieldPool.setSqrtPriceX96(uint160(_sqrtPriceX96(num, den)));
     }
 
     /// @dev Etch a constant-product swap router over the swap-router address and
@@ -961,7 +974,7 @@ contract FCMVaultTest is Test {
         // divides by it. Selling the loan token is zeroForOne; selling the
         // yield token is oneForZero. At the default 1:1 spot both directions are
         // feasible, so the returned limit is the raw oracle conversion.
-        uint256 sqrtFloor = Math.sqrt(Math.mulDiv(10_000 - 100, 1 << 192, 10_000)); // Q96*sqrt(0.99)
+        uint256 sqrtFloor = _sqrtPriceX96(99, 100); // Q96*sqrt(0.99), the 1% floor
         (uint160 loStart,) = h.exposed_yieldDebtSwapLimit(address(PYUSD0)); // zeroForOne
         (uint160 hiStart,) = h.exposed_yieldDebtSwapLimit(address(FUSDEV)); // oneForZero
         assertEq(uint256(loStart), sqrtFloor, "zeroForOne = Q96*sqrt(1-slip)");
@@ -979,11 +992,11 @@ contract FCMVaultTest is Test {
         // (yield is token1 here). Move spot to match so both legs stay feasible,
         // then limit(zeroForOne)*limit(oneForZero) ~= P_oracle*2**192.
         yieldOracle.setPrice(4e36);
-        yieldPool.setSqrtPriceX96(uint160(Math.sqrt((uint256(1) << 192) / 4)));
+        _setPoolPrice(1, 4);
         (uint160 lo,) = h.exposed_yieldDebtSwapLimit(address(PYUSD0));
         (uint160 hi,) = h.exposed_yieldDebtSwapLimit(address(FUSDEV));
         assertApproxEqRel(
-            uint256(lo) * uint256(hi), (uint256(1) << 192) / 4, 1e12, "product ~= P_oracle*2**192"
+            uint256(lo) * uint256(hi), _priceX192(1, 4), 1e12, "product ~= P_oracle*2**192"
         );
     }
 
@@ -1000,12 +1013,12 @@ contract FCMVaultTest is Test {
         assertTrue(okBuyYield, "lever feasible at 1:1 spot");
 
         // Spot 2% above oracle: selling yield (price-raising) is past the bound.
-        yieldPool.setSqrtPriceX96(uint160(Math.sqrt(Math.mulDiv(102, 1 << 192, 100))));
+        _setPoolPrice(102, 100);
         (, okSellYield) = h.exposed_yieldDebtSwapLimit(address(FUSDEV));
         assertFalse(okSellYield, "delever skipped when spot 2% high");
 
         // Spot 2% below oracle: buying yield (price-lowering) is past the bound.
-        yieldPool.setSqrtPriceX96(uint160(Math.sqrt(Math.mulDiv(98, 1 << 192, 100))));
+        _setPoolPrice(98, 100);
         (, okBuyYield) = h.exposed_yieldDebtSwapLimit(address(PYUSD0));
         assertFalse(okBuyYield, "lever skipped when spot 2% low");
     }
