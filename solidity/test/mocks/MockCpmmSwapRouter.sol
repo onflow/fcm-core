@@ -36,6 +36,8 @@ contract MockCpmmSwapRouter {
         payable
         returns (uint256 amountOut)
     {
+        require(p.amountOutMinimum == 0, "amountOutMinimum not implemented in this mock")
+
         bool zeroForOne = p.tokenIn < p.tokenOut;
         (address token0, address token1) =
             zeroForOne ? (p.tokenIn, p.tokenOut) : (p.tokenOut, p.tokenIn);
