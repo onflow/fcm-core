@@ -66,7 +66,6 @@ abstract contract ConfiguredScript is Script {
         c.healthFactorMax = vm.parseTomlUint(toml, ".healthFactorMax");
         c.healthFactorMinTarget = vm.parseTomlUint(toml, ".healthFactorMinTarget");
         c.healthFactorMaxTarget = vm.parseTomlUint(toml, ".healthFactorMaxTarget");
-
         c.yieldOracle = vm.parseTomlAddress(toml, ".yieldOracle");
         c.swapFactory = vm.parseTomlAddress(toml, ".swapFactory");
         c.yieldDebtPool = vm.parseTomlAddress(toml, ".yieldDebtPool");

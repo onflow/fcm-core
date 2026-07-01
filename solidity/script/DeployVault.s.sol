@@ -67,7 +67,8 @@ contract DeployVault is ConfiguredScript {
                 feeAssetDebt: c.feeAssetDebt,
                 healthFactorMin: c.healthFactorMin,
                 healthFactorMax: c.healthFactorMax,
-                healthFactorTarget: c.healthFactorMinTarget, // use min until updated
+                healthFactorMinTarget: c.healthFactorMinTarget,
+                healthFactorMaxTarget: c.healthFactorMaxTarget,
                 yieldOracle: yieldOracle,
                 admin: deployer,
                 recoveryDelay: c.recoveryDelay,
