@@ -978,7 +978,9 @@ contract FCMVaultTest is Test {
         (uint160 loStart,) = h.exposed_yieldDebtSwapLimit(address(PYUSD0)); // zeroForOne
         (uint160 hiStart,) = h.exposed_yieldDebtSwapLimit(address(FUSDEV)); // oneForZero
         assertEq(uint256(loStart), sqrtFloor, "zeroForOne = Q96*sqrt(1-slip)");
-        assertEq(uint256(hiStart), Math.mulDiv(q96, q96, sqrtFloor), "oneForZero = Q96/sqrt(1-slip)");
+        assertEq(
+            uint256(hiStart), Math.mulDiv(q96, q96, sqrtFloor), "oneForZero = Q96/sqrt(1-slip)"
+        );
 
         // The two directions differ by exactly the slippage factor 1/(1-slip).
         assertApproxEqRel(
