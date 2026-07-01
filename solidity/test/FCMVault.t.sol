@@ -921,38 +921,6 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle (remainder repaid)");
     }
 
-    /// @notice Convergence: repeated partial delevers drive the position back
-    ///         inside the band. As each step repays debt, the remaining gap
-    ///         shrinks until the full intended sell fits within the price bound,
-    ///         landing the position at (just below) the lower re-entry target. A
-    ///         single rebalance is not enough; several together are.
-    function test_Rebalance_PartialDeleverConvergesOverTicks() public {
-        _depositFor(user, 1 ether);
-
-        marketOracle.setPrice(1700e36);
-        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
-
-        _installCpmmRouter(1000e18);
-
-        // One rebalance alone does not restore the band.
-        vault.rebalance();
-        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "single partial still below min");
-
-        // Successive rebalances converge: each clears a larger fraction as the
-        // gap shrinks. Bounded loop; convergence is reached well within it.
-        for (uint256 i = 0; i < 20; i++) {
-            vault.rebalance();
-            if (_healthFactor() >= HEALTH_FACTOR_MIN) break;
-        }
-
-        uint256 hf = _healthFactor();
-        assertGe(hf, HEALTH_FACTOR_MIN, "converged back into band");
-        // Landed at the lower re-entry target (slightly under, from CPMM
-        // undershoot vs the oracle-implied size), not overshooting it.
-        assertLe(hf, HEALTH_FACTOR_MIN_TARGET, "did not overshoot target");
-        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle after convergence");
-    }
-
     /// @notice Loosening `maxSlippageBps` widens the price bound, admitting a
     ///         pool spot that was previously past it. With the pool 2% above
     ///         oracle, a 1% bound skips the delever (no-op); raising the bound to

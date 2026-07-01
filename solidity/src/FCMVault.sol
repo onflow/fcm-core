@@ -346,8 +346,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // a price-decreasing swap, above spot for a price-increasing one. If the
         // pool is already past it, there is no room to trade within tolerance.
         (uint160 spot,,,,,,) = IUniswapV3Pool(yieldDebtPool).slot0();
-        if (zeroForOne && raw >= spot) return (0, false)
-        if (!zeroForOne && raw <= spot) return (0, false)
+        if (zeroForOne && raw >= spot) return (0, false);
+        if (!zeroForOne && raw <= spot) return (0, false);
 
         return (uint160(raw), true);
     }
