@@ -988,33 +988,35 @@ contract FCMVaultTest is Test {
         uint256 q96 = 1 << 96;
 
         // Default oracle is 1:1 (P_oracle = 1, oracle sqrt price = Q96) and the
-        // default bound is 1%. A price-decreasing (zeroForOne) swap multiplies
+        // default bound is 1%. A price-decreasing (zeroForOne) swap discounts
         // the oracle sqrt price by sqrt(1 - slip); a price-increasing one
-        // divides by it.
+        // divides by it. Selling the loan token is zeroForOne; selling the
+        // yield token is oneForZero. At the default 1:1 spot both directions are
+        // feasible, so the returned limit is the raw oracle conversion.
         uint256 sqrtFloor = Math.sqrt(Math.mulDiv(10_000 - 100, 1 << 192, 10_000)); // Q96*sqrt(0.99)
-        assertEq(
-            h.exposed_oracleSqrtPriceLimitX96(true), sqrtFloor, "zeroForOne = Q96*sqrt(1-slip)"
-        );
-        assertEq(
-            h.exposed_oracleSqrtPriceLimitX96(false),
-            Math.mulDiv(q96, q96, sqrtFloor),
-            "oneForZero = Q96/sqrt(1-slip)"
-        );
+        (uint160 loStart,) = h.exposed_yieldDebtSwapLimit(address(PYUSD0)); // zeroForOne
+        (uint160 hiStart,) = h.exposed_yieldDebtSwapLimit(address(FUSDEV)); // oneForZero
+        assertEq(uint256(loStart), sqrtFloor, "zeroForOne = Q96*sqrt(1-slip)");
+        assertEq(uint256(hiStart), Math.mulDiv(q96, q96, sqrtFloor), "oneForZero = Q96/sqrt(1-slip)");
 
         // The two directions differ by exactly the slippage factor 1/(1-slip).
         assertApproxEqRel(
-            Math.mulDiv(h.exposed_oracleSqrtPriceLimitX96(false), 1e18, sqrtFloor),
+            Math.mulDiv(uint256(hiStart), 1e18, sqrtFloor),
             uint256(1e18) * 10_000 / (10_000 - 100),
             1e12,
             "directions differ by 1/(1-slip)"
         );
 
         // Magnitude tracks the oracle: with yield worth 4 loan, P_oracle = 1/4
-        // (yield is token1 here), so limit(true)*limit(false) ~= P_oracle*2**192.
+        // (yield is token1 here). Move spot to match so both legs stay feasible,
+        // then limit(zeroForOne)*limit(oneForZero) ~= P_oracle*2**192.
         yieldOracle.setPrice(4e36);
-        uint256 lo = h.exposed_oracleSqrtPriceLimitX96(true);
-        uint256 hi = h.exposed_oracleSqrtPriceLimitX96(false);
-        assertApproxEqRel(lo * hi, (uint256(1) << 192) / 4, 1e12, "product ~= P_oracle*2**192");
+        yieldPool.setSqrtPriceX96(uint160(Math.sqrt((uint256(1) << 192) / 4)));
+        (uint160 lo,) = h.exposed_yieldDebtSwapLimit(address(PYUSD0));
+        (uint160 hi,) = h.exposed_yieldDebtSwapLimit(address(FUSDEV));
+        assertApproxEqRel(
+            uint256(lo) * uint256(hi), (uint256(1) << 192) / 4, 1e12, "product ~= P_oracle*2**192"
+        );
     }
 
     /// @notice The swap-limit feasibility flag flips with the pool's live spot:
@@ -1580,10 +1582,6 @@ contract FCMVaultTest is Test {
 ///      oracle -> `sqrtPriceLimitX96` conversion can be asserted directly.
 contract FCMVaultHarness is FCMVault {
     constructor(FCMVault.InitParams memory p) FCMVault(p) {}
-
-    function exposed_oracleSqrtPriceLimitX96(bool zeroForOne) external view returns (uint256) {
-        return _oracleSqrtPriceLimitX96(zeroForOne);
-    }
 
     function exposed_yieldDebtSwapLimit(address tokenIn) external view returns (uint160, bool) {
         return _yieldDebtSwapLimit(tokenIn);

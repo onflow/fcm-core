@@ -47,9 +47,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @dev Basis-points denominator for `maxSlippageBps`.
     uint256 internal constant BPS = 10_000;
 
-    /// @dev Q64.96 fixed-point one (`2**96`) and its square (`2**192`), used to
-    ///      build the `sqrtPriceX96` price limit for rebalance swaps.
-    uint256 internal constant ONE_X96 = 1 << 96;
+    /// @dev Q64.96 fixed-point one squared (`2**192`), used to build the
+    ///      `sqrtPriceX96` price limit for rebalance swaps.
     uint256 internal constant ONE_X192 = 1 << 192;
 
     /// @dev Uniswap V3 tick-math bounds on a valid `sqrtPriceLimitX96`. A limit
@@ -248,7 +247,6 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         require(p.healthFactorMin <= p.healthFactorMinTarget, "HF min > minTarget");
         require(p.healthFactorMinTarget <= p.healthFactorMaxTarget, "HF minTarget > maxTarget");
         require(p.healthFactorMaxTarget <= p.healthFactorMax, "HF maxTarget > max");
-
         require(p.yieldDebtPool != address(0), "yieldDebtPool zero");
 
         loanToken = p.loanToken;
@@ -291,76 +289,67 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         maxSlippageBps = newBps;
     }
 
-    /// @dev The `sqrtPriceX96` marginal-price limit for a rebalance swap on the
-    ///      yield/debt pool: the oracle price discounted by `maxSlippageBps`,
+    /// @dev Resolve the `sqrtPriceLimitX96` for a rebalance swap selling
+    ///      `tokenIn` on the yield/debt pool, and decide whether a swap is
+    ///      feasible at all.
+    ///
+    ///      The limit is the oracle price discounted by `maxSlippageBps`,
     ///      expressed in the pool's `sqrt(token1/token0) * 2**96` coordinate.
-    ///      The pool fills a swap only while its marginal price is on the
-    ///      good side of this limit, so the realized average price is bounded
-    ///      by `maxSlippageBps` of *price impact* relative to the oracle.
+    ///      The pool fills a swap only while its marginal price is on the good
+    ///      side of this limit, so the realized average price is bounded by
+    ///      `maxSlippageBps` of *price impact* relative to the oracle.
     ///
     ///      Token decimals are already baked into the yield oracle price (the
     ///      Morpho/IOracle convention: `yield * price / 1e36 = loan` in raw
     ///      units), so the raw `token1/token0` ratio is read straight off it
-    ///      with no decimal adjustment here. The slippage discount is applied
-    ///      in sqrt space: a price-decreasing (`zeroForOne`) swap multiplies the
-    ///      oracle sqrt price by `sqrt(1 - slip)`, a price-increasing swap
-    ///      divides by it.
-    /// @param  zeroForOne True when selling token0 for token1 (price falls).
-    /// @return The Q64.96 limit, unclamped — callers range/side-check it.
-    function _oracleSqrtPriceLimitX96(bool zeroForOne) internal view returns (uint256) {
-        // P_oracle = token1 / token0 in raw units. yieldOracle.price() (`py`)
-        // is the raw loan-per-yield ratio scaled by 1e36.
-        uint256 py = IOracle(yieldOracle).price();
-        uint256 num;
-        uint256 den;
-        if (address(yieldToken) < address(loanToken)) {
-            // token0 = yield, token1 = loan -> P = loan/yield = py / 1e36
-            num = py;
-            den = MarketLib.ORACLE_PRICE_SCALE;
-        } else {
-            // token0 = loan, token1 = yield -> P = yield/loan = 1e36 / py
-            num = MarketLib.ORACLE_PRICE_SCALE;
-            den = py;
-        }
-
-        // sqrt(P_oracle) * 2**96 = sqrt(P_oracle * 2**192).
-        uint256 sqrtOracleX96 = Math.sqrt(Math.mulDiv(num, ONE_X192, den));
-        // sqrt(1 - slip) * 2**96, slip = maxSlippageBps / BPS.
-        uint256 sqrtSlipX96 = Math.sqrt(Math.mulDiv(BPS - maxSlippageBps, ONE_X192, BPS));
-
-        return zeroForOne
-            ? Math.mulDiv(sqrtOracleX96, sqrtSlipX96, ONE_X96)  // * sqrt(1 - slip)
-            : Math.mulDiv(sqrtOracleX96, ONE_X96, sqrtSlipX96); // / sqrt(1 - slip)
-    }
-
-    /// @dev Resolve the `sqrtPriceLimitX96` for a rebalance swap of `tokenIn`
-    ///      (yield or loan) on the yield/debt pool, and decide whether the swap
-    ///      is feasible at all. `ok` is false when the limit is out of tick-math
-    ///      range, or when the pool's live marginal price is already on the bad
-    ///      side of the limit (so any swap would either be a no-op or revert
-    ///      `SPL`) — in that case the caller skips the swap and the rebalance
-    ///      makes no progress this call.
+    ///      with no decimal adjustment here.
+    ///
+    ///      `ok` is false when the limit is out of tick-math range, or when the
+    ///      pool's live marginal price is already on the bad side of the limit
+    ///      (so any swap would either be a no-op or revert `SPL`) — in that case
+    ///      the caller should skip the swap.
     /// @param  tokenIn The token the swap sells.
     /// @return limit   The Q64.96 price limit to pass to the pool.
     /// @return ok      Whether a swap should be attempted.
     function _yieldDebtSwapLimit(address tokenIn) internal view returns (uint160 limit, bool ok) {
-        // token0 is the lower-addressed token; selling it is `zeroForOne`.
-        address token0 =
-            address(yieldToken) < address(loanToken) ? address(yieldToken) : address(loanToken);
+        // Uniswap orders the pair by address: token0 is the lower address and
+        // the pool price is token1/token0. Selling token0 (`zeroForOne`) pushes
+        // the price down; selling token1 pushes it up.
+        bool yieldIsToken0 = address(yieldToken) < address(loanToken);
+        address token0 = yieldIsToken0 ? address(yieldToken) : address(loanToken);
         bool zeroForOne = (tokenIn == token0);
 
-        uint256 raw = _oracleSqrtPriceLimitX96(zeroForOne);
+        // Oracle price as an exact token1/token0 fraction. yieldOracle.price()
+        // is loan-per-yield scaled by 1e36. yield=token0 -> P = loan/yield =
+        // price/1e36; loan=token0 -> P = yield/loan = 1e36/price.
+        uint256 yieldPrice = IOracle(yieldOracle).price();
+        (uint256 numerator, uint256 denominator) = yieldIsToken0
+            ? (yieldPrice, MarketLib.ORACLE_PRICE_SCALE)
+            : (MarketLib.ORACLE_PRICE_SCALE, yieldPrice);
+
+        // Discount the price toward the side the swap moves it: a
+        // price-decreasing swap allows down to price*(1-slip); a price-increasing
+        // swap allows up to price/(1-slip). Scaling the fraction is exact and
+        // happens before the single sqrt below, so no separate sqrt(1-slip)
+        // term is needed (sqrt(P)*sqrt(1-slip) = sqrt(P*(1-slip))).
+        if (zeroForOne) {
+            numerator *= (BPS - maxSlippageBps);
+            denominator *= BPS;
+        } else {
+            numerator *= BPS;
+            denominator *= (BPS - maxSlippageBps);
+        }
+
+        // sqrtPriceX96 = sqrt(P) * 2**96 = sqrt(P * 2**192).
+        uint256 raw = Math.sqrt(Math.mulDiv(numerator, ONE_X192, denominator));
         if (raw <= MIN_SQRT_RATIO || raw >= MAX_SQRT_RATIO) return (0, false);
 
-        (uint160 spot,,,,,,) = IUniswapV3Pool(yieldDebtPool).slot0();
         // The limit must sit on the side the price moves toward: below spot for
         // a price-decreasing swap, above spot for a price-increasing one. If the
         // pool is already past it, there is no room to trade within tolerance.
-        if (zeroForOne) {
-            if (raw >= spot) return (0, false);
-        } else {
-            if (raw <= spot) return (0, false);
-        }
+        (uint160 spot,,,,,,) = IUniswapV3Pool(yieldDebtPool).slot0();
+        if (zeroForOne ? raw >= spot : raw <= spot) return (0, false);
+
         return (uint160(raw), true);
     }
 
