@@ -650,15 +650,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///         `sqrtPriceLimitX96` derived from the oracle price and
     ///         `maxSlippageBps` (see `_yieldDebtSwapLimit`). If reaching the
     ///         re-entry target would push the pool past that price, the pool
-    ///         fills only up to it — a partial fill — and the position lands
-    ///         partway to the target instead of reverting. Because price impact
-    ///         grows with size, successive rebalances each fill more as the gap
-    ///         shrinks, so the position converges over several calls. When the
-    ///         pool's marginal price is already past the bound (e.g. an adverse
-    ///         oracle/pool divergence or a fresh sandwich), the swap is skipped
-    ///         and the rebalance is a swap-free no-op; the off-chain rebalancer
-    ///         surfaces the unchanged health factor via the emitted
-    ///         `Rebalanced`/`VaultState` events.
+    ///         fills as much as possible without reverting.
     ///
     ///         Note the bound is on the pool's *marginal price* relative to the
     ///         oracle, i.e. on price impact. The pool's fixed LP fee is a
@@ -727,9 +719,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // Borrow first, then swap loan->yield bounded by the price limit. The
         // pool partial-fills up to the limit; whatever loan it does not consume
         // stays with the vault and is repaid below, so we only lever by the
-        // amount actually converted to yield. The price limit is the
-        // price-impact / sandwich guard; deposit's identical leg is unfloored
-        // (user-facing slippage is the router's job).
+        // amount actually converted to yield.
         uint256 loanBefore = loanToken.balanceOf(address(this));
         market.borrow(borrowAmount);
         SwapLib.swapExactInToLimit(
