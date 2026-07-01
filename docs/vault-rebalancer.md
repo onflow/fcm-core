@@ -36,7 +36,7 @@ One Cadence resource per EVM target, owned by an admin account. Stored at a dete
 | Failure | Observable | Recovery |
 | :--- | :--- | :--- |
 | EVM call fails, transient (momentary state, out-of-gas) | Tick event with EVM error code | Next tick retries automatically; persistent OOG requires admin to raise the EVM gas limit |
-| Slippage: full target swap would breach the price bound | Tick succeeds; `Rebalanced`/`VaultState` show a smaller-than-target move (or no move) | None needed — the swap carries a `sqrtPriceLimitX96` from the oracle, so the pool partial-fills up to the bound and converges over subsequent ticks; a no-move tick means the pool's marginal price is already past the bound (oracle/pool divergence), which clears when the divergence does |
+| Slippage: full target swap would breach the price bound | Tick succeeds; `Rebalanced`/`VaultState` show a smaller-than-target move (or no move) | None needed, subsequent ticks will invoke rebalance again until the target swap occurs |
 | EVM call fails, sustained (role revoked EVM-side, persistent Solidity-side condition) | Tick event repeats with non-zero error code N ticks in a row | Admin addresses EVM-side condition (restore role, resolve Solidity state) |
 | Fee vault depletion / storage-min breach (Cadence scheduling fees) | No event; absence of `Ticked` triggers the liveness alert | Admin tops up; signs tx to re-invoke self-reschedule |
 | COA FLOW depletion (EVM-side gas) | Tick events repeat with non-zero EVM error code; off-chain balance script catches drift earlier | Anyone can send FLOW to the COA (permissionless, from either Cadence or EVM) |
