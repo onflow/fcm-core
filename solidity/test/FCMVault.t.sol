@@ -839,13 +839,9 @@ contract FCMVaultTest is Test {
         vault.setMaxSlippageBps(250);
         assertEq(vault.maxSlippageBps(), 250, "admin updated");
 
-        // Non-admin cannot set (DEFAULT_ADMIN_ROLE == bytes32(0)).
+        // Non-owner cannot set.
         vm.prank(stranger);
-        vm.expectRevert(
-            abi.encodeWithSignature(
-                "AccessControlUnauthorizedAccount(address,bytes32)", stranger, bytes32(0)
-            )
-        );
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", stranger));
         vault.setMaxSlippageBps(300);
 
         // >= 100% rejected.
@@ -901,6 +897,11 @@ contract FCMVaultTest is Test {
 
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        // Isolate the delever: suppress harvest so this exercises liquidation-recovery
+        // delevering alone (harvest's over-levered interaction is covered separately).
+        vm.prank(admin);
+        vault.setMinHarvest(type(uint256).max);
 
         // Best-effort: should succeed even though target is unreachable.
         vault.rebalance();
@@ -1362,5 +1363,158 @@ contract FCMVaultTest is Test {
         vm.prank(user);
         vm.expectRevert();
         vault.cancelEmergencyRecovery();
+    }
+
+    // ---- carry harvesting (rebalance's carry leg) ------------------------
+
+    /// @notice The carry leg sells the FUSDEV held above the debt backing and supplies it
+    ///         as collateral — growing collateral while debt is UNCHANGED (it never
+    ///         borrows), so hf rises and NAV stays ~flat. A small surplus keeps hf in-band,
+    ///         so the leverage leg is a no-op.
+    function test_Rebalance_HarvestsSurplusAsCollateral() public {
+        // 1:1 WETH price so the constant-rate mock is faithful across FUSDEV->PYUSD->WETH.
+        marketOracle.setPrice(1e36);
+        _depositFor(user, 1 ether);
+
+        // Small accrued carry (+5% FUSDEV) so the added collateral keeps hf in-band.
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 20);
+
+        uint256 navBefore = vault.totalAssets();
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+        uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
+        uint256 debtBefore = _debt();
+        uint256 hfBefore = _healthFactor();
+
+        vault.rebalance();
+
+        assertGt(WETH.balanceOf(address(MORPHO)), collBefore, "collateral grew");
+        assertLt(FUSDEV.balanceOf(address(vault)), yieldBefore, "surplus yield sold");
+        assertApproxEqAbs(_debt(), debtBefore, 1, "debt unchanged: no re-lever");
+        assertGt(_healthFactor(), hfBefore, "hf rose (de-risked, not re-levered)");
+        assertApproxEqRel(vault.totalAssets(), navBefore, 1e15, "NAV ~flat");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token");
+    }
+
+    /// @notice A surplus large enough to push hf past `healthFactorMax` triggers the
+    ///         leverage leg in the same call: harvest adds collateral (hf rises above max),
+    ///         then `_adjustLeverage` levers back to `maxTarget`. So debt grows here — unlike
+    ///         the small-surplus case above, where harvest leaves debt unchanged.
+    function test_Rebalance_HarvestThenLeversWhenSurplusLarge() public {
+        marketOracle.setPrice(1e36);
+        _depositFor(user, 1 ether);
+
+        // Large surplus (+50% FUSDEV) so the harvested collateral pushes hf above max.
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 2);
+
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+        uint256 debtBefore = _debt();
+
+        vault.rebalance();
+
+        assertGt(WETH.balanceOf(address(MORPHO)), collBefore, "harvest added collateral");
+        assertGt(_debt(), debtBefore, "leverage leg fired (debt grew)");
+        assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_MAX_TARGET, 1e15, "levered to maxTarget");
+    }
+
+    /// @notice No carry to realize right after a deposit: FUSDEV exactly backs the debt.
+    function test_Rebalance_HarvestNoopWhenNoSurplus() public {
+        _depositFor(user, 1 ether);
+
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+        uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
+        uint256 debtBefore = _debt();
+
+        vault.rebalance();
+
+        assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "collateral unchanged");
+        assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged");
+        assertApproxEqAbs(_debt(), debtBefore, 1, "debt unchanged");
+    }
+
+    /// @notice The carry leg no-ops when the surplus is below `minHarvest`.
+    function test_Harvest_NoopBelowMinHarvest() public {
+        marketOracle.setPrice(1e36);
+        _depositFor(user, 1 ether);
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 20);
+
+        vm.prank(admin);
+        vault.setMinHarvest(type(uint256).max); // floor above any surplus
+
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+        uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
+        vault.rebalance();
+
+        assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "collateral unchanged");
+        assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged");
+    }
+
+    /// @notice `setMinHarvest` is admin-only.
+    function test_Harvest_SetMinHarvestAccess() public {
+        // Owner-only (same gate as setMaxTvl / setMaxSlippageBps).
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", stranger));
+        vault.setMinHarvest(1e18);
+
+        vm.prank(admin);
+        vault.setMinHarvest(1e18);
+        assertEq(vault.minHarvest(), 1e18, "min set");
+    }
+
+    /// @notice The carry leg no-ops when the yield token has depegged below the debt it
+    ///         backs — a raw-unit surplus is not real carry.
+    function test_Rebalance_HarvestNoopOnDepeg() public {
+        marketOracle.setPrice(1e36);
+        _depositFor(user, 1 ether);
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 20);
+
+        yieldOracle.setPrice(YIELD_PRICE / 2); // FUSDEV worth half -> no value above debt
+
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+        uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
+        vault.rebalance();
+
+        assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "no harvest on depeg");
+        assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged");
+    }
+
+    /// @notice The carry leg is frozen while a recovery is pending, but `rebalance` itself
+    ///         does not revert (only an executed recovery reverts it).
+    function test_Harvest_FrozenDuringPendingRecovery() public {
+        marketOracle.setPrice(1e36);
+        _depositFor(user, 1 ether);
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 20);
+
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+        uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance(); // does not revert while a recovery is merely pending
+
+        assertApproxEqAbs(
+            WETH.balanceOf(address(MORPHO)), collBefore, 1, "carry frozen: no collateral"
+        );
+        assertApproxEqAbs(
+            FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "carry frozen: yield untouched"
+        );
+    }
+
+    /// @notice Interim limitation, fixed by #72: when the position is over-levered *and* the
+    ///         yield leg is illiquid, harvest's swap trips its floor and reverts the whole
+    ///         `rebalance`, blocking that tick's delever. Once #72 makes the swaps partial-fill
+    ///         (no revert), harvest can't block the delever — flip this to assert the delever
+    ///         succeeds then. https://github.com/onflow/flow-credit-markets/pull/72
+    function test_Rebalance_HarvestRevertBlocksDeleverUntilPartialFills() public {
+        marketOracle.setPrice(1e36);
+        _depositFor(user, 1 ether);
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 2);
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBpsForPool(FEE_ASSET_DEBT, 300);
+
+        marketOracle.setPrice(0.82e36); // over-levered -> delever due
+        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
+
+        vm.expectRevert("Too little received");
+        vault.rebalance();
     }
 }

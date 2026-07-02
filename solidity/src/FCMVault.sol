@@ -114,6 +114,16 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @dev Thrown when a slippage tolerance >= 100% (10_000 bps) is set.
     error InvalidSlippage();
 
+    /// @notice Minimum harvestable surplus — the surplus yield value above the debt
+    ///         backing, in loan-token terms — below which `rebalance`'s harvest leg
+    ///         no-ops, so it only fires once there's a worthwhile amount to realize
+    ///         rather than on every dust accrual. Default 0 (no floor — harvests any
+    ///         surplus); admin raises it as the vault grows.
+    uint256 public minHarvest;
+
+    /// @notice Emitted when the admin updates `minHarvest`.
+    event MinHarvestSet(uint256 oldValue, uint256 newValue);
+
     // ── Timelocked emergency recovery (custodial, in-kind) ──────────────────
     /// @notice Delay (in seconds) between scheduling and executing a recovery.
     uint256 public immutable recoveryDelay;
@@ -167,6 +177,12 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @param  healthFactorBefore Health factor at the start of the call (WAD-scaled).
     /// @param  healthFactorAfter  Health factor after the rebalance (WAD-scaled).
     event Rebalanced(address indexed caller, uint256 healthFactorBefore, uint256 healthFactorAfter);
+
+    /// @notice Emitted when the harvest leg of `rebalance` sells surplus yield and
+    ///         redeploys it as collateral.
+    /// @param  yieldSold       Yield token sold (the surplus above debt backing).
+    /// @param  collateralAdded Collateral supplied from the swap proceeds.
+    event Harvested(uint256 yieldSold, uint256 collateralAdded);
 
     /// @notice Emitted on a `redeemInKind` (escape hatch): `owner`'s `shares`
     ///         burned, `caller` repaid `debtRepaid` loanToken, `receiver` got
@@ -261,10 +277,17 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @notice Set the max slippage tolerance applied to the rebalance swaps.
     /// @param  newBps Tolerance in basis points; must be < 100% (10_000) so the
     ///         floor can never be fully disabled.
-    function setMaxSlippageBps(uint256 newBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setMaxSlippageBps(uint256 newBps) external onlyOwner {
         if (newBps >= BPS) revert InvalidSlippage();
         emit MaxSlippageBpsSet(maxSlippageBps, newBps);
         maxSlippageBps = newBps;
+    }
+
+    /// @notice Set the minimum harvestable surplus (loan-token value of surplus yield)
+    ///         below which `rebalance`'s harvest leg no-ops. Owner-only.
+    function setMinHarvest(uint256 newMinHarvest) external onlyOwner {
+        emit MinHarvestSet(minHarvest, newMinHarvest);
+        minHarvest = newMinHarvest;
     }
 
     /// @dev Discount an oracle-expected swap output by `maxSlippageBps` to get
@@ -544,34 +567,42 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     }
 
     /// @notice Drive the vault's leveraged Morpho position back inside the
-    ///         `[healthFactorMin, healthFactorMax]` band, rebalancing only to
-    ///         the re-entry target just inside the nearest bound rather than to
-    ///         a central target.
-    /// @dev    Behavior:
-    ///         - If `hf ∈ [healthFactorMin, healthFactorMax]`, the call is a
-    ///           no-op.
-    ///         - If `hf > healthFactorMax`, the position is under-levered:
-    ///           borrow exactly `addDebt = (maxBorrow / maxTarget) - debt` of
-    ///           the loan token and swap it to the yield token, landing HF at
-    ///           `healthFactorMaxTarget` (just below the upper bound).
-    ///         - If `hf < healthFactorMin`, the position is over-levered:
-    ///           sell exactly enough yield token to repay
-    ///           `repayAmount = debt - (maxBorrow / minTarget)` of debt,
-    ///           landing HF at `healthFactorMinTarget` (just above the lower
-    ///           bound).
-    ///
-    ///         Rebalancing to the re-entry target nearest the breached bound
-    ///         minimizes swap volume per rebalance. Swap cost is price impact
-    ///         plus pool fees - both are proportional to swap volume.
-    ///         So, the smallest swap that restores health within the band incurs
-    ///         the lowest average-case cost. By convention, there is a small
-    ///         buffer between the band's bound and the target.
+    ///         `[healthFactorMin, healthFactorMax]` band and realize any surplus yield.
+    /// @dev    Two legs: `_harvest` (realize surplus) then `_adjustLeverage` (restore the
+    ///         band).
     function rebalance() external logsVaultState {
         // After a recovery the position is terminal; revert with an explicit
         // error so the off-chain rebalancer surfaces it and stops, rather than
         // silently no-op'ing and running indefinitely.
         if (recovered) revert EmergencyRecoveryActive();
         market.accrueInterest();
+
+        // harvest must run before _adjustLeverage
+        _harvest();
+        _adjustLeverage();
+    }
+
+    /// @dev Leverage leg of `rebalance`, rebalancing only to the re-entry target just
+    ///      inside the nearest bound rather than to a central target.
+    ///      - If `hf ∈ [healthFactorMin, healthFactorMax]`, the call is a
+    ///        no-op.
+    ///      - If `hf > healthFactorMax`, the position is under-levered:
+    ///        borrow exactly `addDebt = (maxBorrow / maxTarget) - debt` of
+    ///        the loan token and swap it to the yield token, landing HF at
+    ///        `healthFactorMaxTarget` (just below the upper bound).
+    ///      - If `hf < healthFactorMin`, the position is over-levered:
+    ///        sell exactly enough yield token to repay
+    ///        `repayAmount = debt - (maxBorrow / minTarget)` of debt,
+    ///        landing HF at `healthFactorMinTarget` (just above the lower
+    ///        bound).
+    ///
+    ///      Rebalancing to the re-entry target nearest the breached bound
+    ///      minimizes swap volume per rebalance. Swap cost is price impact
+    ///      plus pool fees - both are proportional to swap volume.
+    ///      So, the smallest swap that restores health within the band incurs
+    ///      the lowest average-case cost. By convention, there is a small
+    ///      buffer between the band's bound and the target.
+    function _adjustLeverage() internal {
         uint256 currentDebt = market.debt();
         uint256 maxBorrow = market.maxBorrow(); // independent of current debt balance
         // we compute inline here rather than use MarketLib.healthFactor to save a SLOAD
@@ -682,6 +713,63 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // Cap repayment at outstanding debt
         repayAmount = loanGot > currentDebt ? currentDebt : loanGot;
         if (repayAmount > 0) market.repay(repayAmount);
+    }
+
+    /// @dev Harvest leg of `rebalance` (internal; runs first). Realize surplus yield:
+    ///      sell the yield held above what the debt needs and supply the proceeds as
+    ///      collateral. NAV-neutral apart from swap costs. Add-only (no withdraw, no
+    ///      borrow) — it never increases leverage, so no flash loan is needed and it
+    ///      cannot push the position toward liquidation. No-op when there's no surplus
+    ///      above the debt backing (before it accrues, or a yield depeg), below `minHarvest`,
+    ///      or while a recovery is pending.
+    ///
+    ///      Both swap legs are floored at the oracle-expected output less
+    ///      `maxSlippageBps` (price-impact / sandwich guard).
+    function _harvest() internal {
+        // Frozen while a recovery is pending or executed: don't reshape the position
+        // (yield -> collateral) while it is being wound down.
+        if (recoveryValidAt != 0 || recovered) return;
+        uint256 currentDebt = market.debt();
+
+        uint256 yieldPrice = IOracle(yieldOracle).price();
+        uint256 yieldBalance = yieldToken.balanceOf(address(this));
+
+        // Yield needed to back the debt at oracle value; only the excess is harvestable
+        // surplus. Selling just the excess keeps the yield leg's oracle value >= debt, so
+        // the unwind invariant is unchanged.
+        uint256 yieldForDebt = currentDebt.mulDiv(MarketLib.ORACLE_PRICE_SCALE, yieldPrice);
+        if (yieldBalance <= yieldForDebt) return; // no surplus to harvest
+        uint256 yieldToHarvest = yieldBalance - yieldForDebt;
+
+        // Skip harvests below minHarvest — only realize the surplus once it's a
+        // worthwhile amount, not on every dust accrual.
+        uint256 expectedLoan = yieldToHarvest.mulDiv(yieldPrice, MarketLib.ORACLE_PRICE_SCALE);
+        if (expectedLoan < minHarvest) return;
+
+        // Sell surplus yield -> loan -> collateral, flooring each vault-initiated leg
+        // at its oracle-expected output less maxSlippageBps.
+        // TODO(#72): a floor trip reverts the whole rebalance, which blocks the delever
+        // if over-levered. Goes away once #72 makes these swaps partial-fill.
+        uint256 loanGot = SwapLib.swapExactInMin(
+            address(yieldToken),
+            address(loanToken),
+            feeYieldDebt,
+            yieldToHarvest,
+            _slippageFloor(expectedLoan)
+        );
+        uint256 collateralAdded = SwapLib.swapExactInMin(
+            address(loanToken),
+            asset(),
+            feeAssetDebt,
+            loanGot,
+            _slippageFloor(market.debtToCollateral(loanGot))
+        );
+
+        // Supply as collateral only — no re-lever. This raises hf; `rebalance`'s lever
+        // branch redeploys the collateral if/when hf later drifts above the band.
+        market.supplyCollateral(collateralAdded);
+
+        emit Harvested(yieldToHarvest, collateralAdded);
     }
 
     /// @notice Not implemented. Use `deposit` instead.
