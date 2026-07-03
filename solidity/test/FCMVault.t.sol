@@ -40,6 +40,9 @@ contract FCMVaultTest is Test {
     // Deposits lever fresh collateral to the midpoint of the band; rebalance
     // acts only at the bounds.
     uint256 internal constant DEPOSIT_TARGET_HF = (HEALTH_FACTOR_MIN + HEALTH_FACTOR_MAX) / 2;
+    // Upper edge of the yield-factor band (rho = yieldValue/debt): harvest fires only
+    // when rho > YIELD_FACTOR_MAX. Placeholder (1% band) pending the yield-factor sim.
+    uint256 internal constant YIELD_FACTOR_MAX = 1.01e18;
     uint24 internal constant FEE = 100;
     uint24 internal constant FEE_ASSET_DEBT = 3000;
 
@@ -79,6 +82,7 @@ contract FCMVaultTest is Test {
                 healthFactorMax: HEALTH_FACTOR_MAX,
                 healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
                 healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
+                yieldFactorMax: YIELD_FACTOR_MAX,
                 yieldOracle: address(yieldOracle),
                 admin: admin,
                 recoveryDelay: 7 days,
@@ -888,20 +892,16 @@ contract FCMVaultTest is Test {
     function test_Rebalance_LiquidationRecoveryDoesNotRevert() public {
         _depositFor(user, 1 ether);
 
-        // A liquidation repays 200 of the ~1186 debt and seizes 0.7 of the
-        // 1 ether collateral (a contrived ratio that grabs far more value
-        // than it repays)
-        // collateral 0.3 ether → maxBorrow 0.3 * 2000 * 0.86 = 516 vs ~986 debt → HF ≈ 0.52.
-        _liquidate({seizedCollateral: 0.7 ether, repaidAssets: 200e18});
+        // A pure collateral seizure (no debt repaid) grabs 0.7 of the 1 ether
+        // collateral, leaving the position underwater with the full debt intact.
+        // collateral 0.3 ether → maxBorrow 0.3 * 2000 * 0.86 = 516 vs ~1186 debt → HF ≈ 0.43.
+        // No debt is repaid, so the yield leg still exactly backs the debt and harvest
+        // no-ops: this exercises liquidation-recovery delevering alone.
+        _liquidate({seizedCollateral: 0.7 ether, repaidAssets: 0});
         assertLt(_healthFactor(), 1e18, "underwater");
 
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
-
-        // Isolate the delever: suppress harvest so this exercises liquidation-recovery
-        // delevering alone (harvest's over-levered interaction is covered separately).
-        vm.prank(admin);
-        vault.setMinHarvest(type(uint256).max);
 
         // Best-effort: should succeed even though target is unreachable.
         vault.rebalance();
@@ -1209,6 +1209,7 @@ contract FCMVaultTest is Test {
             healthFactorMax: HEALTH_FACTOR_MAX,
             healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
             healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
+            yieldFactorMax: YIELD_FACTOR_MAX,
             yieldOracle: address(yieldOracle),
             admin: admin,
             recoveryDelay: 7 days,
@@ -1431,33 +1432,63 @@ contract FCMVaultTest is Test {
         assertApproxEqAbs(_debt(), debtBefore, 1, "debt unchanged");
     }
 
-    /// @notice The carry leg no-ops when the surplus is below `minHarvest`.
-    function test_Harvest_NoopBelowMinHarvest() public {
+    /// @notice A surplus below the yield-factor band (rho <= yieldFactorMax) does not harvest:
+    ///         the band gate holds the vault in-band rather than realizing sub-threshold carry.
+    function test_Rebalance_HarvestNoopBelowYieldFactorMax() public {
         marketOracle.setPrice(1e36);
         _depositFor(user, 1 ether);
-        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 20);
 
-        vm.prank(admin);
-        vault.setMinHarvest(type(uint256).max); // floor above any surplus
+        // +0.5% FUSDEV -> rho = 1.005 < YIELD_FACTOR_MAX (1.01): below the band, no harvest.
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 200);
 
         uint256 collBefore = WETH.balanceOf(address(MORPHO));
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
+
         vault.rebalance();
 
-        assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "collateral unchanged");
-        assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged");
+        assertApproxEqAbs(
+            WETH.balanceOf(address(MORPHO)), collBefore, 1, "collateral unchanged (below band)"
+        );
+        assertApproxEqAbs(
+            FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged (below band)"
+        );
     }
 
-    /// @notice `setMinHarvest` is admin-only.
-    function test_Harvest_SetMinHarvestAccess() public {
-        // Owner-only (same gate as setMaxTvl / setMaxSlippageBps).
-        vm.prank(stranger);
-        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", stranger));
-        vault.setMinHarvest(1e18);
+    /// @notice A dust surplus whose swap output rounds to zero must no-op the harvest,
+    ///         not revert the whole rebalance. The router rejects a zero-amount swap
+    ///         (like UniswapV3's 'AS'), so without the zero-guard the second leg would
+    ///         revert once the first leg returns nothing. Uses a `yieldFactorMax == WAD` vault
+    ///         so the harvest fires on the dust; the default 1% band would gate it out before
+    ///         the swap (see test_Rebalance_HarvestNoopBelowYieldFactorMax).
+    function test_Harvest_NoopOnDustSurplus() public {
+        marketOracle.setPrice(1e36);
 
+        FCMVault.InitParams memory p = _baseParams();
+        p.yieldFactorMax = 1e18; // WAD: harvest fires on any surplus, so the dust reaches the guard
+        FCMVault dustVault = new FCMVault(p);
+        vm.startPrank(admin);
+        dustVault.setMaxTvl(1e21);
+        dustVault.grantRole(dustVault.EARLY_ACCESS_ROLE(), user);
+        vm.stopPrank();
+
+        MockERC20(address(WETH)).mint(user, 1 ether);
+        vm.startPrank(user);
+        WETH.approve(address(dustVault), 1 ether);
+        dustVault.deposit(1 ether, user);
+        vm.stopPrank();
+
+        // A dust surplus above the exact backing.
+        MockERC20(address(FUSDEV)).mint(address(dustVault), 1000);
+
+        // Extreme slippage tolerance + pool fee so the first swap's oracle floor and its
+        // output both round to zero: loanGot == 0, tripping the no-op guard.
         vm.prank(admin);
-        vault.setMinHarvest(1e18);
-        assertEq(vault.minHarvest(), 1e18, "min set");
+        dustVault.setMaxSlippageBps(9999);
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(9999);
+
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+        dustVault.rebalance(); // must not revert
+        assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "collateral unchanged");
     }
 
     /// @notice The carry leg no-ops when the yield token has depegged below the debt it

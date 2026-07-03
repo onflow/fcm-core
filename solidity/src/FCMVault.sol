@@ -77,6 +77,13 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///         `WAD <= healthFactorMin <= healthFactorMinTarget
     ///          <= healthFactorMaxTarget <= healthFactorMax`.
     uint256 public immutable healthFactorMaxTarget;
+    /// @notice The yield factor is `yieldValue / debt`, WAD-scaled (WAD = the yield exactly
+    ///         repays the debt). It is NOT a yield rate. `yieldFactorMax` is the upper edge of
+    ///         its band: `rebalance`'s harvest leg fires only when the yield factor exceeds it,
+    ///         so it does not act on sub-threshold surplus. Must be `>= WAD`. Immutable, like the
+    ///         health-factor band bounds. The lower edge (`yieldFactorMin` + a delever) is a
+    ///         stacked follow-up.
+    uint256 public immutable yieldFactorMax;
     // @dev Address of the oracle for the yield token.
     //      We will deploy an oracle instance, which will provide the best available price information
     //      for the given token. This may be a 3rd party oracle, onchain price information, or both.
@@ -113,16 +120,6 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
     /// @dev Thrown when a slippage tolerance >= 100% (10_000 bps) is set.
     error InvalidSlippage();
-
-    /// @notice Minimum harvestable surplus — the surplus yield value above the debt
-    ///         backing, in loan-token terms — below which `rebalance`'s harvest leg
-    ///         no-ops, so it only fires once there's a worthwhile amount to realize
-    ///         rather than on every dust accrual. Default 0 (no floor — harvests any
-    ///         surplus); admin raises it as the vault grows.
-    uint256 public minHarvest;
-
-    /// @notice Emitted when the admin updates `minHarvest`.
-    event MinHarvestSet(uint256 oldValue, uint256 newValue);
 
     // ── Timelocked emergency recovery (custodial, in-kind) ──────────────────
     /// @notice Delay (in seconds) between scheduling and executing a recovery.
@@ -165,6 +162,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         uint256 healthFactorMax;
         uint256 healthFactorMinTarget;
         uint256 healthFactorMaxTarget;
+        uint256 yieldFactorMax;
         address yieldOracle;
         address admin;
         uint256 recoveryDelay;
@@ -243,6 +241,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         require(p.healthFactorMin <= p.healthFactorMinTarget, "HF min > minTarget");
         require(p.healthFactorMinTarget <= p.healthFactorMaxTarget, "HF minTarget > maxTarget");
         require(p.healthFactorMaxTarget <= p.healthFactorMax, "HF maxTarget > max");
+        require(p.yieldFactorMax >= MarketLib.WAD, "yieldFactorMax < WAD");
 
         loanToken = p.loanToken;
         yieldToken = p.yieldToken;
@@ -252,6 +251,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         healthFactorMax = p.healthFactorMax;
         healthFactorMinTarget = p.healthFactorMinTarget;
         healthFactorMaxTarget = p.healthFactorMaxTarget;
+        yieldFactorMax = p.yieldFactorMax;
         yieldOracle = p.yieldOracle;
 
         market = MarketParams({
@@ -281,13 +281,6 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         if (newBps >= BPS) revert InvalidSlippage();
         emit MaxSlippageBpsSet(maxSlippageBps, newBps);
         maxSlippageBps = newBps;
-    }
-
-    /// @notice Set the minimum harvestable surplus (loan-token value of surplus yield)
-    ///         below which `rebalance`'s harvest leg no-ops. Owner-only.
-    function setMinHarvest(uint256 newMinHarvest) external onlyOwner {
-        emit MinHarvestSet(minHarvest, newMinHarvest);
-        minHarvest = newMinHarvest;
     }
 
     /// @dev Discount an oracle-expected swap output by `maxSlippageBps` to get
@@ -719,9 +712,9 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///      sell the yield held above what the debt needs and supply the proceeds as
     ///      collateral. NAV-neutral apart from swap costs. Add-only (no withdraw, no
     ///      borrow) — it never increases leverage, so no flash loan is needed and it
-    ///      cannot push the position toward liquidation. No-op when there's no surplus
-    ///      above the debt backing (before it accrues, or a yield depeg), below `minHarvest`,
-    ///      or while a recovery is pending.
+    ///      cannot push the position toward liquidation. No-op when the yield factor
+    ///      `rho = yieldValue / debt` is within the band (`rho <= yieldFactorMax` — before
+    ///      enough surplus accrues, or a yield depeg), or while a recovery is pending.
     ///
     ///      Both swap legs are floored at the oracle-expected output less
     ///      `maxSlippageBps` (price-impact / sandwich guard).
@@ -738,13 +731,14 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // surplus. Selling just the excess keeps the yield leg's oracle value >= debt, so
         // the unwind invariant is unchanged.
         uint256 yieldForDebt = currentDebt.mulDiv(MarketLib.ORACLE_PRICE_SCALE, yieldPrice);
-        if (yieldBalance <= yieldForDebt) return; // no surplus to harvest
+        // Fire only when the yield factor is above the band's upper edge: yieldBalance >
+        // yieldForDebt * yieldFactorMax / WAD (equivalently rho > yieldFactorMax). Then realize
+        // back down to yieldForDebt (rho = 1, bare backing).
+        if (yieldBalance <= yieldForDebt.mulDiv(yieldFactorMax, MarketLib.WAD)) return;
         uint256 yieldToHarvest = yieldBalance - yieldForDebt;
 
-        // Skip harvests below minHarvest — only realize the surplus once it's a
-        // worthwhile amount, not on every dust accrual.
+        // Oracle-expected loan out; also the basis for the first swap's floor.
         uint256 expectedLoan = yieldToHarvest.mulDiv(yieldPrice, MarketLib.ORACLE_PRICE_SCALE);
-        if (expectedLoan < minHarvest) return;
 
         // Sell surplus yield -> loan -> collateral, flooring each vault-initiated leg
         // at its oracle-expected output less maxSlippageBps.
@@ -757,6 +751,10 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
             yieldToHarvest,
             _slippageFloor(expectedLoan)
         );
+        // A dust surplus rounds the swap output to zero; no-op rather than pass a zero
+        // amount to the next leg, which the router and Morpho reject and would revert the
+        // whole rebalance.
+        if (loanGot == 0) return;
         uint256 collateralAdded = SwapLib.swapExactInMin(
             address(loanToken),
             asset(),
@@ -764,6 +762,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
             loanGot,
             _slippageFloor(market.debtToCollateral(loanGot))
         );
+        if (collateralAdded == 0) return;
 
         // Supply as collateral only — no re-lever. This raises hf; `rebalance`'s lever
         // branch redeploys the collateral if/when hf later drifts above the band.

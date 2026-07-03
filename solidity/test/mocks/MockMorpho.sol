@@ -30,6 +30,7 @@ contract MockMorpho {
         address onBehalf,
         bytes calldata
     ) external {
+        require(assets != 0, "ZERO_ASSETS");
         Id id = mp.id();
         position[id][onBehalf].collateral += uint128(assets);
         IERC20(mp.collateralToken).transferFrom(msg.sender, address(this), assets);

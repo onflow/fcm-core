@@ -38,6 +38,7 @@ abstract contract ConfiguredScript is Script {
         uint256 healthFactorMax;
         uint256 healthFactorMinTarget;
         uint256 healthFactorMaxTarget;
+        uint256 yieldFactorMax;
         address yieldOracle;
         address swapFactory;
         address yieldDebtPool;
@@ -66,6 +67,7 @@ abstract contract ConfiguredScript is Script {
         c.healthFactorMax = vm.parseTomlUint(toml, ".healthFactorMax");
         c.healthFactorMinTarget = vm.parseTomlUint(toml, ".healthFactorMinTarget");
         c.healthFactorMaxTarget = vm.parseTomlUint(toml, ".healthFactorMaxTarget");
+        c.yieldFactorMax = vm.parseTomlUint(toml, ".yieldFactorMax");
         c.yieldOracle = vm.parseTomlAddress(toml, ".yieldOracle");
         c.swapFactory = vm.parseTomlAddress(toml, ".swapFactory");
         c.yieldDebtPool = vm.parseTomlAddress(toml, ".yieldDebtPool");

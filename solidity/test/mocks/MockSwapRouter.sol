@@ -7,7 +7,8 @@ import {MockERC20} from "./MockERC20.sol";
 /// @dev Constant-rate swap mock. `feeBps` (basis points) is taken off the
 ///      output amount; default 0 means lossless 1:1. Ignores the price-limit
 ///      field. A per-fee-tier override (`setFeeBpsForPool`) lets a test haircut
-///      one pool without touching the others.
+///      one pool without touching the others. Reverts on a zero input amount,
+///      like UniswapV3Pool's `require(amountSpecified != 0, 'AS')`.
 contract MockSwapRouter {
     uint256 public feeBps;
 
@@ -32,6 +33,7 @@ contract MockSwapRouter {
         payable
         returns (uint256 amountOut)
     {
+        require(p.amountIn != 0, "AS");
         uint256 bps = poolFeeSet[p.fee] ? poolFeeBps[p.fee] : feeBps;
         MockERC20(p.tokenIn).burn(msg.sender, p.amountIn);
         amountOut = p.amountIn * (10_000 - bps) / 10_000;
