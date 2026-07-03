@@ -153,8 +153,11 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     address public feeRecipient;
     /// @notice Timestamp of the last fee accrual, for the time-based management fee.
     uint256 public lastFeeAccrual;
-    /// @notice High-water mark for the performance fee, as WETH-per-share scaled
+    /// @notice High-water mark for the performance fee, as asset-per-share scaled
     ///         by WAD (`NAV * WAD / claims`). Flow-neutral, strict all-time peak.
+    ///         Vault-wide (one mark for all holders): a depositor entering below it
+    ///         rides the recovery back up fee-free — accepted by design in lieu of
+    ///         per-user-HWM accounting.
     uint256 public perfHighWaterMark;
 
     /// @notice Emitted when the admin updates the management fee (old + new).
@@ -165,8 +168,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     event FeeRecipientSet(address indexed oldRecipient, address indexed newRecipient);
     /// @notice Emitted when fees are accrued and shares minted to the recipient.
     /// @param  recipient      Account that received the minted fee shares.
-    /// @param  managementFee  Management fee accrued this call, in asset (WETH) terms.
-    /// @param  performanceFee Performance fee accrued this call, in asset (WETH) terms.
+    /// @param  managementFee  Management fee accrued this call, in asset terms.
+    /// @param  performanceFee Performance fee accrued this call, in asset terms.
     /// @param  feeShares      Shares minted to `recipient` (dilution).
     event FeesAccrued(
         address indexed recipient, uint256 managementFee, uint256 performanceFee, uint256 feeShares

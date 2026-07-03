@@ -1446,6 +1446,12 @@ contract FCMVaultTest is Test {
         yieldOracle.setPrice(YIELD_PRICE / 2);
         vault.accrueFees();
         assertEq(vault.balanceOf(feeRcpt), afterFirst, "no fee in drawdown");
+
+        // Partial recovery: price rises off the low but pps stays below the HWM —
+        // rebuilding toward the prior peak still incurs no fee.
+        yieldOracle.setPrice((YIELD_PRICE * 3) / 4);
+        vault.accrueFees();
+        assertEq(vault.balanceOf(feeRcpt), afterFirst, "no fee on sub-HWM recovery");
     }
 
     /// @notice If the recipient isn't allowlisted, accrual SKIPS (no mint) and
