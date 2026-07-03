@@ -911,11 +911,11 @@ contract FCMVaultTest is Test {
         assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield consumed");
     }
 
-    /// @notice Constructor rejects HF configurations where the band/targets are
-    ///         malformed or the lower bound is below WAD (which would allow
-    ///         rebalancing into a liquidatable position). The four values must
-    ///         satisfy `WAD <= min <= minTarget <= maxTarget <= max`.
-    function test_Rebalance_ConstructorValidatesHfBand() public {
+    /// @notice Constructor rejects malformed band configs: the HF band/targets
+    ///         (`WAD <= min <= minTarget <= maxTarget <= max`; a below-WAD min would
+    ///         allow rebalancing into a liquidatable position) and the yield-factor
+    ///         band edge (`yieldFactorMax >= WAD`).
+    function test_Rebalance_ConstructorValidatesBands() public {
         FCMVault.InitParams memory p = _baseParams();
         p.healthFactorMin = 0.9e18;
         vm.expectRevert(bytes("HF min < WAD"));
@@ -937,6 +937,12 @@ contract FCMVaultTest is Test {
         p = _baseParams();
         p.healthFactorMaxTarget = 1.7e18; // > max (1.65)
         vm.expectRevert(bytes("HF maxTarget > max"));
+        new FCMVault(p);
+
+        // yield-factor band edge below WAD (harvest trigger below bare backing).
+        p = _baseParams();
+        p.yieldFactorMax = 0.9e18; // < WAD
+        vm.expectRevert(bytes("yieldFactorMax < WAD"));
         new FCMVault(p);
     }
 
@@ -1366,10 +1372,11 @@ contract FCMVaultTest is Test {
         vault.cancelEmergencyRecovery();
     }
 
-    // ---- carry harvesting (rebalance's carry leg) ------------------------
+    // ---- harvest (rebalance's harvest leg) -------------------------------
 
-    /// @notice The carry leg sells the FUSDEV held above the debt backing and supplies it
-    ///         as collateral — growing collateral while debt is UNCHANGED (it never
+    /// @notice The harvest fires only when the yield factor (yield value / debt) exceeds
+    ///         `yieldFactorMax`, then sells the FUSDEV above the debt backing down to bare
+    ///         backing and supplies it as collateral. Add-only: debt is UNCHANGED (it never
     ///         borrows), so hf rises and NAV stays ~flat. A small surplus keeps hf in-band,
     ///         so the leverage leg is a no-op.
     function test_Rebalance_HarvestsSurplusAsCollateral() public {
@@ -1491,7 +1498,7 @@ contract FCMVaultTest is Test {
         assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "collateral unchanged");
     }
 
-    /// @notice The carry leg no-ops when the yield token has depegged below the debt it
+    /// @notice The harvest no-ops when the yield token has depegged below the debt it
     ///         backs — a raw-unit surplus is not real carry.
     function test_Rebalance_HarvestNoopOnDepeg() public {
         marketOracle.setPrice(1e36);
@@ -1508,7 +1515,7 @@ contract FCMVaultTest is Test {
         assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged");
     }
 
-    /// @notice The carry leg is frozen while a recovery is pending, but `rebalance` itself
+    /// @notice The harvest is frozen while a recovery is pending, but `rebalance` itself
     ///         does not revert (only an executed recovery reverts it).
     function test_Harvest_FrozenDuringPendingRecovery() public {
         marketOracle.setPrice(1e36);
@@ -1524,10 +1531,10 @@ contract FCMVaultTest is Test {
         vault.rebalance(); // does not revert while a recovery is merely pending
 
         assertApproxEqAbs(
-            WETH.balanceOf(address(MORPHO)), collBefore, 1, "carry frozen: no collateral"
+            WETH.balanceOf(address(MORPHO)), collBefore, 1, "harvest frozen: no collateral"
         );
         assertApproxEqAbs(
-            FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "carry frozen: yield untouched"
+            FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "harvest frozen: yield untouched"
         );
     }
 

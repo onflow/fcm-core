@@ -84,9 +84,9 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///         health-factor band bounds. The lower edge (`yieldFactorMin` + a delever) is a
     ///         stacked follow-up.
     uint256 public immutable yieldFactorMax;
-    // @dev Address of the oracle for the yield token.
-    //      We will deploy an oracle instance, which will provide the best available price information
-    //      for the given token. This may be a 3rd party oracle, onchain price information, or both.
+    /// @dev Address of the oracle for the yield token.
+    ///      We will deploy an oracle instance, which will provide the best available price information
+    ///      for the given token. This may be a 3rd party oracle, onchain price information, or both.
     address public immutable yieldOracle;
 
     MarketParams public market;
@@ -560,7 +560,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     }
 
     /// @notice Drive the vault's leveraged Morpho position back inside the
-    ///         `[healthFactorMin, healthFactorMax]` band and realize any surplus yield.
+    ///         `[healthFactorMin, healthFactorMax]` band and realize surplus yield above the
+    ///         yield-factor band.
     /// @dev    Two legs: `_harvest` (realize surplus) then `_adjustLeverage` (restore the
     ///         band).
     function rebalance() external logsVaultState {
