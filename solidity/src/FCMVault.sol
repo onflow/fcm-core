@@ -81,8 +81,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///         repays the debt). It is NOT a yield rate. `yieldFactorMax` is the upper edge of
     ///         its band: `rebalance`'s harvest leg fires only when the yield factor exceeds it,
     ///         so it does not act on sub-threshold surplus. Must be `>= WAD`. Immutable, like the
-    ///         health-factor band bounds. The lower edge (`yieldFactorMin` + a delever) is a
-    ///         stacked follow-up.
+    ///         health-factor band bounds.
     uint256 public immutable yieldFactorMax;
     /// @dev Address of the oracle for the yield token.
     ///      We will deploy an oracle instance, which will provide the best available price information
