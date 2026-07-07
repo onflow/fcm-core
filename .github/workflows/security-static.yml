@@ -21,13 +21,13 @@ name: Security (static analysis)
 #   still runs locally as an advisory tool via `make security-aderyn`.
 #
 # SEVERITY GATE:
-#   Slither runs with `--fail-high`, so ONLY High/Critical-impact findings fail
-#   the build. Medium/Low/Informational findings are still printed in the log
-#   for review but do not block merges. Solhint fails on `error`-severity rules
-#   only (warnings are advisory). To tighten the Slither gate, change
-#   `--fail-high` to `--fail-medium` below — but note that today that requires
-#   inline-annotating the ~15 pre-existing (benign) Medium findings first, since
-#   we suppress via inline comments, not a baseline database.
+#   Slither runs with `--fail-medium`, so Medium-or-higher-impact findings fail
+#   the build. Low/Informational findings are still printed in the log for
+#   review but do not block merges. Solhint fails on `error`-severity rules only
+#   (warnings are advisory). The pre-existing benign Medium findings
+#   (deliberately-discarded repay/swap return values, safe `== 0` guards) are
+#   suppressed inline at their source with a justifying comment — search the
+#   contracts for `slither-disable-next-line`.
 #
 # HOW TO IGNORE A FALSE ALARM (inline suppression — no baseline files):
 #   Slither: put a comment on the line ABOVE the flagged statement naming the
@@ -82,11 +82,11 @@ jobs:
       - name: Install Solhint (pinned)
         run: npm install -g "solhint@6.2.1"
 
-      # Fails the build ONLY on High/Critical-impact findings. Lower-severity
+      # Fails the build on Medium-or-higher-impact findings. Low/Informational
       # findings print for review but do not block. See header for how to
       # suppress a false positive inline.
       - name: Slither
-        run: slither . --config-file slither.config.json --fail-high
+        run: slither . --config-file slither.config.json --fail-medium
 
       # Fails only on `error`-severity rules (see .solhint.json); warnings are
       # advisory and do not block.
