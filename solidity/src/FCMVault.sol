@@ -44,8 +44,15 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     uint8 internal constant DECIMALS_OFFSET = 6;
 
-    /// @dev Basis-points denominator for `maxSlippageBps`.
+    /// @dev Basis-points denominator (10_000 = 100%).
     uint256 internal constant BPS = 10_000;
+
+    /// @dev Seconds in a year, for the time-based management fee accrual.
+    uint256 internal constant SECONDS_PER_YEAR = 365 days;
+    /// @dev Hard cap on the management fee (10%/yr) — admin cannot exceed.
+    uint256 internal constant MAX_MANAGEMENT_FEE_BPS = 1_000;
+    /// @dev Hard cap on the performance fee (50%) — admin cannot exceed.
+    uint256 internal constant MAX_PERFORMANCE_FEE_BPS = 5_000;
 
     /// @dev Q64.96 fixed-point one squared (`2**192`), used to build the
     ///      `sqrtPriceX96` price limit for rebalance swaps.
@@ -160,6 +167,46 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @dev Deposits are frozen while a recovery is pending or after it executes.
     error EmergencyRecoveryActive();
     error EmergencyRecoveryNotReady();
+
+    // ── Management & performance fees ──────────────────────────────────────
+    /// @notice Flat yearly management fee on NAV, in basis points. 0 = off.
+    /// @dev    Linear accrual of the annual rate; bounded by the 10% cap.
+    uint256 public managementFeeBps;
+    /// @notice Performance fee on per-share gains above the high-water mark, in
+    ///         basis points. 0 = off.
+    /// @dev    Crystallizes on UNREALIZED, oracle-marked NAV and is triggerable by
+    ///         anyone via `accrueFees`; bounded by the all-time HWM and the 50% cap.
+    uint256 public performanceFeeBps;
+    /// @notice Recipient of minted fee shares. Must hold `EARLY_ACCESS_ROLE` to
+    ///         receive them; if unset or not allowlisted, fee accrual is skipped
+    ///         (never reverts) so core flows can't be bricked.
+    address public feeRecipient;
+    /// @notice Timestamp of the last fee accrual, for the time-based management fee.
+    uint256 public lastFeeAccrual;
+    /// @notice High-water mark for the performance fee, as asset-per-share scaled
+    ///         by WAD (`NAV * WAD / claims`). Flow-neutral, strict all-time peak.
+    ///         Vault-wide (one mark for all holders): a depositor entering below it
+    ///         rides the recovery back up fee-free — accepted by design in lieu of
+    ///         per-user-HWM accounting.
+    uint256 public perfHighWaterMark;
+
+    /// @notice Emitted when the admin updates the management fee (old + new).
+    event ManagementFeeSet(uint256 oldBps, uint256 newBps);
+    /// @notice Emitted when the admin updates the performance fee (old + new).
+    event PerformanceFeeSet(uint256 oldBps, uint256 newBps);
+    /// @notice Emitted when the admin updates the fee recipient (old + new).
+    event FeeRecipientSet(address indexed oldRecipient, address indexed newRecipient);
+    /// @notice Emitted when fees are accrued and shares minted to the recipient.
+    /// @param  recipient      Account that received the minted fee shares.
+    /// @param  managementFee  Management fee accrued this call, in asset terms.
+    /// @param  performanceFee Performance fee accrued this call, in asset terms.
+    /// @param  feeShares      Shares minted to `recipient` (dilution).
+    event FeesAccrued(
+        address indexed recipient, uint256 managementFee, uint256 performanceFee, uint256 feeShares
+    );
+
+    /// @dev Thrown when a fee rate above its hard cap is set.
+    error InvalidFee();
 
     struct InitParams {
         IERC20 collateral;
@@ -277,6 +324,10 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         recoveryDelay = p.recoveryDelay;
         maxSlippageBps = 100; // 1% default; admin retunes per pool depth.
 
+        lastFeeAccrual = block.timestamp;
+        // Seed the HWM at the starting price-per-share so the first deposit isn't counted as performance.
+        perfHighWaterMark = MarketLib.WAD / (10 ** DECIMALS_OFFSET);
+
         _grantRole(DEFAULT_ADMIN_ROLE, p.admin);
     }
 
@@ -352,6 +403,102 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         return (uint160(raw), true);
     }
 
+    /// @notice Set the management fee rate (basis points), capped at `MAX_MANAGEMENT_FEE_BPS`.
+    /// @dev    Accrues at the OLD rate first so the change isn't retroactive.
+    function setManagementFeeBps(uint256 newBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newBps > MAX_MANAGEMENT_FEE_BPS) revert InvalidFee();
+        _accrueFees();
+        emit ManagementFeeSet(managementFeeBps, newBps);
+        managementFeeBps = newBps;
+    }
+
+    /// @notice Set the performance fee rate (basis points), capped at `MAX_PERFORMANCE_FEE_BPS`.
+    /// @dev    Accrues at the OLD rate first so the change isn't retroactive.
+    function setPerformanceFeeBps(uint256 newBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newBps > MAX_PERFORMANCE_FEE_BPS) revert InvalidFee();
+        _accrueFees();
+        emit PerformanceFeeSet(performanceFeeBps, newBps);
+        performanceFeeBps = newBps;
+    }
+
+    /// @notice Set the fee recipient. Accrues to the old recipient first.
+    /// @dev    The recipient must hold `EARLY_ACCESS_ROLE` to receive minted fee
+    ///         shares; if it doesn't, accrual silently skips (see `_accrueFees`).
+    function setFeeRecipient(address newRecipient) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _accrueFees();
+        emit FeeRecipientSet(feeRecipient, newRecipient);
+        feeRecipient = newRecipient;
+    }
+
+    /// @notice Permissionlessly accrue fees up to the current block (mints fee
+    ///         shares to the recipient). Lets a keeper tick the management fee
+    ///         during idle stretches so it tracks NAV-over-time more closely.
+    function accrueFees() external {
+        _accrueFees();
+    }
+
+    /// @dev Accrue management + performance fees and mint the corresponding
+    ///      shares to `feeRecipient` (dilution — no assets leave the vault).
+    ///      Always accrues market interest first so NAV is fresh. No-ops once
+    ///      `recovered`. Skips minting (never reverts) when the recipient is
+    ///      unset or not allowlisted, so core flows can't be bricked.
+    function _accrueFees() internal {
+        if (recovered) return;
+
+        market.accrueInterest();
+        uint256 nav = totalAssets();
+        uint256 claims = _totalClaims();
+        uint256 pps = nav.mulDiv(MarketLib.WAD, claims);
+
+        address recipient = feeRecipient;
+        if (recipient != address(0) && hasRole(EARLY_ACCESS_ROLE, recipient) && nav > 0) {
+            // Bill exactly `rate * Δt` since the last accrual, then advance the clock
+            // (accrual is irregular: every interaction + permissionless accrueFees).
+            // The billable gap is capped at one year, so the fee is
+            // provably <= the annual rate `r` (= bps/1e4) however long the vault
+            // sits unaccrued - idle time past a year is forgiven, bounding a single
+            // catch-up dilution after long dormancy. Within a year the realized drag
+            // lies in `[1 - e^(-r), r]`: `r` at one accrual/year, `1 - e^(-r)` in the
+            // continuous limit (negligible span <= ~r^2/2: ~0.02% at bps=200,
+            // ~0.48% at the 1000 cap).
+            uint256 elapsed = block.timestamp - lastFeeAccrual;
+            if (elapsed > SECONDS_PER_YEAR) elapsed = SECONDS_PER_YEAR;
+
+            uint256 managementFee;
+            if (managementFeeBps > 0 && elapsed > 0) {
+                managementFee = nav.mulDiv(managementFeeBps * elapsed, BPS * SECONDS_PER_YEAR);
+            }
+
+            uint256 performanceFee;
+            if (performanceFeeBps > 0 && pps > perfHighWaterMark) {
+                // Fee on the gain in pps above the all-time HWM. pps is UNREALIZED and
+                // oracle-marked, so a transient mark move can crystallize a fee on paper
+                // profit that later reverses - kept, not refunded. The mint goes to the
+                // recipient, not the triggerer, so a permissionless accrueFees call can't
+                // pay its caller; the strict HWM charges net all-time highs only.
+                uint256 gain = (pps - perfHighWaterMark).mulDiv(claims, MarketLib.WAD);
+                performanceFee = gain.mulDiv(performanceFeeBps, BPS);
+            }
+
+            uint256 feeAssets = managementFee + performanceFee;
+            if (feeAssets > 0 && feeAssets < nav) {
+                // Mint shares worth `feeAssets` at the post-mint price (dilution).
+                uint256 feeShares = feeAssets.mulDiv(claims, nav + 1 - feeAssets);
+                if (feeShares > 0) {
+                    _mint(recipient, feeShares);
+                    emit FeesAccrued(recipient, managementFee, performanceFee, feeShares);
+                }
+            }
+        }
+
+        // Advance clock + HWM unconditionally (even when the mint was skipped) so
+        // fees meter from when they're enabled, not retroactively — the fee setters
+        // accrue first, pinning these to now. Gating them on the mint would
+        // back-charge holders from deploy.
+        lastFeeAccrual = block.timestamp;
+        if (pps > perfHighWaterMark) perfHighWaterMark = pps;
+    }
+
     // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
     // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     function _decimalsOffset() internal pure override returns (uint8) {
@@ -418,7 +565,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // Freeze deposits while a recovery is pending (recoveryValidAt != 0) or done
         // (recovered) — don't let new funds in ahead of a sweep. Redeems stay open.
         if (recoveryValidAt != 0 || recovered) revert EmergencyRecoveryActive();
-        market.accrueInterest();
+        // Accrue fees first so the deposit prices in at the post-fee share price.
+        _accrueFees();
 
         uint256 navBefore = totalAssets();
         if (navBefore + assets > maxTvl) {
@@ -489,7 +637,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // 2. Decremement the redeemer's allowance by the amount redeemed.
         if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
 
-        market.accrueInterest();
+        // Accrue fees first so the redeemer bears their share of accrued fees.
+        _accrueFees();
         IERC20 assetToken = IERC20(asset());
         uint256 assetBefore = assetToken.balanceOf(address(this));
 
@@ -596,7 +745,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         if (shares == 0) return (0, 0);
         if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
 
-        market.accrueInterest();
+        // Accrue fees first so the redeemer bears their share of accrued fees.
+        _accrueFees();
         uint256 claims = _totalClaims();
 
         // Caller repays the pro-rata debt slice (rounded up — never under-repays);
@@ -660,7 +810,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // error so the off-chain rebalancer surfaces it and stops, rather than
         // silently no-op'ing and running indefinitely.
         if (recovered) revert EmergencyRecoveryActive();
-        market.accrueInterest();
+        _accrueFees();
         uint256 currentDebt = market.debt();
         uint256 maxBorrow = market.maxBorrow(); // independent of current debt balance
         // we compute inline here rather than use MarketLib.healthFactor to save a SLOAD
