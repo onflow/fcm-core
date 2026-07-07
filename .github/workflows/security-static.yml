@@ -6,41 +6,28 @@ name: Security (static analysis)
 #   Both are fully DETERMINISTIC and reproducible from the (public) source — an
 #   attacker can already run them against this repo themselves, so surfacing
 #   their output in public CI leaks nothing new, while the merge gate keeps
-#   flagged code from shipping. (The AI audit tier is deliberately NOT run in
-#   CI: it synthesizes exploit paths that are not trivially reproducible and is
-#   kept local-only — see the Makefile "Security scanning" section.)
+#   flagged code from shipping.
 #     - Slither  — deep dataflow/detector analysis with per-finding IMPACT
 #                  levels (High/Medium/Low/Informational), so the gate can fail
 #                  on important findings only, plus first-class inline
 #                  suppression (`// slither-disable-next-line`).
 #     - Solhint  — style/best-practice lint with error/warning severities and
 #                  inline suppression (`// solhint-disable-next-line`).
-#   Aderyn is intentionally EXCLUDED from CI: its severity model is only
-#   High/Low (no Medium — too coarse to gate on), its sole "High" on this
-#   codebase was a false positive, and its suppression story is weaker. It
-#   still runs locally as an advisory tool via `make security-aderyn`.
 #
 # SEVERITY GATE:
 #   Slither runs with `--fail-medium`, so Medium-or-higher-impact findings fail
 #   the build. Low/Informational findings are still printed in the log for
 #   review but do not block merges. Solhint fails on `error`-severity rules only
-#   (warnings are advisory). The pre-existing benign Medium findings
-#   (deliberately-discarded repay/swap return values, safe `== 0` guards) are
-#   suppressed inline at their source with a justifying comment — search the
-#   contracts for `slither-disable-next-line`.
+#   (warnings are advisory).
 #
-# HOW TO IGNORE A FALSE ALARM (inline suppression — no baseline files):
-#   Slither: put a comment on the line ABOVE the flagged statement naming the
-#            detector, with a short justification, e.g.
-#              // return value intentionally ignored — Morpho repay cannot fail here
-#              // slither-disable-next-line unused-return
-#              market.repay(debtSlice);
-#            Region form: `// slither-disable-start <detector>` /
-#            `// slither-disable-end <detector>`. Detector id = the name printed
-#            in the report (e.g. `unused-return`, `incorrect-equality`).
-#   Solhint: `// solhint-disable-next-line <rule-id>` above the line, or
-#            `/* solhint-disable <rule-id> */` ... `/* solhint-enable <rule-id> */`.
-#   Reproduce this gate locally before pushing with: `make security-ci`
+# IGNORING A FALSE ALARM:
+#   Slither:
+#      // slither-disable-next-line <detector> -> <why this is safe to ignore>
+#   Solhint:
+#      // solhint-disable-next-line <rule-id> -> <why this is safe to ignore>
+#
+# The detector/rule id is the name printed in the report output.
+# Reproduce this gate locally before pushing with: `make security-ci`
 
 permissions: {}
 
