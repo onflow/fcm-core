@@ -16,6 +16,7 @@ import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 
 import {MarketLib} from "./libraries/MarketLib.sol";
 import {SwapLib} from "./libraries/SwapLib.sol";
+import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
 
 // Morpho Blue singleton address for Flow EVM
 IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
@@ -43,8 +44,25 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     // @dev See https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     uint8 internal constant DECIMALS_OFFSET = 6;
 
-    /// @dev Basis-points denominator for `maxSlippageBps`.
+    /// @dev Basis-points denominator (10_000 = 100%).
     uint256 internal constant BPS = 10_000;
+
+    /// @dev Seconds in a year, for the time-based management fee accrual.
+    uint256 internal constant SECONDS_PER_YEAR = 365 days;
+    /// @dev Hard cap on the management fee (10%/yr) — admin cannot exceed.
+    uint256 internal constant MAX_MANAGEMENT_FEE_BPS = 1_000;
+    /// @dev Hard cap on the performance fee (50%) — admin cannot exceed.
+    uint256 internal constant MAX_PERFORMANCE_FEE_BPS = 5_000;
+
+    /// @dev Q64.96 fixed-point one squared (`2**192`), used to build the
+    ///      `sqrtPriceX96` price limit for rebalance swaps.
+    uint256 internal constant ONE_X192 = 1 << 192;
+
+    /// @dev Uniswap V3 tick-math bounds on a valid `sqrtPriceLimitX96`. A limit
+    ///      outside `(MIN_SQRT_RATIO, MAX_SQRT_RATIO)` is rejected by the pool;
+    ///      the vault treats such a limit as "no feasible swap" and skips.
+    uint160 internal constant MIN_SQRT_RATIO = 4295128739;
+    uint160 internal constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
 
     // @dev Address of the loan token (inner vault asset)
     IERC20 public immutable loanToken;
@@ -52,6 +70,11 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     IERC20 public immutable yieldToken;
     // @dev Pool fee for swapping yield<->debt
     uint24 public immutable feeYieldDebt;
+    /// @notice The FlowSwap V3 yield/debt pool the rebalance swaps route
+    ///         through. Read for its live `slot0` marginal price so a rebalance
+    ///         can derive a `sqrtPriceLimitX96` from the oracle and skip when the
+    ///         pool is already priced past the slippage bound.
+    address public immutable yieldDebtPool;
     /// @notice Pool fee tier for the asset/debt pool, used to reconcile
     ///         redeem surplus from loan token back to the underlying asset.
     uint24 public immutable feeAssetDebt;
@@ -100,12 +123,15 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
     event MaxTvlSet(uint256 previousMaxTvl, uint256 newMaxTvl);
 
-    /// @notice Max slippage (basis points) tolerated on the rebalance swaps
-    ///         (lever and delever). The swap's `amountOutMinimum` is the
-    ///         oracle-expected output discounted by this; a worse fill reverts
-    ///         the rebalance. Applies only to vault-initiated rebalances —
-    ///         deposit/redeem slippage is the caller's responsibility, set via
-    ///         the ERC4626 router. Defaults to 1%, admin-adjustable.
+    /// @notice Max price impact (basis points) tolerated on the rebalance swaps
+    ///         (lever and delever). It sets each swap's `sqrtPriceLimitX96` to
+    ///         the oracle price discounted by this amount, so the pool fills
+    ///         only while its marginal price stays within tolerance and
+    ///         partial-fills (or skips) past it — rather than reverting. Bounds
+    ///         price impact, not the pool's fixed LP fee. Applies only to
+    ///         vault-initiated rebalances — deposit/redeem slippage is the
+    ///         caller's responsibility, set via the ERC4626 router. Defaults to
+    ///         1%, admin-adjustable.
     uint256 public maxSlippageBps;
 
     /// @notice Emitted when the admin updates `maxSlippageBps`.
@@ -142,6 +168,46 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     error EmergencyRecoveryActive();
     error EmergencyRecoveryNotReady();
 
+    // ── Management & performance fees ──────────────────────────────────────
+    /// @notice Flat yearly management fee on NAV, in basis points. 0 = off.
+    /// @dev    Linear accrual of the annual rate; bounded by the 10% cap.
+    uint256 public managementFeeBps;
+    /// @notice Performance fee on per-share gains above the high-water mark, in
+    ///         basis points. 0 = off.
+    /// @dev    Crystallizes on UNREALIZED, oracle-marked NAV and is triggerable by
+    ///         anyone via `accrueFees`; bounded by the all-time HWM and the 50% cap.
+    uint256 public performanceFeeBps;
+    /// @notice Recipient of minted fee shares. Must hold `EARLY_ACCESS_ROLE` to
+    ///         receive them; if unset or not allowlisted, fee accrual is skipped
+    ///         (never reverts) so core flows can't be bricked.
+    address public feeRecipient;
+    /// @notice Timestamp of the last fee accrual, for the time-based management fee.
+    uint256 public lastFeeAccrual;
+    /// @notice High-water mark for the performance fee, as asset-per-share scaled
+    ///         by WAD (`NAV * WAD / claims`). Flow-neutral, strict all-time peak.
+    ///         Vault-wide (one mark for all holders): a depositor entering below it
+    ///         rides the recovery back up fee-free — accepted by design in lieu of
+    ///         per-user-HWM accounting.
+    uint256 public perfHighWaterMark;
+
+    /// @notice Emitted when the admin updates the management fee (old + new).
+    event ManagementFeeSet(uint256 oldBps, uint256 newBps);
+    /// @notice Emitted when the admin updates the performance fee (old + new).
+    event PerformanceFeeSet(uint256 oldBps, uint256 newBps);
+    /// @notice Emitted when the admin updates the fee recipient (old + new).
+    event FeeRecipientSet(address indexed oldRecipient, address indexed newRecipient);
+    /// @notice Emitted when fees are accrued and shares minted to the recipient.
+    /// @param  recipient      Account that received the minted fee shares.
+    /// @param  managementFee  Management fee accrued this call, in asset terms.
+    /// @param  performanceFee Performance fee accrued this call, in asset terms.
+    /// @param  feeShares      Shares minted to `recipient` (dilution).
+    event FeesAccrued(
+        address indexed recipient, uint256 managementFee, uint256 performanceFee, uint256 feeShares
+    );
+
+    /// @dev Thrown when a fee rate above its hard cap is set.
+    error InvalidFee();
+
     struct InitParams {
         IERC20 collateral;
         IERC20 loanToken;
@@ -151,6 +217,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         uint256 marketLltv;
         uint24 feeYieldDebt;
         uint24 feeAssetDebt;
+        address yieldDebtPool;
         uint256 healthFactorMin;
         uint256 healthFactorMax;
         uint256 healthFactorMinTarget;
@@ -227,11 +294,13 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         require(p.healthFactorMin <= p.healthFactorMinTarget, "HF min > minTarget");
         require(p.healthFactorMinTarget <= p.healthFactorMaxTarget, "HF minTarget > maxTarget");
         require(p.healthFactorMaxTarget <= p.healthFactorMax, "HF maxTarget > max");
+        require(p.yieldDebtPool != address(0), "yieldDebtPool zero");
 
         loanToken = p.loanToken;
         yieldToken = p.yieldToken;
         feeYieldDebt = p.feeYieldDebt;
         feeAssetDebt = p.feeAssetDebt;
+        yieldDebtPool = p.yieldDebtPool;
         healthFactorMin = p.healthFactorMin;
         healthFactorMax = p.healthFactorMax;
         healthFactorMinTarget = p.healthFactorMinTarget;
@@ -255,6 +324,10 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         recoveryDelay = p.recoveryDelay;
         maxSlippageBps = 100; // 1% default; admin retunes per pool depth.
 
+        lastFeeAccrual = block.timestamp;
+        // Seed the HWM at the starting price-per-share so the first deposit isn't counted as performance.
+        perfHighWaterMark = MarketLib.WAD / (10 ** DECIMALS_OFFSET);
+
         _grantRole(DEFAULT_ADMIN_ROLE, p.admin);
     }
 
@@ -267,10 +340,169 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         maxSlippageBps = newBps;
     }
 
-    /// @dev Discount an oracle-expected swap output by `maxSlippageBps` to get
-    ///      the `amountOutMinimum` floor for a rebalance swap.
-    function _slippageFloor(uint256 expectedOut) internal view returns (uint256) {
-        return expectedOut.mulDiv(BPS - maxSlippageBps, BPS);
+    /// @dev Resolve the `sqrtPriceLimitX96` for a rebalance swap selling
+    ///      `tokenIn` on the yield/debt pool, and decide whether a swap is
+    ///      feasible at all.
+    ///
+    ///      The limit is the oracle price discounted by `maxSlippageBps`,
+    ///      expressed in the pool's `sqrt(token1/token0) * 2**96` coordinate.
+    ///      The pool fills a swap only while its marginal price is on the good
+    ///      side of this limit, so the realized average price is bounded by
+    ///      `maxSlippageBps` of *price impact* relative to the oracle.
+    ///
+    ///      Token decimals are already baked into the yield oracle price (the
+    ///      Morpho/IOracle convention: `yield * price / 1e36 = loan` in raw
+    ///      units), so the raw `token1/token0` ratio is read straight off it
+    ///      with no decimal adjustment here.
+    ///
+    ///      `ok` is false when the limit is out of tick-math range, or when the
+    ///      pool's live marginal price is already on the bad side of the limit
+    ///      (so any swap would either be a no-op or revert `SPL`) — in that case
+    ///      the caller should skip the swap.
+    /// @param  tokenIn The token the swap sells.
+    /// @return limit   The Q64.96 price limit to pass to the pool.
+    /// @return ok      Whether a swap should be attempted.
+    function _yieldDebtSwapLimit(address tokenIn) internal view returns (uint160 limit, bool ok) {
+        // Uniswap orders the pair by address: token0 is the lower address and
+        // the pool price is token1/token0. Selling token0 (`zeroForOne`) pushes
+        // the price down; selling token1 pushes it up.
+        bool yieldIsToken0 = address(yieldToken) < address(loanToken);
+        address token0 = yieldIsToken0 ? address(yieldToken) : address(loanToken);
+        bool zeroForOne = (tokenIn == token0);
+
+        // Oracle price as an exact token1/token0 fraction. yieldOracle.price()
+        // is loan-per-yield scaled by 1e36. yield=token0 -> P = loan/yield =
+        // price/1e36; loan=token0 -> P = yield/loan = 1e36/price.
+        uint256 yieldPrice = IOracle(yieldOracle).price();
+        (uint256 numerator, uint256 denominator) = yieldIsToken0
+            ? (yieldPrice, MarketLib.ORACLE_PRICE_SCALE)
+            : (MarketLib.ORACLE_PRICE_SCALE, yieldPrice);
+
+        // Discount the price toward the side the swap moves it: a
+        // price-decreasing swap allows down to price*(1-slip); a price-increasing
+        // swap allows up to price/(1-slip).
+        if (zeroForOne) {
+            numerator *= (BPS - maxSlippageBps);
+            denominator *= BPS;
+        } else {
+            numerator *= BPS;
+            denominator *= (BPS - maxSlippageBps);
+        }
+
+        // sqrtPriceX96 = sqrt(P) * 2**96 = sqrt(P * 2**192).
+        uint256 raw = Math.sqrt(Math.mulDiv(numerator, ONE_X192, denominator));
+        if (raw <= MIN_SQRT_RATIO || raw >= MAX_SQRT_RATIO) return (0, false);
+
+        // The limit must sit on the side the price moves toward: below spot for
+        // a price-decreasing swap, above spot for a price-increasing one. If the
+        // pool is already past it, there is no room to trade within tolerance.
+        // slither-disable-next-line unused-return -> only sqrtPriceX96 is read; the other slot0 fields are unused
+        (uint160 spot,,,,,,) = IUniswapV3Pool(yieldDebtPool).slot0();
+        if (zeroForOne && raw >= spot) return (0, false);
+        if (!zeroForOne && raw <= spot) return (0, false);
+
+        return (uint160(raw), true);
+    }
+
+    /// @notice Set the management fee rate (basis points), capped at `MAX_MANAGEMENT_FEE_BPS`.
+    /// @dev    Accrues at the OLD rate first so the change isn't retroactive.
+    // slither-disable-next-line reentrancy-no-eth -> admin-only setter; _accrueFees only calls the trusted Morpho singleton, which cannot reenter
+    function setManagementFeeBps(uint256 newBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newBps > MAX_MANAGEMENT_FEE_BPS) revert InvalidFee();
+        _accrueFees();
+        emit ManagementFeeSet(managementFeeBps, newBps);
+        managementFeeBps = newBps;
+    }
+
+    /// @notice Set the performance fee rate (basis points), capped at `MAX_PERFORMANCE_FEE_BPS`.
+    /// @dev    Accrues at the OLD rate first so the change isn't retroactive.
+    // slither-disable-next-line reentrancy-no-eth -> admin-only setter; _accrueFees only calls the trusted Morpho singleton, which cannot reenter
+    function setPerformanceFeeBps(uint256 newBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newBps > MAX_PERFORMANCE_FEE_BPS) revert InvalidFee();
+        _accrueFees();
+        emit PerformanceFeeSet(performanceFeeBps, newBps);
+        performanceFeeBps = newBps;
+    }
+
+    /// @notice Set the fee recipient. Accrues to the old recipient first.
+    /// @dev    The recipient must hold `EARLY_ACCESS_ROLE` to receive minted fee
+    ///         shares; if it doesn't, accrual silently skips (see `_accrueFees`).
+    // slither-disable-next-line reentrancy-no-eth -> admin-only setter; _accrueFees only calls the trusted Morpho singleton, which cannot reenter
+    function setFeeRecipient(address newRecipient) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _accrueFees();
+        emit FeeRecipientSet(feeRecipient, newRecipient);
+        feeRecipient = newRecipient;
+    }
+
+    /// @notice Permissionlessly accrue fees up to the current block (mints fee
+    ///         shares to the recipient). Lets a keeper tick the management fee
+    ///         during idle stretches so it tracks NAV-over-time more closely.
+    function accrueFees() external {
+        _accrueFees();
+    }
+
+    /// @dev Accrue management + performance fees and mint the corresponding
+    ///      shares to `feeRecipient` (dilution — no assets leave the vault).
+    ///      Always accrues market interest first so NAV is fresh. No-ops once
+    ///      `recovered`. Skips minting (never reverts) when the recipient is
+    ///      unset or not allowlisted, so core flows can't be bricked.
+    function _accrueFees() internal {
+        if (recovered) return;
+
+        market.accrueInterest();
+        uint256 nav = totalAssets();
+        uint256 claims = _totalClaims();
+        uint256 pps = nav.mulDiv(MarketLib.WAD, claims);
+
+        address recipient = feeRecipient;
+        if (recipient != address(0) && hasRole(EARLY_ACCESS_ROLE, recipient) && nav > 0) {
+            // Bill exactly `rate * Δt` since the last accrual, then advance the clock
+            // (accrual is irregular: every interaction + permissionless accrueFees).
+            // The billable gap is capped at one year, so the fee is
+            // provably <= the annual rate `r` (= bps/1e4) however long the vault
+            // sits unaccrued - idle time past a year is forgiven, bounding a single
+            // catch-up dilution after long dormancy. Within a year the realized drag
+            // lies in `[1 - e^(-r), r]`: `r` at one accrual/year, `1 - e^(-r)` in the
+            // continuous limit (negligible span <= ~r^2/2: ~0.02% at bps=200,
+            // ~0.48% at the 1000 cap).
+            uint256 elapsed = block.timestamp - lastFeeAccrual;
+            if (elapsed > SECONDS_PER_YEAR) elapsed = SECONDS_PER_YEAR;
+
+            // slither-disable-next-line uninitialized-local -> defaults to 0 (no management fee) unless assigned below
+            uint256 managementFee;
+            if (managementFeeBps > 0 && elapsed > 0) {
+                managementFee = nav.mulDiv(managementFeeBps * elapsed, BPS * SECONDS_PER_YEAR);
+            }
+
+            // slither-disable-next-line uninitialized-local -> defaults to 0 (no performance fee) unless assigned below
+            uint256 performanceFee;
+            if (performanceFeeBps > 0 && pps > perfHighWaterMark) {
+                // Fee on the gain in pps above the all-time HWM. pps is UNREALIZED and
+                // oracle-marked, so a transient mark move can crystallize a fee on paper
+                // profit that later reverses - kept, not refunded. The mint goes to the
+                // recipient, not the triggerer, so a permissionless accrueFees call can't
+                // pay its caller; the strict HWM charges net all-time highs only.
+                uint256 gain = (pps - perfHighWaterMark).mulDiv(claims, MarketLib.WAD);
+                performanceFee = gain.mulDiv(performanceFeeBps, BPS);
+            }
+
+            uint256 feeAssets = managementFee + performanceFee;
+            if (feeAssets > 0 && feeAssets < nav) {
+                // Mint shares worth `feeAssets` at the post-mint price (dilution).
+                uint256 feeShares = feeAssets.mulDiv(claims, nav + 1 - feeAssets);
+                if (feeShares > 0) {
+                    _mint(recipient, feeShares);
+                    emit FeesAccrued(recipient, managementFee, performanceFee, feeShares);
+                }
+            }
+        }
+
+        // Advance clock + HWM unconditionally (even when the mint was skipped) so
+        // fees meter from when they're enabled, not retroactively — the fee setters
+        // accrue first, pinning these to now. Gating them on the mint would
+        // back-charge holders from deploy.
+        lastFeeAccrual = block.timestamp;
+        if (pps > perfHighWaterMark) perfHighWaterMark = pps;
     }
 
     // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more expensive.
@@ -339,7 +571,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // Freeze deposits while a recovery is pending (recoveryValidAt != 0) or done
         // (recovered) — don't let new funds in ahead of a sweep. Redeems stay open.
         if (recoveryValidAt != 0 || recovered) revert EmergencyRecoveryActive();
-        market.accrueInterest();
+        // Accrue fees first so the deposit prices in at the post-fee share price.
+        _accrueFees();
 
         uint256 navBefore = totalAssets();
         if (navBefore + assets > maxTvl) {
@@ -411,7 +644,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // 2. Decremement the redeemer's allowance by the amount redeemed.
         if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
 
-        market.accrueInterest();
+        // Accrue fees first so the redeemer bears their share of accrued fees.
+        _accrueFees();
         IERC20 assetToken = IERC20(asset());
         uint256 assetBefore = assetToken.balanceOf(address(this));
 
@@ -522,7 +756,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         if (shares == 0) return (0, 0);
         if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
 
-        market.accrueInterest();
+        // Accrue fees first so the redeemer bears their share of accrued fees.
+        _accrueFees();
         uint256 claims = _totalClaims();
 
         // Caller repays the pro-rata debt slice (rounded up — never under-repays);
@@ -572,12 +807,22 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///         So, the smallest swap that restores health within the band incurs
     ///         the lowest average-case cost. By convention, there is a small
     ///         buffer between the band's bound and the target.
+    ///
+    ///         Partial rebalancing: the rebalance swap carries a
+    ///         `sqrtPriceLimitX96` derived from the oracle price and
+    ///         `maxSlippageBps` (see `_yieldDebtSwapLimit`). If reaching the
+    ///         re-entry target would push the pool past that price, the pool
+    ///         fills as much as possible without reverting.
+    ///
+    ///         Note the bound is on the pool's *marginal price* relative to the
+    ///         oracle, i.e. on price impact. The pool's fixed LP fee is a
+    ///         separate, known cost and is not part of this bound.
     function rebalance() external logsVaultState {
         // After a recovery the position is terminal; revert with an explicit
         // error so the off-chain rebalancer surfaces it and stops, rather than
         // silently no-op'ing and running indefinitely.
         if (recovered) revert EmergencyRecoveryActive();
-        market.accrueInterest();
+        _accrueFees();
         uint256 currentDebt = market.debt();
         uint256 maxBorrow = market.maxBorrow(); // independent of current debt balance
         // we compute inline here rather than use MarketLib.healthFactor to save a SLOAD
@@ -605,34 +850,50 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///      exactly `healthFactorMaxTarget` (just below the upper bound).
     ///      Since `hf > max >= maxTarget`, `currentDebt < targetDebt`. The
     ///      borrow leg adds `targetDebt - currentDebt`.
+    ///
+    ///      Partial: the full `borrowAmount` is borrowed up front, then the
+    ///      loan->yield swap runs under a `sqrtPriceLimitX96` derived from the
+    ///      oracle and `maxSlippageBps`. If the swap would push the pool past
+    ///      that price, the pool fills only up to it (a partial fill) and the
+    ///      unspent loan token is immediately repaid, so the position lands
+    ///      partway to `healthFactorMaxTarget` with no idle loan token left
+    ///      behind. Borrowing first and repaying the remainder (rather than
+    ///      sizing the borrow to the fill) avoids needing the swap output before
+    ///      the tokens to swap exist. When the pool is already priced past the
+    ///      bound, the swap is skipped and the borrow is fully repaid (no-op).
     /// @param maxBorrow   Current maximum-borrowable amount at LLTV (independent of current debt)
     /// @param currentDebt Current outstanding debt (caller passes the same
     ///                    value used to compute `hfBefore` to avoid a
     ///                    second `MORPHO.position` SLOAD).
-    /// @return additionalDebt Amount of loan token borrowed in this call.
+    /// @return additionalDebt Net new debt taken on in this call (the loan token
+    ///                    actually swapped into yield; 0 if nothing filled).
     function _rebalanceLever(uint256 maxBorrow, uint256 currentDebt)
         internal
         returns (uint256 additionalDebt)
     {
         uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorMaxTarget);
         if (targetDebt <= currentDebt) return 0;
-        additionalDebt = targetDebt - currentDebt;
+        uint256 borrowAmount = targetDebt - currentDebt;
 
-        market.borrow(additionalDebt);
-        // Floor the loan->yield swap at the oracle-expected yield out, less
-        // maxSlippageBps. Deposit's identical leg is intentionally unfloored
-        // (user-facing slippage is the router's job); this leg is
-        // vault-initiated, so the floor is the price-impact / sandwich guard.
-        uint256 expectedYield =
-            additionalDebt.mulDiv(MarketLib.ORACLE_PRICE_SCALE, IOracle(yieldOracle).price());
-        // slither-disable-next-line unused-return -> swap output isn't needed here; the min-out floor already bounds execution
-        SwapLib.swapExactInMin(
-            address(loanToken),
-            address(yieldToken),
-            feeYieldDebt,
-            additionalDebt,
-            _slippageFloor(expectedYield)
+        (uint160 limit, bool ok) = _yieldDebtSwapLimit(address(loanToken));
+        if (!ok) return 0; // pool already past the slippage bound — no-op.
+
+        // Borrow first, then swap loan->yield bounded by the price limit. The
+        // pool partial-fills up to the limit; whatever loan it does not consume
+        // stays with the vault and is repaid below, so we only lever by the
+        // amount actually converted to yield.
+        uint256 loanBefore = loanToken.balanceOf(address(this));
+        market.borrow(borrowAmount);
+        // slither-disable-next-line unused-return -> levered amount is measured via the loanToken balance delta below, not this return
+        SwapLib.swapExactInToLimit(
+            address(loanToken), address(yieldToken), feeYieldDebt, borrowAmount, limit
         );
+
+        // Repay the loan token the swap left behind, so no idle loan lingers.
+        uint256 leftover = loanToken.balanceOf(address(this)) - loanBefore;
+        // slither-disable-next-line unused-return -> repay amount is known (leftover); Morpho reverts on failure
+        if (leftover > 0) market.repay(leftover);
+        additionalDebt = borrowAmount - leftover;
     }
 
     /// @dev Delever branch of `rebalance`: position is over-levered
@@ -648,6 +909,14 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     ///      value equals `repayAmount`. AMM slippage shows up as a small
     ///      under-shoot (post-rebalance HF is slightly below
     ///      `healthFactorMinTarget` if the swap realized less than oracle).
+    ///
+    ///      Partial: the yield->loan swap runs under a `sqrtPriceLimitX96`
+    ///      derived from the oracle and `maxSlippageBps`. If selling the full
+    ///      `yieldToSell` would push the pool past that price, the pool fills
+    ///      only up to it and the vault repays just the realized loan token, so
+    ///      the position lands partway to `healthFactorMinTarget` rather than
+    ///      reverting. When the pool is already priced past the bound the swap
+    ///      is skipped entirely (no-op).
     ///
     /// @param maxBorrow   Current maximum-borrowable amount at LLTV (may be 0
     ///                    after a liquidation that wiped collateral).
@@ -672,26 +941,20 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // slither-disable-next-line incorrect-equality -> exact-zero guard: nothing to sell, so skip the swap
         if (yieldToSell == 0) return 0;
 
-        uint256 loanBefore = loanToken.balanceOf(address(this));
-        // Floor the yield->loan swap at the oracle-expected loan out for the
-        // (possibly-capped) yieldToSell, less maxSlippageBps. Redeem's identical
-        // leg is intentionally unfloored (router's job); this vault-initiated
-        // leg gets the price-impact / sandwich guard.
-        uint256 expectedLoan = yieldToSell.mulDiv(yieldPrice, MarketLib.ORACLE_PRICE_SCALE);
-        // slither-disable-next-line unused-return -> loanGot is measured from the loanToken balance delta below, not this return
-        SwapLib.swapExactInMin(
-            address(yieldToken),
-            address(loanToken),
-            feeYieldDebt,
-            yieldToSell,
-            _slippageFloor(expectedLoan)
+        (uint160 limit, bool ok) = _yieldDebtSwapLimit(address(yieldToken));
+        if (!ok) return 0; // pool already past the slippage bound — no-op.
+
+        // Sell yield->loan bounded by the price limit. The pool partial-fills
+        // up to it, so a too-large delever still repays as much as the bound
+        // allows.
+        uint256 loanGot = SwapLib.swapExactInToLimit(
+            address(yieldToken), address(loanToken), feeYieldDebt, yieldToSell, limit
         );
-        uint256 loanGot = loanToken.balanceOf(address(this)) - loanBefore;
 
         // Cap repayment at outstanding debt
-        repayAmount = loanGot > currentDebt ? currentDebt : loanGot;
-        // slither-disable-next-line unused-return -> repay amount is known (repayAmount); Morpho reverts on failure
-        if (repayAmount > 0) market.repay(repayAmount);
+        repaid = loanGot > currentDebt ? currentDebt : loanGot;
+        // slither-disable-next-line unused-return -> repay amount is known (repaid); Morpho reverts on failure
+        if (repaid > 0) market.repay(repaid);
     }
 
     /// @notice Not implemented. Use `deposit` instead.

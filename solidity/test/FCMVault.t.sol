@@ -16,6 +16,8 @@ import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockMorpho} from "./mocks/MockMorpho.sol";
 import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
+import {MockCpmmSwapRouter} from "./mocks/MockCpmmSwapRouter.sol";
+import {MockUniswapV3Pool} from "./mocks/MockUniswapV3Pool.sol";
 import {MockOracle} from "./mocks/MockOracle.sol";
 import {MockIrm} from "./mocks/MockIrm.sol";
 
@@ -46,6 +48,7 @@ contract FCMVaultTest is Test {
     FCMVault internal vault;
     MockOracle internal marketOracle;
     MockOracle internal yieldOracle;
+    MockUniswapV3Pool internal yieldPool;
 
     address internal admin = address(0x12345);
     address internal user = address(0xA11CE);
@@ -64,6 +67,10 @@ contract FCMVaultTest is Test {
 
         marketOracle = new MockOracle(WETH_PRICE);
         yieldOracle = new MockOracle(YIELD_PRICE);
+        // Yield/debt pool spot defaults to 1:1 (Q96), matching the 1e36 yield
+        // oracle so a rebalance's oracle-derived price limit sits on the
+        // tradeable side of spot.
+        yieldPool = new MockUniswapV3Pool();
 
         vault = new FCMVault(
             FCMVault.InitParams({
@@ -75,6 +82,7 @@ contract FCMVaultTest is Test {
                 marketLltv: LLTV,
                 feeYieldDebt: FEE,
                 feeAssetDebt: FEE_ASSET_DEBT,
+                yieldDebtPool: address(yieldPool),
                 healthFactorMin: HEALTH_FACTOR_MIN,
                 healthFactorMax: HEALTH_FACTOR_MAX,
                 healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
@@ -783,51 +791,238 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
-    // ---- rebalance slippage floor ----------------------------------------
+    // ---- rebalance price-limit guard -------------------------------------
 
-    /// @notice The delever swap reverts when realized slippage exceeds
-    ///         `maxSlippageBps`: a 3% AMM haircut trips the default 1% floor,
-    ///         so the rebalance reverts rather than executing at a bad price
-    ///         (the price-impact / sandwich guard). Deposit/redeem have no such
-    ///         floor — that slippage is the caller's via the router.
-    function test_Rebalance_DeleverRevertsWhenSlippageExceedsFloor() public {
+    /// @notice When the pool's marginal price is already past the oracle-derived
+    ///         slippage bound, the delever swap is skipped entirely (a swap-free
+    ///         no-op) rather than trading at a bad price. Selling yield raises
+    ///         the yield/loan price, so a pool spot already above the bound
+    ///         leaves no room to sell within tolerance.
+    function test_Rebalance_DeleverSkipsWhenSpotPastBound() public {
         _depositFor(user, 1 ether);
         marketOracle.setPrice(1700e36); // push HF below min -> delever path
-        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
+        uint256 hfBefore = _healthFactor();
+        assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
 
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3% > 1% floor
+        // Pool yield/loan price 2% above oracle — past the 1% bound for selling
+        // yield (a price-raising swap), so the swap is skipped.
+        _setPoolPrice(102, 100);
 
-        vm.expectRevert("Too little received");
-        vault.rebalance();
+        uint256 debtBefore = _debt();
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance(); // no revert; spot past bound, so no swap
+
+        assertEq(_healthFactor(), hfBefore, "hf unchanged");
+        assertEq(_debt(), debtBefore, "debt unchanged");
+        assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "yield unchanged");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
-    /// @notice Same guard on the lever leg.
-    function test_Rebalance_LeverRevertsWhenSlippageExceedsFloor() public {
+    /// @notice Same price-limit skip on the lever leg: buying yield lowers the
+    ///         yield/loan price, so a pool spot already below the bound leaves no
+    ///         room to buy within tolerance. No swap runs, no idle loan lingers.
+    function test_Rebalance_LeverSkipsWhenSpotPastBound() public {
         _depositFor(user, 1 ether);
         marketOracle.setPrice(2300e36); // push HF above max -> lever path
-        assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "above max");
+        uint256 hfBefore = _healthFactor();
+        assertGt(hfBefore, HEALTH_FACTOR_MAX, "above max");
 
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3% > 1% floor
+        // Pool yield/loan price 2% below oracle — past the 1% bound for buying
+        // yield (a price-lowering swap), so the swap is skipped.
+        _setPoolPrice(98, 100);
 
-        vm.expectRevert("Too little received");
-        vault.rebalance();
+        uint256 debtBefore = _debt();
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance(); // no revert; spot past bound, so no swap
+
+        assertEq(_healthFactor(), hfBefore, "hf unchanged");
+        assertEq(_debt(), debtBefore, "debt unchanged");
+        assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "yield unchanged");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
-    /// @notice Loosening `maxSlippageBps` lets a previously-reverting rebalance
-    ///         through: with the floor raised to 5%, a 3% haircut is tolerated.
+    // ---- partial rebalancing (price-impact pool) -------------------------
+
+    /// @dev The price ratio `num/den` in Q64.192 fixed point (`num/den * 2**192`),
+    ///      i.e. the square of a `sqrtPriceX96`. `_priceX192(1, 4)` is a 1:4 price.
+    function _priceX192(uint256 num, uint256 den) internal pure returns (uint256) {
+        return Math.mulDiv(num, 1 << 192, den);
+    }
+
+    /// @dev The `sqrtPriceX96` encoding of the price ratio `num/den`
+    ///      (`sqrt(num/den) * 2**96`). `_sqrtPriceX96(99, 100)` is the sqrt price
+    ///      at 99% of a 1:1 price; `_sqrtPriceX96(1, 1)` is `Q96`.
+    function _sqrtPriceX96(uint256 num, uint256 den) internal pure returns (uint256) {
+        return Math.sqrt(_priceX192(num, den));
+    }
+
+    /// @dev Set the yield/debt pool's spot to `num/den` (yield/loan price) in
+    ///      `sqrtPriceX96` form, so tests can place spot on either side of the
+    ///      oracle-derived bound. Default (1/1) is `Q96`.
+    function _setPoolPrice(uint256 num, uint256 den) internal {
+        yieldPool.setSqrtPriceX96(uint160(_sqrtPriceX96(num, den)));
+    }
+
+    /// @dev Etch a constant-product swap router over the swap-router address and
+    ///      seed both sides of the yield/debt pair with `reserve`, giving a 1:1
+    ///      spot rate (matching the 1e36 yield oracle and the pool mock's
+    ///      default Q96 spot) plus size-dependent price impact. Call AFTER any
+    ///      flat-rate deposit so deposit's unfloored swap runs at the clean 1:1
+    ///      rate; the CPMM then governs the rebalance, honoring the
+    ///      `sqrtPriceLimitX96` the vault derives from the oracle.
+    function _installCpmmRouter(uint256 reserve) internal {
+        vm.etch(address(SwapLib.SWAP_ROUTER), address(new MockCpmmSwapRouter()).code);
+        MockCpmmSwapRouter r = MockCpmmSwapRouter(address(SwapLib.SWAP_ROUTER));
+        r.setReserves(address(PYUSD0), reserve);
+        r.setReserves(address(FUSDEV), reserve);
+    }
+
+    /// @notice Partial delever: when selling the full delever amount would push
+    ///         a shallow pool past the price bound, the pool fills only up to the
+    ///         bound (a partial fill) instead of reverting. HF rises toward — but
+    ///         falls short of — the lower re-entry target, debt and yield both
+    ///         shrink, and no idle loan token is left behind.
+    function test_Rebalance_PartialDeleverMakesProgress() public {
+        _depositFor(user, 1 ether);
+
+        marketOracle.setPrice(1700e36); // push HF below min -> delever path
+        uint256 hfBefore = _healthFactor();
+        assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
+
+        // Shallow pool: the full delever (~61e18 yield) moves the price well past
+        // the 1% bound, so the pool fills only the fraction within tolerance.
+        _installCpmmRouter(1000e18);
+
+        uint256 debtBefore = _debt();
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance();
+
+        uint256 hfAfter = _healthFactor();
+        assertGt(hfAfter, hfBefore, "delever raised HF");
+        assertLt(hfAfter, HEALTH_FACTOR_MIN_TARGET, "fell short of target (partial)");
+        assertLt(_debt(), debtBefore, "debt partially repaid");
+        assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield partially sold");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
+    }
+
+    /// @notice Partial lever: when the full lever swap would push the pool past
+    ///         the price bound, the pool fills only up to it and the vault repays
+    ///         the unspent borrow, so HF falls toward — but not all the way to —
+    ///         the upper re-entry target, with no idle loan token left.
+    function test_Rebalance_PartialLeverMakesProgress() public {
+        _depositFor(user, 1 ether);
+
+        marketOracle.setPrice(2300e36); // push HF above max -> lever path
+        uint256 hfBefore = _healthFactor();
+        assertGt(hfBefore, HEALTH_FACTOR_MAX, "above max");
+
+        _installCpmmRouter(1000e18);
+
+        uint256 debtBefore = _debt();
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance();
+
+        uint256 hfAfter = _healthFactor();
+        assertLt(hfAfter, hfBefore, "lever lowered HF");
+        assertGt(hfAfter, HEALTH_FACTOR_MAX_TARGET, "fell short of target (partial)");
+        assertGt(_debt(), debtBefore, "debt partially increased");
+        assertGt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield partially bought");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle (remainder repaid)");
+    }
+
+    /// @notice Loosening `maxSlippageBps` widens the price bound, admitting a
+    ///         pool spot that was previously past it. With the pool 2% above
+    ///         oracle, a 1% bound skips the delever (no-op); raising the bound to
+    ///         5% moves the limit past spot and the delever proceeds.
     function test_Rebalance_RespectsLoosenedSlippage() public {
         _depositFor(user, 1 ether);
         marketOracle.setPrice(1700e36);
         uint256 hfBefore = _healthFactor();
         assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
 
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(300); // 3%
+        // Pool 2% above oracle: past the default 1% bound for selling yield.
+        _setPoolPrice(102, 100);
 
+        // Default 1% bound: spot is past it, so the delever is a no-op.
+        vault.rebalance();
+        assertEq(_healthFactor(), hfBefore, "1% bound skips: HF unchanged");
+
+        // Loosen to 5%: the bound now sits past spot, so the delever proceeds.
         vm.prank(admin);
-        vault.setMaxSlippageBps(500); // 5% > 3%, so the 3% haircut now passes
+        vault.setMaxSlippageBps(500);
 
         vault.rebalance();
-        assertGt(_healthFactor(), hfBefore, "delever raised HF");
+        assertGt(_healthFactor(), hfBefore, "5% bound admits the delever: HF raised");
+    }
+
+    // ---- price-limit math (security-critical conversion) -----------------
+
+    /// @notice The oracle -> `sqrtPriceLimitX96` conversion matches the
+    ///         oracle price discounted by `maxSlippageBps`, in both swap
+    ///         directions, and tracks the oracle's magnitude (decimals baked in).
+    function test_PriceLimit_OracleMathMatchesOracleAndSlippage() public {
+        FCMVaultHarness h = new FCMVaultHarness(_baseParams());
+        uint256 q96 = 1 << 96;
+
+        // Default oracle is 1:1 (P_oracle = 1, oracle sqrt price = Q96) and the
+        // default bound is 1%. A price-decreasing (zeroForOne) swap discounts
+        // the oracle sqrt price by sqrt(1 - slip); a price-increasing one
+        // divides by it. Selling the loan token is zeroForOne; selling the
+        // yield token is oneForZero. At the default 1:1 spot both directions are
+        // feasible, so the returned limit is the raw oracle conversion.
+        uint256 sqrtFloor = _sqrtPriceX96(99, 100); // Q96*sqrt(0.99), the 1% floor
+        (uint160 loStart,) = h.exposed_yieldDebtSwapLimit(address(PYUSD0)); // zeroForOne
+        (uint160 hiStart,) = h.exposed_yieldDebtSwapLimit(address(FUSDEV)); // oneForZero
+        assertEq(uint256(loStart), sqrtFloor, "zeroForOne = Q96*sqrt(1-slip)");
+        assertEq(
+            uint256(hiStart), Math.mulDiv(q96, q96, sqrtFloor), "oneForZero = Q96/sqrt(1-slip)"
+        );
+
+        // The two directions differ by exactly the slippage factor 1/(1-slip).
+        assertApproxEqRel(
+            Math.mulDiv(uint256(hiStart), 1e18, sqrtFloor),
+            uint256(1e18) * 10_000 / (10_000 - 100),
+            1e12,
+            "directions differ by 1/(1-slip)"
+        );
+
+        // Magnitude tracks the oracle: with yield worth 4 loan, P_oracle = 1/4
+        // (yield is token1 here). Move spot to match so both legs stay feasible,
+        // then limit(zeroForOne)*limit(oneForZero) ~= P_oracle*2**192.
+        yieldOracle.setPrice(4e36);
+        _setPoolPrice(1, 4);
+        (uint160 lo,) = h.exposed_yieldDebtSwapLimit(address(PYUSD0));
+        (uint160 hi,) = h.exposed_yieldDebtSwapLimit(address(FUSDEV));
+        assertApproxEqRel(
+            uint256(lo) * uint256(hi), _priceX192(1, 4), 1e12, "product ~= P_oracle*2**192"
+        );
+    }
+
+    /// @notice The swap-limit feasibility flag flips with the pool's live spot:
+    ///         feasible when spot is on the tradeable side of the bound, skipped
+    ///         once spot is already past it.
+    function test_PriceLimit_SkipFlagTracksSpot() public {
+        FCMVaultHarness h = new FCMVaultHarness(_baseParams());
+
+        // Default spot (Q96) is within bound for both legs.
+        (, bool okSellYield) = h.exposed_yieldDebtSwapLimit(address(FUSDEV));
+        (, bool okBuyYield) = h.exposed_yieldDebtSwapLimit(address(PYUSD0));
+        assertTrue(okSellYield, "delever feasible at 1:1 spot");
+        assertTrue(okBuyYield, "lever feasible at 1:1 spot");
+
+        // Spot 2% above oracle: selling yield (price-raising) is past the bound.
+        _setPoolPrice(102, 100);
+        (, okSellYield) = h.exposed_yieldDebtSwapLimit(address(FUSDEV));
+        assertFalse(okSellYield, "delever skipped when spot 2% high");
+
+        // Spot 2% below oracle: buying yield (price-lowering) is past the bound.
+        _setPoolPrice(98, 100);
+        (, okBuyYield) = h.exposed_yieldDebtSwapLimit(address(PYUSD0));
+        assertFalse(okBuyYield, "lever skipped when spot 2% low");
     }
 
     /// @notice `maxSlippageBps` defaults to 1%, is admin-only, and rejects
@@ -1204,6 +1399,7 @@ contract FCMVaultTest is Test {
             marketLltv: LLTV,
             feeYieldDebt: FEE,
             feeAssetDebt: FEE_ASSET_DEBT,
+            yieldDebtPool: address(yieldPool),
             healthFactorMin: HEALTH_FACTOR_MIN,
             healthFactorMax: HEALTH_FACTOR_MAX,
             healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
@@ -1362,5 +1558,303 @@ contract FCMVaultTest is Test {
         vm.prank(user);
         vm.expectRevert();
         vault.cancelEmergencyRecovery();
+    }
+
+    // ---- management & performance fees ------------------------------------
+
+    function _enableFees(address recipient, uint256 mgmtBps, uint256 perfBps) internal {
+        _allow(recipient);
+        vm.startPrank(admin);
+        vault.setFeeRecipient(recipient);
+        vault.setManagementFeeBps(mgmtBps);
+        vault.setPerformanceFeeBps(perfBps);
+        vm.stopPrank();
+    }
+
+    /// @notice With no recipient/rates configured, no fee shares are ever minted.
+    function test_Fees_OffByDefault() public {
+        _depositFor(user, 1 ether);
+        vm.warp(block.timestamp + 365 days);
+        vault.accrueFees();
+        assertEq(vault.totalSupply(), vault.balanceOf(user), "no fee shares minted");
+    }
+
+    /// @notice Only the admin can set fees, and rates are capped.
+    function test_Fees_SetAccessAndCaps() public {
+        vm.prank(user);
+        vm.expectRevert();
+        vault.setManagementFeeBps(100);
+
+        vm.startPrank(admin);
+        vm.expectRevert(FCMVault.InvalidFee.selector);
+        vault.setManagementFeeBps(1_001); // > MAX_MANAGEMENT_FEE_BPS (10%)
+        vm.expectRevert(FCMVault.InvalidFee.selector);
+        vault.setPerformanceFeeBps(5_001); // > MAX_PERFORMANCE_FEE_BPS (50%)
+        vault.setManagementFeeBps(200);
+        vault.setPerformanceFeeBps(2_000);
+        vm.stopPrank();
+        assertEq(vault.managementFeeBps(), 200, "mgmt set");
+        assertEq(vault.performanceFeeBps(), 2_000, "perf set");
+    }
+
+    /// @notice Management fee accrues ~ rate * NAV * elapsed, minted as shares.
+    function test_Fees_ManagementAccrual() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 0); // 2%/yr, no perf
+        _depositFor(user, 1 ether);
+
+        uint256 nav = vault.totalAssets();
+        vm.warp(block.timestamp + 365 days);
+        vault.accrueFees();
+
+        uint256 feeShares = vault.balanceOf(feeRcpt);
+        assertGt(feeShares, 0, "fee shares minted");
+        assertApproxEqRel(
+            vault.convertToAssets(feeShares), nav * 200 / 10_000, 2e16, "mgmt ~2% NAV"
+        );
+    }
+
+    /// @notice Performance fee ~ rate * gain above HWM; not double-charged.
+    function test_Fees_PerformanceAccrualAndHWM() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 0, 2_000); // 20% perf, no mgmt
+        _depositFor(user, 1 ether);
+
+        uint256 navBefore = vault.totalAssets();
+        // Simulate yield: +10% FUSDEV in the vault -> NAV rises.
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
+        uint256 gain = vault.totalAssets() - navBefore;
+        assertGt(gain, 0, "nav rose");
+
+        vault.accrueFees();
+        uint256 feeShares = vault.balanceOf(feeRcpt);
+        assertGt(feeShares, 0, "perf fee minted");
+        assertApproxEqRel(
+            vault.convertToAssets(feeShares), gain * 2_000 / 10_000, 3e16, "perf ~20% gain"
+        );
+
+        // Second accrual with no new gain -> no additional fee (HWM holds).
+        uint256 prev = vault.balanceOf(feeRcpt);
+        vault.accrueFees();
+        assertEq(vault.balanceOf(feeRcpt), prev, "no double-charge above HWM");
+    }
+
+    /// @notice No performance fee while below the high-water mark (drawdown).
+    function test_Fees_NoPerfInDrawdown() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 0, 2_000);
+        _depositFor(user, 1 ether);
+
+        // First gain sets the HWM and charges.
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
+        vault.accrueFees();
+        uint256 afterFirst = vault.balanceOf(feeRcpt);
+        assertGt(afterFirst, 0, "charged on first gain");
+
+        // Drawdown: drop the yield-token price so NAV falls below the HWM.
+        yieldOracle.setPrice(YIELD_PRICE / 2);
+        vault.accrueFees();
+        assertEq(vault.balanceOf(feeRcpt), afterFirst, "no fee in drawdown");
+
+        // Partial recovery: price rises off the low but pps stays below the HWM —
+        // rebuilding toward the prior peak still incurs no fee.
+        yieldOracle.setPrice((YIELD_PRICE * 3) / 4);
+        vault.accrueFees();
+        assertEq(vault.balanceOf(feeRcpt), afterFirst, "no fee on sub-HWM recovery");
+    }
+
+    /// @notice If the recipient isn't allowlisted, accrual SKIPS (no mint) and
+    ///         core flows are NOT bricked.
+    function test_Fees_RecipientNotAllowlistedSkips() public {
+        address feeRcpt = address(0xBAD);
+        vm.startPrank(admin);
+        vault.setFeeRecipient(feeRcpt); // deliberately NOT allowlisted
+        vault.setManagementFeeBps(200);
+        vault.setPerformanceFeeBps(2_000);
+        vm.stopPrank();
+
+        _depositFor(user, 1 ether); // must not revert
+        vm.warp(block.timestamp + 365 days);
+        vault.accrueFees(); // must not revert
+        assertEq(vault.balanceOf(feeRcpt), 0, "no shares minted to non-allowlisted recipient");
+    }
+
+    /// @notice Once recovered, fees stop accruing.
+    function test_Fees_NoAccrualAfterRecovered() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 0);
+        _depositFor(user, 1 ether);
+
+        MockERC20(address(PYUSD0)).mint(admin, 1_000_000 ether);
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+        vm.warp(block.timestamp + vault.recoveryDelay());
+        vm.startPrank(admin);
+        PYUSD0.approve(address(vault), type(uint256).max);
+        vault.executeEmergencyRecovery();
+        vm.stopPrank();
+
+        uint256 prev = vault.balanceOf(feeRcpt);
+        vm.warp(block.timestamp + 365 days);
+        vault.accrueFees();
+        assertEq(vault.balanceOf(feeRcpt), prev, "no accrual after recovered");
+    }
+
+    /// @notice Both fee legs in one accrual sum into a single dilution mint, and
+    ///         the recipient's claim ~= management + performance fee.
+    function test_Fees_CombinedAccrual() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 2_000); // 2%/yr mgmt + 20% perf
+        _depositFor(user, 1 ether);
+
+        uint256 nav0 = vault.totalAssets();
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
+        uint256 navAccrue = vault.totalAssets();
+        uint256 gain = navAccrue - nav0;
+        vm.warp(block.timestamp + 365 days);
+
+        vault.accrueFees();
+        uint256 feeShares = vault.balanceOf(feeRcpt);
+        assertGt(feeShares, 0, "combined fee minted");
+
+        uint256 expected = (navAccrue * 200 / 10_000) + (gain * 2_000 / 10_000);
+        assertApproxEqRel(vault.convertToAssets(feeShares), expected, 3e16, "claim ~= mgmt + perf");
+    }
+
+    /// @notice Enabling fees after a gain/elapsed window must NOT retroactively
+    ///         charge the pre-enable period (guards the unconditional clock/HWM
+    ///         advance; a gating change would make this fail).
+    function test_Fees_NoRetroactiveChargeOnEnable() public {
+        address feeRcpt = address(0xFEE5);
+        _depositFor(user, 1 ether); // fees OFF
+
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
+        vm.warp(block.timestamp + 365 days);
+
+        _enableFees(feeRcpt, 200, 2_000);
+        vault.accrueFees();
+        assertEq(vault.balanceOf(feeRcpt), 0, "no retroactive charge for the pre-enable window");
+    }
+
+    /// @notice Fees accrue on the redeem path, and a de-allowlisted recipient
+    ///         skips minting without bricking the redeem.
+    function test_Fees_AccruesOnRedeemAndDeAllowlistDoesNotBrick() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 0); // mgmt only
+        uint256 shares = _depositFor(user, 1 ether);
+
+        vm.warp(block.timestamp + 30 days);
+        vm.prank(user);
+        vault.redeem(shares / 2, user, user);
+        assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the redeem path");
+
+        bytes32 role = vault.EARLY_ACCESS_ROLE();
+        vm.prank(admin);
+        vault.revokeRole(role, feeRcpt);
+        vm.warp(block.timestamp + 30 days);
+        vm.prank(user);
+        vault.redeem(shares / 4, user, user); // must not revert
+    }
+
+    /// @notice `accrueFees` is permissionless; the fee setters are admin-gated.
+    function test_Fees_AccruePermissionlessSettersGated() public {
+        _depositFor(user, 1 ether);
+        vm.prank(stranger);
+        vault.accrueFees(); // permissionless
+
+        vm.prank(stranger);
+        vm.expectRevert();
+        vault.setFeeRecipient(stranger);
+        vm.prank(stranger);
+        vm.expectRevert();
+        vault.setManagementFeeBps(100);
+    }
+
+    /// @notice The management accrual clamps the billable gap at one year: a
+    ///         multi-year dormancy bills a single year's fee, not the full
+    ///         elapsed span (unclamped, 3 years at 2%/yr would dilute ~6%).
+    function test_Fees_ManagementClampedAtOneYear() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 0); // 2%/yr, no perf
+        _depositFor(user, 1 ether);
+
+        uint256 nav = vault.totalAssets();
+        vm.warp(block.timestamp + 3 * 365 days);
+        vault.accrueFees();
+
+        assertApproxEqRel(
+            vault.convertToAssets(vault.balanceOf(feeRcpt)),
+            nav * 200 / 10_000,
+            2e16,
+            "one year billed, not three"
+        );
+    }
+
+    /// @notice The HWM is seeded at the initial price-per-share, so the first
+    ///         deposit is not counted as performance — an immediate accrual
+    ///         after the first deposit mints nothing.
+    function test_Fees_NoPerfOnFirstDeposit() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 0, 2_000); // perf only
+        _depositFor(user, 1 ether);
+
+        vault.accrueFees();
+        assertEq(vault.balanceOf(feeRcpt), 0, "first deposit is not performance");
+    }
+
+    /// @notice The dilution gross-up delivers the true rate: a 10%/yr management
+    ///         fee over one year leaves the recipient holding exactly 10% of NAV
+    ///         (not 10/1.1 ≈ 9.09%, which a non-grossed-up mint would give).
+    function test_Fees_GrossUpDeliversTrueRate() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 1_000, 0); // 10%/yr, no perf
+        _depositFor(user, 1 ether);
+
+        vm.warp(block.timestamp + 365 days);
+        vault.accrueFees();
+
+        // Tight tolerance: a naive (non-grossed) mint would land ~9.09%, far outside.
+        uint256 recipientValue = vault.convertToAssets(vault.balanceOf(feeRcpt));
+        assertApproxEqRel(
+            recipientValue, vault.totalAssets() / 10, 1e15, "recipient holds true 10%"
+        );
+    }
+
+    /// @notice Fees accrue on the `rebalance` path — the hook runs before the
+    ///         dead-band no-op check, so even a no-op rebalance meters the fee.
+    function test_Fees_AccruesOnRebalance() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 0); // mgmt only
+        _depositFor(user, 1 ether);
+
+        vm.warp(block.timestamp + 30 days);
+        vault.rebalance(); // accrues fees at the top of rebalance
+        assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the rebalance path");
+    }
+
+    /// @notice Fees accrue on the `redeemInKind` escape-hatch path.
+    function test_Fees_AccruesOnRedeemInKind() public {
+        address feeRcpt = address(0xFEE5);
+        _enableFees(feeRcpt, 200, 0); // mgmt only
+        uint256 shares = _depositFor(user, 1 ether);
+
+        vm.warp(block.timestamp + 30 days);
+        MockERC20(address(PYUSD0)).mint(user, 1_000_000 ether);
+        vm.startPrank(user);
+        PYUSD0.approve(address(vault), type(uint256).max);
+        vault.redeemInKind(shares / 2, user, user);
+        vm.stopPrank();
+
+        assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the redeemInKind path");
+    }
+}
+
+/// @dev Exposes the vault's internal price-limit math so the security-critical
+///      oracle -> `sqrtPriceLimitX96` conversion can be asserted directly.
+contract FCMVaultHarness is FCMVault {
+    constructor(FCMVault.InitParams memory p) FCMVault(p) {}
+
+    function exposed_yieldDebtSwapLimit(address tokenIn) external view returns (uint160, bool) {
+        return _yieldDebtSwapLimit(tokenIn);
     }
 }
