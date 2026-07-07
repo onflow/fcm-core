@@ -468,14 +468,12 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
             uint256 elapsed = block.timestamp - lastFeeAccrual;
             if (elapsed > SECONDS_PER_YEAR) elapsed = SECONDS_PER_YEAR;
 
-            // slither-disable-next-line uninitialized-local -> defaults to 0 (no management fee) unless assigned below
-            uint256 managementFee;
+            uint256 managementFee = 0;
             if (managementFeeBps > 0 && elapsed > 0) {
                 managementFee = nav.mulDiv(managementFeeBps * elapsed, BPS * SECONDS_PER_YEAR);
             }
 
-            // slither-disable-next-line uninitialized-local -> defaults to 0 (no performance fee) unless assigned below
-            uint256 performanceFee;
+            uint256 performanceFee = 0;
             if (performanceFeeBps > 0 && pps > perfHighWaterMark) {
                 // Fee on the gain in pps above the all-time HWM. pps is UNREALIZED and
                 // oracle-marked, so a transient mark move can crystallize a fee on paper
