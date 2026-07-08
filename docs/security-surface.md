@@ -8,21 +8,21 @@ Access-control scheme: **`owner`** (owner-only — `onlyOwner` and
 `DEFAULT_ADMIN_ROLE` resolve to the same account), **`early-access`** (caller/
 receiver must hold `EARLY_ACCESS_ROLE`), or **`public`** (any caller).
 
-| Function | Access | Invokes (state-modifying deps) |
-|---|---|---|
-| `setMaxSlippageBps(uint256)` | owner | *(none — storage + event only)* |
-| `setManagementFeeBps(uint256)` | owner | `MORPHO.accrueInterest` |
-| `setPerformanceFeeBps(uint256)` | owner | `MORPHO.accrueInterest` |
-| `setFeeRecipient(address)` | owner | `MORPHO.accrueInterest` |
-| `accrueFees()` | public | `MORPHO.accrueInterest` |
-| `deposit(uint256 assets, address receiver)` | early-access | `MORPHO.accrueInterest`, `collateral.safeTransferFrom`, `MORPHO.supplyCollateral`, `MORPHO.borrow`, `Router.exactInputSingle` |
-| `redeem(uint256 shares, address receiver, address owner)` | public | `MORPHO.accrueInterest`, `Router.exactInputSingle`, `MORPHO.repay`, `MORPHO.withdrawCollateral`, `collateral.safeTransfer` |
-| `redeemInKind(uint256 shares, address receiver, address owner)` | public | `MORPHO.accrueInterest`, `loan.safeTransferFrom`, `MORPHO.repay`, `MORPHO.withdrawCollateral`, `collateral.safeTransfer`, `yield.safeTransfer` |
-| `rebalance()` | public | `MORPHO.accrueInterest`, `MORPHO.borrow`, `Router.exactInputSingle`, `MORPHO.repay` |
-| `setMaxTvl(uint256)` | owner | *(none — storage + event only)* |
-| `scheduleEmergencyRecovery()` | owner | *(none — storage + event only)* |
-| `cancelEmergencyRecovery()` | owner | *(none — storage + event only)* |
-| `executeEmergencyRecovery()` | owner | `MORPHO.accrueInterest`, `loan.safeTransferFrom`, `MORPHO.repay` (via `repayAll`), `MORPHO.withdrawCollateral`, `collateral.safeTransfer`, `yield.safeTransfer`, `loan.safeTransfer` |
+| Function | Access | Invokes (state-modifying deps) | Impact |
+|---|---|---|---|
+| `setMaxSlippageBps(uint256)` | owner | *(none — storage + event only)* | |
+| `setManagementFeeBps(uint256)` | owner | `MORPHO.accrueInterest` | |
+| `setPerformanceFeeBps(uint256)` | owner | `MORPHO.accrueInterest` | |
+| `setFeeRecipient(address)` | owner | `MORPHO.accrueInterest` | |
+| `accrueFees()` | public | `MORPHO.accrueInterest` | |
+| `deposit(uint256 assets, address receiver)` | early-access | `MORPHO.accrueInterest`, `collateral.safeTransferFrom`, `MORPHO.supplyCollateral`, `MORPHO.borrow`, `Router.exactInputSingle` | |
+| `redeem(uint256 shares, address receiver, address owner)` | public | `MORPHO.accrueInterest`, `Router.exactInputSingle`, `MORPHO.repay`, `MORPHO.withdrawCollateral`, `collateral.safeTransfer` | |
+| `redeemInKind(uint256 shares, address receiver, address owner)` | public | `MORPHO.accrueInterest`, `loan.safeTransferFrom`, `MORPHO.repay`, `MORPHO.withdrawCollateral`, `collateral.safeTransfer`, `yield.safeTransfer` | |
+| `rebalance()` | public | `MORPHO.accrueInterest`, `MORPHO.borrow`, `Router.exactInputSingle`, `MORPHO.repay` | |
+| `setMaxTvl(uint256)` | owner | *(none — storage + event only)* | |
+| `scheduleEmergencyRecovery()` | owner | *(none — storage + event only)* | |
+| `cancelEmergencyRecovery()` | owner | *(none — storage + event only)* | |
+| `executeEmergencyRecovery()` | owner | `MORPHO.accrueInterest`, `loan.safeTransferFrom`, `MORPHO.repay` (via `repayAll`), `MORPHO.withdrawCollateral`, `collateral.safeTransfer`, `yield.safeTransfer`, `loan.safeTransfer` | |
 
 > Notes on `public` rows:
 > - `deposit` (early-access) also reverts while a recovery is pending or after it executes.
