@@ -396,6 +396,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // The limit must sit on the side the price moves toward: below spot for
         // a price-decreasing swap, above spot for a price-increasing one. If the
         // pool is already past it, there is no room to trade within tolerance.
+        // slither-disable-next-line unused-return -> only sqrtPriceX96 is read; the other slot0 fields are unused
         (uint160 spot,,,,,,) = IUniswapV3Pool(yieldDebtPool).slot0();
         if (zeroForOne && raw >= spot) return (0, false);
         if (!zeroForOne && raw <= spot) return (0, false);
@@ -405,6 +406,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
     /// @notice Set the management fee rate (basis points), capped at `MAX_MANAGEMENT_FEE_BPS`.
     /// @dev    Accrues at the OLD rate first so the change isn't retroactive.
+    // slither-disable-next-line reentrancy-no-eth -> admin-only setter; _accrueFees only calls the trusted Morpho singleton, which cannot reenter
     function setManagementFeeBps(uint256 newBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newBps > MAX_MANAGEMENT_FEE_BPS) revert InvalidFee();
         _accrueFees();
@@ -414,6 +416,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
     /// @notice Set the performance fee rate (basis points), capped at `MAX_PERFORMANCE_FEE_BPS`.
     /// @dev    Accrues at the OLD rate first so the change isn't retroactive.
+    // slither-disable-next-line reentrancy-no-eth -> admin-only setter; _accrueFees only calls the trusted Morpho singleton, which cannot reenter
     function setPerformanceFeeBps(uint256 newBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newBps > MAX_PERFORMANCE_FEE_BPS) revert InvalidFee();
         _accrueFees();
@@ -424,6 +427,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
     /// @notice Set the fee recipient. Accrues to the old recipient first.
     /// @dev    The recipient must hold `EARLY_ACCESS_ROLE` to receive minted fee
     ///         shares; if it doesn't, accrual silently skips (see `_accrueFees`).
+    // slither-disable-next-line reentrancy-no-eth -> admin-only setter; _accrueFees only calls the trusted Morpho singleton, which cannot reenter
     function setFeeRecipient(address newRecipient) external onlyRole(DEFAULT_ADMIN_ROLE) {
         _accrueFees();
         emit FeeRecipientSet(feeRecipient, newRecipient);
@@ -464,12 +468,12 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
             uint256 elapsed = block.timestamp - lastFeeAccrual;
             if (elapsed > SECONDS_PER_YEAR) elapsed = SECONDS_PER_YEAR;
 
-            uint256 managementFee;
+            uint256 managementFee = 0;
             if (managementFeeBps > 0 && elapsed > 0) {
                 managementFee = nav.mulDiv(managementFeeBps * elapsed, BPS * SECONDS_PER_YEAR);
             }
 
-            uint256 performanceFee;
+            uint256 performanceFee = 0;
             if (performanceFeeBps > 0 && pps > perfHighWaterMark) {
                 // Fee on the gain in pps above the all-time HWM. pps is UNREALIZED and
                 // oracle-marked, so a transient mark move can crystallize a fee on paper
@@ -578,6 +582,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         uint256 toBorrow = _targetBorrowAgainst(assets);
         if (toBorrow > 0) {
             market.borrow(toBorrow);
+            // slither-disable-next-line unused-return -> swap output is measured via the totalAssets() delta below, not this return
             SwapLib.swapExactIn(address(loanToken), address(yieldToken), feeYieldDebt, toBorrow);
         }
 
@@ -696,6 +701,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         uint256 yieldOut = yieldToken.balanceOf(address(this)).mulDiv(shares, claims);
         uint256 loanBefore = loanToken.balanceOf(address(this));
         if (yieldOut > 0) {
+            // slither-disable-next-line unused-return -> loanGot is measured from the loanToken balance delta below, not this return
             SwapLib.swapExactIn(address(yieldToken), address(loanToken), feeYieldDebt, yieldOut);
         }
         uint256 loanGot = loanToken.balanceOf(address(this)) - loanBefore;
@@ -705,15 +711,18 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
         if (loanGot >= debtSlice) {
             // Case A: full pro-rata unwind, reconcile surplus to the asset.
+            // slither-disable-next-line unused-return -> repay amount is known (debtSlice); Morpho reverts on failure
             if (debtSlice > 0) market.repay(debtSlice);
             if (collSlice > 0) market.withdrawCollateral(collSlice);
             uint256 surplus = loanGot - debtSlice;
             if (surplus > 0) {
+                // slither-disable-next-line unused-return -> surplus-swap output is captured by the redeem balance delta, not this return
                 SwapLib.swapExactIn(address(loanToken), asset(), feeAssetDebt, surplus);
             }
         } else {
             // Case B: yield underperformed; scale debt+collateral by
             // k = loanGot / debtSlice to keep the post-unwind HF flat.
+            // slither-disable-next-line unused-return -> repay amount is known (loanGot); Morpho reverts on failure
             if (loanGot > 0) market.repay(loanGot);
             uint256 scaledColl = collSlice.mulDiv(loanGot, debtSlice);
             if (scaledColl > 0) market.withdrawCollateral(scaledColl);
@@ -754,6 +763,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         uint256 debtRepaid = market.debt().mulDiv(shares, claims, Math.Rounding.Ceil);
         if (debtRepaid > 0) {
             loanToken.safeTransferFrom(msg.sender, address(this), debtRepaid);
+            // slither-disable-next-line unused-return -> repay amount is known (debtRepaid); Morpho reverts on failure
             market.repay(debtRepaid);
         }
 
@@ -872,12 +882,14 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // amount actually converted to yield.
         uint256 loanBefore = loanToken.balanceOf(address(this));
         market.borrow(borrowAmount);
+        // slither-disable-next-line unused-return -> levered amount is measured via the loanToken balance delta below, not this return
         SwapLib.swapExactInToLimit(
             address(loanToken), address(yieldToken), feeYieldDebt, borrowAmount, limit
         );
 
         // Repay the loan token the swap left behind, so no idle loan lingers.
         uint256 leftover = loanToken.balanceOf(address(this)) - loanBefore;
+        // slither-disable-next-line unused-return -> repay amount is known (leftover); Morpho reverts on failure
         if (leftover > 0) market.repay(leftover);
         additionalDebt = borrowAmount - leftover;
     }
@@ -924,6 +936,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
         uint256 yieldBalance = yieldToken.balanceOf(address(this));
         if (yieldToSell > yieldBalance) yieldToSell = yieldBalance;
+        // slither-disable-next-line incorrect-equality -> exact-zero guard: nothing to sell, so skip the swap
         if (yieldToSell == 0) return 0;
 
         (uint160 limit, bool ok) = _yieldDebtSwapLimit(address(yieldToken));
@@ -938,6 +951,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
         // Cap repayment at outstanding debt
         repaid = loanGot > currentDebt ? currentDebt : loanGot;
+        // slither-disable-next-line unused-return -> repay amount is known (repaid); Morpho reverts on failure
         if (repaid > 0) market.repay(repaid);
     }
 
@@ -1012,6 +1026,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
 
     /// @dev Routes yield → debt → asset. The two 1e36 oracle scales cancel.
     function _yieldToAsset(uint256 yieldAmount) internal view returns (uint256) {
+        // slither-disable-next-line incorrect-equality -> exact-zero guard: zero yield converts to zero asset
         if (yieldAmount == 0) return 0;
         return yieldAmount.mulDiv(IOracle(yieldOracle).price(), market.oraclePrice());
     }
@@ -1053,6 +1068,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         // Owner funds the full debt; repay by shares so the position zeros exactly.
         uint256 debtRepaid = market.debt();
         loanToken.safeTransferFrom(msg.sender, address(this), debtRepaid);
+        // slither-disable-next-line unused-return -> position is cleared by shares (repayAll); the repaid amount isn't needed here
         market.repayAll();
 
         // Free all collateral now that the debt is cleared.
