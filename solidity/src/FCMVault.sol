@@ -12,6 +12,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 import {IMorpho, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorphoFlashLoanCallback} from "@morpho-blue/interfaces/IMorphoCallbacks.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 
 import {MarketLib} from "./libraries/MarketLib.sol";
@@ -31,7 +32,7 @@ IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
 ///         Holders of `EARLY_ACCESS_ROLE` may deposit, hold, and transfer
 ///         shares. Burns (withdrawals/redeems) are always permitted so a
 ///         removed holder can still exit.
-contract FCMVault is ERC4626, AccessControl, Ownable2Step {
+contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallback {
     using SafeERC20 for IERC20;
     using Math for uint256;
     using MarketLib for MarketParams;
@@ -320,6 +321,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
         p.loanToken.forceApprove(address(MORPHO), maxAllowance);
         p.loanToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
         p.yieldToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
+        // redeem's Case-B flash sells collateral for the debt shortfall.
+        p.collateral.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
 
         recoveryDelay = p.recoveryDelay;
         maxSlippageBps = 100; // 1% default; admin retunes per pool depth.
@@ -720,13 +723,41 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step {
                 SwapLib.swapExactIn(address(loanToken), asset(), feeAssetDebt, surplus);
             }
         } else {
-            // Case B: yield underperformed; scale debt+collateral by
-            // k = loanGot / debtSlice to keep the post-unwind HF flat.
-            // slither-disable-next-line unused-return -> repay amount is known (loanGot); Morpho reverts on failure
-            if (loanGot > 0) market.repay(loanGot);
-            uint256 scaledColl = collSlice.mulDiv(loanGot, debtSlice);
-            if (scaledColl > 0) market.withdrawCollateral(scaledColl);
+            // Case B: the yield sale (loanGot) fell short of the pro-rata debt
+            // slice. Cover the shortfall by selling a slice of the redeemer's own
+            // collateral so they get their full pro-rata value instead of a
+            // scaled-down haircut. A Morpho flash loan supplies the shortfall so
+            // the full debt slice is repaid BEFORE the collateral is withdrawn,
+            // making the withdrawal hf-neutral and permitted at any health factor.
+            // The unsold collateral is delivered to the redeemer as the asset
+            // balance delta (see `onMorphoFlashLoan`).
+            MORPHO.flashLoan(
+                address(loanToken), debtSlice - loanGot, abi.encode(debtSlice, collSlice)
+            );
         }
+    }
+
+    /// @notice Morpho flash-loan callback for redeem's Case-B path. Only callable
+    ///         by Morpho, which only invokes it when the vault itself initiated the
+    ///         flash loan (Morpho calls back the caller of `flashLoan`).
+    /// @dev    On entry the vault holds `loanGot` (from the yield sale) plus the
+    ///         flash-borrowed `shortfall`, together the full pro-rata `debtSlice`.
+    ///         Repay the slice, withdraw the redeemer's full `collSlice`, then sell
+    ///         exactly `shortfall` of it back to loan token to repay the flash. The
+    ///         unsold collateral stays as the vault's asset balance and is
+    ///         delivered to the redeemer by `redeem`. Reverts if the redeemer's own
+    ///         collateral slice cannot cover the shortfall (genuinely underwater).
+    function onMorphoFlashLoan(uint256 shortfall, bytes calldata data) external {
+        require(msg.sender == address(MORPHO), "unauthorized");
+        (uint256 debtSlice, uint256 collSlice) = abi.decode(data, (uint256, uint256));
+
+        // slither-disable-next-line unused-return -> repay amount is known (debtSlice); Morpho reverts on failure
+        market.repay(debtSlice);
+        market.withdrawCollateral(collSlice);
+        // Sell collateral for exactly `shortfall` loan token to repay the flash,
+        // spending at most the withdrawn slice; the rest stays for the redeemer.
+        // slither-disable-next-line unused-return -> collateral spent is captured by the redeem balance delta, not this return
+        SwapLib.swapExactOut(asset(), address(loanToken), feeAssetDebt, shortfall, collSlice);
     }
 
     /// @notice Escape hatch — swap-free, in-kind redemption: the caller

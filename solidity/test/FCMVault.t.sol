@@ -347,25 +347,49 @@ contract FCMVaultTest is Test {
         assertGt(assetsOut, amount, "yield captured");
     }
 
-    /// @notice Case B: when the FUSDEV->PYUSD0 swap returns less than the
-    /// pro-rata debt slice, redeem scales BOTH the repay and the collateral
-    /// withdrawal down by k = pyusdGot / debtSlice. The redeemer takes the
-    /// haircut on their payout; remaining collateral stays in the vault.
-    /// Here we induce a 10% AMM haircut via MockSwapRouter.setFeeBps, so
-    /// pyusdGot = 0.9 * debtSlice → k = 0.9. The user should receive ~90%
-    /// of the fair-execution round-trip WETH, and no PYUSD0 should be left
-    /// in the vault (Case B uses everything received to repay).
-    function test_Redeem_YieldUnderperformsScalesBothLegs() public {
-        uint256 amount = 1 ether;
-        uint256 shares = _depositFor(user, amount);
-
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(1000);
+    /// @notice Case B (the yield sale falls short of the pro-rata debt slice):
+    /// redeem fills the shortfall by selling a slice of the redeemer's OWN
+    /// collateral, so they receive their full pro-rata value — not the old
+    /// scale-down haircut. We under-back the vault (burn 10% of its yield) to
+    /// force a real shortfall; collateral is sold to cover it and the redeemer
+    /// gets ~their full NAV share back.
+    function test_Redeem_CaseB_FillsShortfallFromCollateral() public {
+        marketOracle.setPrice(1e36); // 1:1 so debtToCollateral matches the mock swap
+        uint256 shares = _depositFor(user, 1 ether);
+        // Under-back: burn 10% of the vault's yield so the yield sale can't cover
+        // the debt slice (Case B) with a meaningful shortfall.
+        MockERC20(address(FUSDEV)).burn(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
+        uint256 fairValue = vault.convertToAssets(shares);
+        uint256 mkCollBefore = WETH.balanceOf(address(MORPHO));
 
         vm.prank(user);
         uint256 assetsOut = vault.redeem(shares, user, user);
 
-        assertApproxEqRel(assetsOut, (amount * 9) / 10, 0.01e18, "scaled payout ~k*amount");
-        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no surplus / dust");
+        assertApproxEqRel(assetsOut, fairValue, 0.02e18, "full pro-rata value, not a haircut");
+        assertLt(
+            WETH.balanceOf(address(MORPHO)), mkCollBefore, "collateral sold to cover shortfall"
+        );
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan-token dust");
+        assertEq(vault.balanceOf(user), 0, "shares burned");
+    }
+
+    /// @notice Deep impairment: the shortfall exceeds the health-factor headroom,
+    ///         so the collateral can only be withdrawn after the debt slice is
+    ///         repaid. The flash loan supplies the shortfall up front, so redeem
+    ///         still delivers full pro-rata value at any health factor.
+    function test_Redeem_CaseB_DeepImpairmentFlashCoversAnyHF() public {
+        marketOracle.setPrice(1e36); // 1:1 so debtToCollateral matches the mock swap
+        uint256 shares = _depositFor(user, 1 ether);
+        // Burn 60% of the vault's yield: the shortfall now dwarfs the hf headroom,
+        // which the pre-flash path could not have covered without breaching hf.
+        MockERC20(address(FUSDEV)).burn(address(vault), FUSDEV.balanceOf(address(vault)) * 6 / 10);
+        uint256 fairValue = vault.convertToAssets(shares);
+
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(shares, user, user);
+
+        assertApproxEqRel(assetsOut, fairValue, 0.02e18, "full pro-rata value, not a haircut");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan-token dust");
         assertEq(vault.balanceOf(user), 0, "shares burned");
     }
 
