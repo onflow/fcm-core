@@ -612,20 +612,17 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
     ///            execution): repay `d*`, withdraw `p × collateral` of the
     ///            asset, and swap the surplus `loanGot - d*` loanToken to
     ///            the asset.
-    ///         3. If `loanGot < d*` (Case B — yield underperformed): repay
-    ///            `loanGot`, and withdraw only `p × collateral × loanGot /
-    ///            d*` of the asset. Both legs scale by `k = loanGot / d*`,
-    ///            which preserves the position's collateral/debt ratio (and
-    ///            HF). The un-withdrawn collateral remains in the vault and
-    ///            accrues to remaining shareholders; no surplus leg runs.
+    ///         3. If `loanGot < d*` (Case B — yield underperformed): flash-borrow
+    ///            the shortfall `d* - loanGot` in loanToken, repay the full `d*`,
+    ///            withdraw the full `p × collateral`, and sell just enough of that
+    ///            collateral to repay the flash. The redeemer takes home their
+    ///            full pro-rata value; the collateral sold covers the debt the
+    ///            yield leg could not.
     ///         4. Burn shares and transfer the new asset balance to receiver.
     ///
-    ///         Rounding favors the vault: all pro-rata slices and the
-    ///         Case-B scale factor round down, so residuals accrue to
-    ///         remaining shareholders rather than leaking to the redeemer.
-    ///
-    ///         TODO: Redemptions should use flash loans in the future to ensure
-    ///         collateral withdrawals can always be used to satisfy redemptions.
+    ///         Rounding favors the vault: all pro-rata slices round down, so
+    ///         residuals accrue to remaining shareholders rather than leaking to
+    ///         the redeemer.
     ///
     ///         Reverts if `msg.sender != owner` and allowance is
     ///         insufficient.
@@ -680,22 +677,19 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
     ///            redeemer.
     ///
     ///      Case B (`loanGot < d*`, yield underperformed at the AMM):
-    ///         a. Repay `loanGot` (all of it).
-    ///         b. Withdraw `p × collateral × (loanGot / d*)` of the asset.
-    ///         Both legs are scaled by the same factor `k = loanGot / d*`,
-    ///         preserving the position's collateral/debt ratio (and therefore
-    ///         its health factor) post-unwind. The redeemer burns the full
-    ///         `shares` but takes home less asset than the fair-price
-    ///         outcome would have delivered; the un-withdrawn portion of
-    ///         their pro-rata collateral remains in the vault and accrues
-    ///         to the remaining shareholders. No surplus reconcile leg runs
-    ///         in this case.
+    ///         a. Flash-borrow the shortfall `d* - loanGot` in loanToken from
+    ///            Morpho, so the vault holds the full `d*`.
+    ///         b. Repay the full `d*` to Morpho, then withdraw the full
+    ///            `p × collateral`. Repaying before withdrawing makes the
+    ///            withdrawal health-factor-neutral, so it is permitted at any
+    ///            health factor (see `onMorphoFlashLoan`).
+    ///         c. Sell just enough of the withdrawn collateral back to loanToken
+    ///            to repay the flash. The redeemer takes home their full pro-rata
+    ///            value; the collateral sold covers the debt the yield leg could
+    ///            not. No surplus reconcile leg runs in this case.
     ///
-    ///      TODO: Redemptions should use flash loans in the future to ensure
-    ///      collateral withdrawals can always be used to satisfy redemptions.
-    ///
-    ///      Rounding favors the vault: pro-rata slices and the scaled
-    ///      collateral amount are computed with mulDiv rounding down.
+    ///      Rounding favors the vault: pro-rata slices are computed with mulDiv
+    ///      rounding down.
     /// @param shares Vault shares being redeemed (numerator of `p`).
     function _unwindSlice(uint256 shares) internal {
         uint256 claims = _totalClaims();
