@@ -88,4 +88,36 @@ library SwapLib {
             })
         );
     }
+
+    /// @notice Swap `tokenIn` for exactly `amountOut` of `tokenOut`, reverting in
+    ///         the router if it would cost more than `amountInMaximum`.
+    /// @dev    Exact-output single-hop; recipient is always `address(this)`. Used
+    ///         by redeem's Case-B path to buy exactly the redeemer's debt
+    ///         shortfall from their collateral, spending no more than the
+    ///         slippage-grossed collateral withdrawn for it.
+    /// @param  tokenIn         Token being sold.
+    /// @param  tokenOut        Token being bought.
+    /// @param  fee             Pool fee tier.
+    /// @param  amountOut       Exact amount of `tokenOut` to receive.
+    /// @param  amountInMaximum Max `tokenIn` to spend; router reverts above it.
+    /// @return amountIn        Realized `tokenIn` spent.
+    function swapExactOut(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountOut,
+        uint256 amountInMaximum
+    ) internal returns (uint256 amountIn) {
+        return SWAP_ROUTER.exactOutputSingle(
+            ISwapRouter.ExactOutputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                fee: fee,
+                recipient: address(this),
+                amountOut: amountOut,
+                amountInMaximum: amountInMaximum,
+                sqrtPriceLimitX96: 0
+            })
+        );
+    }
 }
