@@ -60,7 +60,7 @@ capability and its outcome:
 - **inaccessible funds** (holders can't withdraw)
 - **lost funds** (value stolen or permanently lost)
 - **NAV manipulation** (accounting/price corruption)
-- **deposits halted**,
+- **deposits halted**
 - **rebalancing halted**
 
 ### **Morpho Blue singleton** — `IMorpho` at `0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f` (via `MarketLib`)
@@ -72,7 +72,7 @@ capability and its outcome:
   - `withdrawCollateral(MarketParams, uint256, address, address)`
 
 #### Availability
-- Blocks all deposits, withdrawals, rebalances, and emergency recoveries -> inaccessible funds
+- Blocks all deposits, withdrawals, rebalances, and emergency recoveries -> inaccessible funds, deposits/rebalancing halted
 
 #### Byzantine
 - collateral custody -> lost funds (collateral seized or withheld)
@@ -82,14 +82,12 @@ capability and its outcome:
   - `exactInputSingle(ExactInputSingleParams)` — used by both `swapExactIn` (no limit) and `swapExactInToLimit` (with `sqrtPriceLimitX96`)
 
 #### Availability
-- `deposit` reverts -> deposits halted
-- `redeem` reverts -> inaccessible funds via `redeem`
-- `rebalance` reverts -> rebalancing halted
-- `redeemInKind` / `executeEmergencyRecovery` are swap-free -> still works (funds stay accessible)
+- `deposit`, `redeem`, and `rebalance` revert -> deposits/rebalancing halted
+- `redeemInKind` / `executeEmergencyRecovery` are swap-free -> still works
 
 #### Byzantine
 - `deposit` / `redeem` swaps (no min-out) -> lost funds (bad fills siphon value)
-- `rebalance` swaps (bounded by `sqrtPriceLimitX96`) -> lost funds, bounded (partially protected)
+- `rebalance` swaps (bounded by `sqrtPriceLimitX96`) -> lost funds (bounded by price limit)
 
 ### **Collateral token (vault asset)** — `IERC20` / `SafeERC20`
   - `safeTransferFrom(...)` (deposit)
