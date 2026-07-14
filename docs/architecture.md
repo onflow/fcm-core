@@ -227,6 +227,28 @@ sequenceDiagram
       deactivate Outer
 ```
 
+## Escape Hatch
+A swap-free, in-kind exit, exposed as its own `redeemInKind` function distinct from the standard `redeem` above. The holder repays their pro-rata debt slice in `innerAsset`, their shares are burned, and they receive the pro-rata collateral (`outerAsset`) and yield (`innerShare`) in kind.
+```mermaid
+sequenceDiagram
+      autonumber
+      actor User
+      participant Outer as Outer ERC4626 Vault
+      participant Lender as Lending Protocol
+
+      User->>Outer: redeemInKind(outerShare)
+      activate Outer
+      Note over User,Outer: User supplies their debtSlice in innerAsset<br/>(no swap — the user funds the repayment)
+
+      Outer->>Lender: repay debtSlice (innerAsset)
+      Lender-->>Outer: withdraw collSlice (outerAsset)
+
+      Outer-->>User: collSlice (outerAsset) + yieldSlice (innerShare), in kind
+      deactivate Outer
+```
+
+Because it delivers the yield leg in kind instead of selling it, it needs no swap — so it doesn't depend on the AMM or the inner vault to liquidate that leg (the two routes a normal `redeem` would use), and stays available when AMM liquidity is thin or manipulated. It still settles through Morpho, so the collateral withdrawal is subject to Morpho's collateral-price check; an underwater position can't be exited until liquidation restores it. The caller must hold and approve the `innerAsset` debt slice (it is not sourced from the position), and the yield leg is returned in kind as `innerShare`, to be unwound separately.
+
 ## Rebalancing
 See **TODO LINK TO REBALANCING SPEC**
 
@@ -245,6 +267,8 @@ For each external function, how does it protect against re-entrancy?
 ### Sandwich Attack
 An attacker manipulates AMM prices before and after our swap to capture part of the value of our swap. 
 - The primary mitigation is a slippage limit, which limits how much slippage we will accept on each trade. This doesn't prevent the attack, but does limit how much value can be extracted per trade.
+- `rebalance` enforces this limit using the pool's native `sqrtPriceLimitX96`: each rebalance swap carries a marginal-price bound derived from the yield oracle discounted by `maxSlippageBps`. The pool fills the swap only while its marginal price stays within the bound, then stops. A swap too large to reach the re-entry target within tolerance is a **partial fill** rather than a revert. Successive rebalances are expected to fill more as the gap (and price impact) shrinks, converging over several calls.
+- The bound is on the pool's **marginal price** relative to the oracle, i.e. on price impact. The pool's fixed LP fee is a separate, known cost taken on the input and is not part of this bound.
 - Flow as the underlying platform provides some protection. There is no system akin to [MEV-Boost](https://github.com/flashbots/mev-boost), which systematizes MEV extraction. No individual node in Flow can deterministically dictate transaction ordering. Attackers need to send many transactions, hope some are placed in the desired order, and be able to revert operations on those that are not in the desired order. Still possible, but more complex and expensive.
 
 If an attacker is able to invoke a function which performs a swap (that isn't swapping their funds), then the sandwich attack becomes much more dangerous (eg. a permissionless `rebalance` function).

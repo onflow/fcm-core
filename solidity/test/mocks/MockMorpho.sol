@@ -4,6 +4,7 @@ pragma solidity ^0.8.19;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {Id, MarketParams, Position, Market} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorphoFlashLoanCallback} from "@morpho-blue/interfaces/IMorphoCallbacks.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 
 import {MockERC20} from "./MockERC20.sol";
@@ -30,6 +31,7 @@ contract MockMorpho {
         address onBehalf,
         bytes calldata
     ) external {
+        require(assets != 0, "ZERO_ASSETS");
         Id id = mp.id();
         position[id][onBehalf].collateral += uint128(assets);
         IERC20(mp.collateralToken).transferFrom(msg.sender, address(this), assets);
@@ -75,22 +77,34 @@ contract MockMorpho {
     function repay(
         MarketParams memory mp,
         uint256 assets,
-        uint256,
-        /*shares*/
+        uint256 shares,
         address onBehalf,
         bytes calldata
     ) external returns (uint256, uint256) {
         Id id = mp.id();
         Market storage m = market[id];
 
-        uint256 sharesToBurn = _mulDivUp(
-            assets,
-            uint256(m.totalBorrowShares) + VIRTUAL_SHARES,
-            uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
-        );
+        // Mirror Morpho: exactly one of (assets, shares) is set. By-shares repays a
+        // precise share count (assets rounded up); by-assets converts assets -> shares.
+        uint256 sharesToBurn;
+        if (shares > 0) {
+            sharesToBurn = shares;
+            assets = _mulDivUp(
+                shares,
+                uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS,
+                uint256(m.totalBorrowShares) + VIRTUAL_SHARES
+            );
+        } else {
+            // Morpho rounds by-assets repay DOWN (toSharesDown).
+            sharesToBurn = _mulDivDown(
+                assets,
+                uint256(m.totalBorrowShares) + VIRTUAL_SHARES,
+                uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
+            );
+        }
+        // No clamp: like Morpho, over-burning more shares than the position holds
+        // underflows and reverts.
         uint128 posShares = position[id][onBehalf].borrowShares;
-        if (sharesToBurn > posShares) sharesToBurn = posShares;
-
         position[id][onBehalf].borrowShares = posShares - uint128(sharesToBurn);
         m.totalBorrowShares -= uint128(sharesToBurn);
         m.totalBorrowAssets = uint128(uint256(m.totalBorrowAssets) - assets);
@@ -167,5 +181,19 @@ contract MockMorpho {
 
     function _mulDivUp(uint256 x, uint256 y, uint256 d) internal pure returns (uint256) {
         return (x * y + d - 1) / d;
+    }
+
+    function _mulDivDown(uint256 x, uint256 y, uint256 d) internal pure returns (uint256) {
+        return (x * y) / d;
+    }
+
+    /// @dev Mock of Morpho's `flashLoan`: mints `assets` of `token` to the
+    ///      borrower, invokes its `onMorphoFlashLoan` callback, then reclaims the
+    ///      `assets` (fee-free, like Morpho Blue) via the borrower's approval.
+    function flashLoan(address token, uint256 assets, bytes calldata data) external {
+        MockERC20(token).mint(msg.sender, assets);
+        IMorphoFlashLoanCallback(msg.sender).onMorphoFlashLoan(assets, data);
+        IERC20(token).transferFrom(msg.sender, address(this), assets);
+        MockERC20(token).burn(address(this), assets);
     }
 }

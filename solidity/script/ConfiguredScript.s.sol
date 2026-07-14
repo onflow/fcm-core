@@ -36,36 +36,42 @@ abstract contract ConfiguredScript is Script {
         uint24 feeAssetDebt;
         uint256 healthFactorMin;
         uint256 healthFactorMax;
-        uint256 healthFactorTarget;
+        uint256 healthFactorMinTarget;
+        uint256 healthFactorMaxTarget;
+        uint256 yieldFactorMax;
         address yieldOracle;
         address swapFactory;
         address yieldDebtPool;
+        uint256 recoveryDelay;
     }
 
     function _loadConfig() internal view returns (Config memory c) {
         string memory network = vm.envOr("DEPLOY_NETWORK", string("mainnet"));
-        string memory json = vm.readFile(string.concat("deployments/", network, ".json"));
+        string memory toml = vm.readFile(string.concat("deployments/", network, ".toml"));
 
-        c.chainId = vm.parseJsonUint(json, ".chainId");
+        c.chainId = vm.parseTomlUint(toml, ".chainId");
         require(
             c.chainId == block.chainid,
             string.concat("config chainId does not match RPC chain (network=", network, ")")
         );
 
-        c.collateral = vm.parseJsonAddress(json, ".collateral");
-        c.loanToken = vm.parseJsonAddress(json, ".loanToken");
-        c.yieldToken = vm.parseJsonAddress(json, ".yieldToken");
-        c.marketOracle = vm.parseJsonAddress(json, ".marketOracle");
-        c.marketIrm = vm.parseJsonAddress(json, ".marketIrm");
-        c.marketLltv = vm.parseJsonUint(json, ".marketLltv");
-        c.feeYieldDebt = uint24(vm.parseJsonUint(json, ".feeYieldDebt"));
-        c.feeAssetDebt = uint24(vm.parseJsonUint(json, ".feeAssetDebt"));
-        c.healthFactorMin = vm.parseJsonUint(json, ".healthFactorMin");
-        c.healthFactorMax = vm.parseJsonUint(json, ".healthFactorMax");
-        c.healthFactorTarget = vm.parseJsonUint(json, ".healthFactorTarget");
-        c.yieldOracle = vm.parseJsonAddress(json, ".yieldOracle");
-        c.swapFactory = vm.parseJsonAddress(json, ".swapFactory");
-        c.yieldDebtPool = vm.parseJsonAddress(json, ".yieldDebtPool");
+        c.collateral = vm.parseTomlAddress(toml, ".collateral");
+        c.loanToken = vm.parseTomlAddress(toml, ".loanToken");
+        c.yieldToken = vm.parseTomlAddress(toml, ".yieldToken");
+        c.marketOracle = vm.parseTomlAddress(toml, ".marketOracle");
+        c.marketIrm = vm.parseTomlAddress(toml, ".marketIrm");
+        c.marketLltv = vm.parseTomlUint(toml, ".marketLltv");
+        c.feeYieldDebt = uint24(vm.parseTomlUint(toml, ".feeYieldDebt"));
+        c.feeAssetDebt = uint24(vm.parseTomlUint(toml, ".feeAssetDebt"));
+        c.healthFactorMin = vm.parseTomlUint(toml, ".healthFactorMin");
+        c.healthFactorMax = vm.parseTomlUint(toml, ".healthFactorMax");
+        c.healthFactorMinTarget = vm.parseTomlUint(toml, ".healthFactorMinTarget");
+        c.healthFactorMaxTarget = vm.parseTomlUint(toml, ".healthFactorMaxTarget");
+        c.yieldFactorMax = vm.parseTomlUint(toml, ".yieldFactorMax");
+        c.yieldOracle = vm.parseTomlAddress(toml, ".yieldOracle");
+        c.swapFactory = vm.parseTomlAddress(toml, ".swapFactory");
+        c.yieldDebtPool = vm.parseTomlAddress(toml, ".yieldDebtPool");
+        c.recoveryDelay = vm.parseTomlUint(toml, ".recoveryDelay");
     }
 
     function _marketParams(Config memory c) internal pure returns (MarketParams memory) {

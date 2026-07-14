@@ -12,6 +12,7 @@ import {SwapLib} from "../src/libraries/SwapLib.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockMorpho} from "./mocks/MockMorpho.sol";
 import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
+import {MockUniswapV3Pool} from "./mocks/MockUniswapV3Pool.sol";
 import {MockOracle} from "./mocks/MockOracle.sol";
 import {MockIrm} from "./mocks/MockIrm.sol";
 
@@ -28,8 +29,10 @@ contract TvlLimitTest is Test {
     uint256 internal constant YIELD_PRICE = 1e36;
     uint256 internal constant LLTV = 0.86e18;
     uint256 internal constant HEALTH_FACTOR_MIN = 1.25e18;
-    uint256 internal constant HEALTH_FACTOR_TARGET = 1.45e18;
     uint256 internal constant HEALTH_FACTOR_MAX = 1.65e18;
+    uint256 internal constant HEALTH_FACTOR_MIN_TARGET = 1.3e18;
+    uint256 internal constant HEALTH_FACTOR_MAX_TARGET = 1.6e18;
+    uint256 internal constant YIELD_FACTOR_MAX = 1.01e18;
     uint24 internal constant FEE = 100;
     uint24 internal constant FEE_ASSET_DEBT = 3000;
 
@@ -73,11 +76,15 @@ contract TvlLimitTest is Test {
                 marketLltv: LLTV,
                 feeYieldDebt: FEE,
                 feeAssetDebt: FEE_ASSET_DEBT,
+                yieldDebtPool: address(new MockUniswapV3Pool()),
                 healthFactorMin: HEALTH_FACTOR_MIN,
                 healthFactorMax: HEALTH_FACTOR_MAX,
-                healthFactorTarget: HEALTH_FACTOR_TARGET,
+                healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
+                healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
+                yieldFactorMax: YIELD_FACTOR_MAX,
                 yieldOracle: address(yieldOracle),
                 admin: admin,
+                recoveryDelay: 7 days,
                 name: "Flow Credit Markets WETH",
                 symbol: "fcmWETH"
             })
@@ -273,9 +280,10 @@ contract TvlLimitTest is Test {
 
     function testFuzz_Deposit_RespectsLimit(uint96 limit, uint96 amount) public {
         // Bound inputs so we isolate limit enforcement from balance/allowance
-        // failures.
+        // failures. Amount is >= 1: a zero deposit reverts in Morpho (ZERO_ASSETS),
+        // unrelated to limit enforcement.
         limit = uint96(bound(uint256(limit), 0, USER_BAL));
-        amount = uint96(bound(uint256(amount), 0, USER_BAL));
+        amount = uint96(bound(uint256(amount), 1, USER_BAL));
 
         vm.prank(owner);
         vault.setMaxTvl(limit);

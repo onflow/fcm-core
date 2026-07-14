@@ -1,0 +1,81 @@
+name: Security (static analysis)
+
+# Static security gate for the Solidity contracts: Slither + Solhint.
+#
+# WHY THESE TWO TOOLS (and only these two):
+#   Both are fully DETERMINISTIC and reproducible from the (public) source — an
+#   attacker can already run them against this repo themselves, so surfacing
+#   their output in public CI leaks nothing new, while the merge gate keeps
+#   flagged code from shipping.
+#     - Slither  — deep dataflow/detector analysis with per-finding IMPACT
+#                  levels (High/Medium/Low/Informational), so the gate can fail
+#                  on important findings only, plus first-class inline
+#                  suppression (`// slither-disable-next-line`).
+#     - Solhint  — style/best-practice lint with error/warning severities and
+#                  inline suppression (`// solhint-disable-next-line`).
+#
+# SEVERITY GATE:
+#   Slither runs with `--fail-medium`, so Medium-or-higher-impact findings fail
+#   the build. Low/Informational findings are still printed in the log for
+#   review but do not block merges. Solhint fails on `error`-severity rules only
+#   (warnings are advisory).
+#
+# IGNORING A FALSE ALARM:
+#   Slither:
+#      // slither-disable-next-line <detector> -> <why this is safe to ignore>
+#   Solhint:
+#      // solhint-disable-next-line <rule-id> -> <why this is safe to ignore>
+#
+# The detector/rule id is the name printed in the report output.
+# Reproduce this gate locally before pushing with: `make security-ci`
+
+permissions: {}
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  static:
+    name: Slither + Solhint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: solidity
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      # Slither compiles the project via Foundry (forge build), which fetches
+      # the pinned solc (0.8.35, see foundry.toml) through svm.
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Versions pinned to match the local containerized scanner
+      # (security/docker/Dockerfile) so CI and `make security-ci` agree exactly.
+      - name: Install Slither (pinned)
+        run: pip install "slither-analyzer==0.11.5"
+
+      - name: Install Solhint (pinned)
+        run: npm install -g "solhint@6.2.1"
+
+      # Fails the build on Medium-or-higher-impact findings. Low/Informational
+      # findings print for review but do not block. See header for how to
+      # suppress a false positive inline.
+      - name: Slither
+        run: slither . --config-file slither.config.json --fail-medium
+
+      # Fails only on `error`-severity rules (see .solhint.json); warnings are
+      # advisory and do not block.
+      - name: Solhint
+        run: solhint 'src/**/*.sol'

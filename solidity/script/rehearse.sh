@@ -3,9 +3,9 @@
 # Full deployment rehearsal against an anvil fork of Flow EVM mainnet.
 #
 # Runs the entire production sequence -- seed the Morpho market, deploy the
-# yield oracle + FCMVault, then a real deposit/redeem round-trip -- against a
-# local fork of live mainnet state, with state carried between steps. Real
-# Morpho, FlowSwap, Pyth, and token contracts; zero real funds.
+# yield oracle + FCMVault, then a real deposit/rebalance/redeem round-trip --
+# against a local fork of live mainnet state, with state carried between steps.
+# Real Morpho, FlowSwap, Pyth, and token contracts; zero real funds.
 #
 # Sequence:
 #   1. start `anvil --fork-url <mainnet>` (chain id 747 is preserved, so the
@@ -33,7 +33,7 @@ RPC=http://127.0.0.1:${ANVIL_PORT}
 KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 ADDR=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 
-# Mainnet contracts (see deployments/mainnet.json and the root README)
+# Mainnet contracts (see deployments/mainnet.toml and the root README)
 WETH=0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590
 PYUSD0=0x99aF3EeA856556646C98c8B9b2548Fe815240750
 MARKET_ORACLE=0xD744044044C0Dd0c73BeA440747115674Ebae030
@@ -111,7 +111,7 @@ MAX_TVL=$MAX_TVL forge script script/DeployVault.s.sol \
 VAULT=$(grep -E 'FCMVault: +0x[0-9a-fA-F]{40}' "$DEPLOY_LOG" | grep -oE '0x[0-9a-fA-F]{40}')
 [ -n "$VAULT" ] || { echo "rehearse: could not parse FCMVault address from deploy output" >&2; exit 1; }
 
-log "LiveCheck: deposit/redeem round-trip against $VAULT"
+log "LiveCheck: deposit/rebalance/redeem round-trip against $VAULT"
 VAULT=$VAULT CHECK_AMOUNT=$CHECK_AMOUNT forge script script/LiveCheck.s.sol \
   --rpc-url "$RPC" --broadcast --private-key "$KEY"
 

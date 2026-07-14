@@ -7,6 +7,6 @@
 [submodule "solidity/lib/morpho-blue"]
 	path = solidity/lib/morpho-blue
 	url = https://github.com/morpho-org/morpho-blue
-[submodule "solidity/lib/ERC4626-Contracts"]
-	path = solidity/lib/ERC4626-Contracts
-	url = https://github.com/ERC4626-Alliance/ERC4626-Contracts
+[submodule "solidity/lib/Yearn-ERC4626-Router"]
+	path = solidity/lib/Yearn-ERC4626-Router
+	url = https://github.com/yearn/Yearn-ERC4626-Router

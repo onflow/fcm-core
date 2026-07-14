@@ -48,6 +48,7 @@ library MarketLib {
     /// @dev Passes `shares = 0` so Morpho interprets the call as an asset-denominated borrow.
     /// Reverts inside Morpho if the resulting position would exceed LLTV.
     function borrow(MarketParams memory market, uint256 assets) internal {
+        // slither-disable-next-line unused-return -> asset-denominated borrow (shares=0); returned share/asset counts aren't needed
         MORPHO.borrow(market, assets, 0, address(this), address(this));
     }
 
@@ -64,7 +65,25 @@ library MarketLib {
         internal
         returns (uint256 assetsRepaid, uint256 sharesRepaid)
     {
+        // slither-disable-next-line unused-return -> return is forwarded but no caller consumes it; repay reverts on failure
         return MORPHO.repay(market, assets, 0, address(this), "");
+    }
+
+    /// @notice Repay the entire borrow position, by shares, so the debt is
+    ///         zeroed exactly.
+    /// @dev    Repaying by assets can't zero the position exactly: shares are far
+    ///         finer-grained than assets, so converting an asset amount back to
+    ///         shares either over-shoots (repaying `debt()` over-burns -> revert)
+    ///         or under-shoots (leaving dust borrow shares that block a
+    ///         full-collateral withdrawal). Repaying by shares clears it precisely.
+    ///         Morpho pulls the required loan token from this contract's balance,
+    ///         so the caller must pre-fund it.
+    /// @return assetsRepaid Loan token consumed to clear the position.
+    function repayAll(MarketParams memory market) internal returns (uint256 assetsRepaid) {
+        uint256 borrowShares = uint256(MORPHO.position(market.id(), address(this)).borrowShares);
+        if (borrowShares == 0) return 0;
+        // slither-disable-next-line unused-return -> sharesRepaid intentionally dropped; only assetsRepaid is needed
+        (assetsRepaid,) = MORPHO.repay(market, 0, borrowShares, address(this), "");
     }
 
     /// @notice Withdraw `assets` units of the collateral token from this

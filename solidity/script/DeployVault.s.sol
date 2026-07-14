@@ -31,7 +31,7 @@ import {ConfiguredScript} from "./ConfiguredScript.s.sol";
 ///
 ///         Usage (dry-run first by dropping --broadcast):
 ///           MAX_TVL=... forge script script/DeployVault.s.sol \
-///             --rpc-url flow_mainnet --broadcast --private-key $PRIVATE_KEY
+///             --rpc-url flow_mainnet --broadcast --account "$ACCOUNT"
 contract DeployVault is ConfiguredScript {
     function run() public {
         Config memory c = _loadConfig();
@@ -65,11 +65,15 @@ contract DeployVault is ConfiguredScript {
                 marketLltv: c.marketLltv,
                 feeYieldDebt: c.feeYieldDebt,
                 feeAssetDebt: c.feeAssetDebt,
+                yieldDebtPool: c.yieldDebtPool,
                 healthFactorMin: c.healthFactorMin,
                 healthFactorMax: c.healthFactorMax,
-                healthFactorTarget: c.healthFactorTarget,
+                healthFactorMinTarget: c.healthFactorMinTarget,
+                healthFactorMaxTarget: c.healthFactorMaxTarget,
+                yieldFactorMax: c.yieldFactorMax,
                 yieldOracle: yieldOracle,
                 admin: deployer,
+                recoveryDelay: c.recoveryDelay,
                 name: name,
                 symbol: symbol
             })
