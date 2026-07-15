@@ -48,6 +48,7 @@ library MarketLib {
     /// @dev Passes `shares = 0` so Morpho interprets the call as an asset-denominated borrow.
     /// Reverts inside Morpho if the resulting position would exceed LLTV.
     function borrow(MarketParams memory market, uint256 assets) internal {
+        // slither-disable-next-line unused-return -> asset-denominated borrow (shares=0); returned share/asset counts aren't needed
         MORPHO.borrow(market, assets, 0, address(this), address(this));
     }
 
@@ -64,6 +65,7 @@ library MarketLib {
         internal
         returns (uint256 assetsRepaid, uint256 sharesRepaid)
     {
+        // slither-disable-next-line unused-return -> return is forwarded but no caller consumes it; repay reverts on failure
         return MORPHO.repay(market, assets, 0, address(this), "");
     }
 
@@ -80,6 +82,7 @@ library MarketLib {
     function repayAll(MarketParams memory market) internal returns (uint256 assetsRepaid) {
         uint256 borrowShares = uint256(MORPHO.position(market.id(), address(this)).borrowShares);
         if (borrowShares == 0) return 0;
+        // slither-disable-next-line unused-return -> sharesRepaid intentionally dropped; only assetsRepaid is needed
         (assetsRepaid,) = MORPHO.repay(market, 0, borrowShares, address(this), "");
     }
 

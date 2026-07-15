@@ -17,8 +17,8 @@ import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 ///         Exercises all three vault legs in sequence. Spends real funds
 ///         (swap fees + price impact), so dry-run first.
 ///
-///         The rebalance is a forced rebalance against real mainnet state.
-///         It may be a no-op if the health factor is already at target.
+///         The rebalance runs against real mainnet state. It is a no-op if the
+///         health factor is already inside the [min, max] band.
 ///
 ///         Everything is read from the vault itself, so this works against
 ///         any FCMVault address with no config file.
@@ -65,11 +65,11 @@ contract LiveCheck is Script {
         require(vault.balanceOf(caller) == sharesBefore + shares, "share balance does not reflect minted shares");
         require(vault.totalAssets() > navBefore, "vault NAV did not grow on deposit");
 
-        // Rebalance the position. Forced, so it drives toward the target
-        // health factor even inside the dead band; against live state it may
-        // be a no-op, which is fine.
+        // Rebalance the position. Acts only when HF is outside the [min, max]
+        // band, driving it to the target just inside the breached bound;
+        // against live state this may be a no-op, which is fine.
         uint256 debtBeforeRebalance = _debt(vault);
-        vault.rebalance(true);
+        vault.rebalance();
         uint256 debtAfterRebalance = _debt(vault);
 
         // Redeem everything we just minted.
