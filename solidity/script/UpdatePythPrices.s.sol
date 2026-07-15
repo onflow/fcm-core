@@ -20,14 +20,10 @@ contract UpdatePythPrices is Script {
 
     IPyth internal constant PYTH = IPyth(0x2880aB155794e7179c9eE2e38200202908C17B43);
 
-    string internal constant HERMES_URL =
-        "https://hermes.pyth.network/v2/updates/price/latest?encoding=hex";
-    string internal constant FLOW_ID =
-        "2fb245b9a84554a0f15aa123cbb5f64cd263b59e9a87d80148cbffab50c69f30";
-    string internal constant ETH_ID =
-        "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace";
-    string internal constant BTC_ID =
-        "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43";
+    string internal constant HERMES_URL = "https://hermes.pyth.network/v2/updates/price/latest?encoding=hex";
+    string internal constant FLOW_ID = "2fb245b9a84554a0f15aa123cbb5f64cd263b59e9a87d80148cbffab50c69f30";
+    string internal constant ETH_ID = "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace";
+    string internal constant BTC_ID = "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43";
 
     address internal constant WFLOW_PYUSD_ORACLE = 0xd8848Ccc8beA82046Da0B144844118db17086af4;
     address internal constant WETH_PYUSD_ORACLE = 0xD744044044C0Dd0c73BeA440747115674Ebae030;
@@ -61,8 +57,7 @@ contract UpdatePythPrices is Script {
         command[1] = "-fsSL";
         command[2] = "--max-time";
         command[3] = "30";
-        command[4] =
-            string.concat(HERMES_URL, "&ids[]=", FLOW_ID, "&ids[]=", ETH_ID, "&ids[]=", BTC_ID);
+        command[4] = string.concat(HERMES_URL, "&ids[]=", FLOW_ID, "&ids[]=", ETH_ID, "&ids[]=", BTC_ID);
 
         string memory response = string(vm.ffi(command));
         string memory updateDataHex = vm.parseJsonString(response, ".binary.data[0]");

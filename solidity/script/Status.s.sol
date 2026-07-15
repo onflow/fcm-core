@@ -50,10 +50,8 @@ contract Status is ConfiguredScript {
 
     function _reportPools(Config memory c) internal view {
         console.log("--- FlowSwap pools");
-        address yieldPool =
-            IUniswapV3Factory(c.swapFactory).getPool(c.yieldToken, c.loanToken, c.feeYieldDebt);
-        address assetPool =
-            IUniswapV3Factory(c.swapFactory).getPool(c.collateral, c.loanToken, c.feeAssetDebt);
+        address yieldPool = IUniswapV3Factory(c.swapFactory).getPool(c.yieldToken, c.loanToken, c.feeYieldDebt);
+        address assetPool = IUniswapV3Factory(c.swapFactory).getPool(c.collateral, c.loanToken, c.feeAssetDebt);
         console.log("yield/debt pool (fee %s): %s", c.feeYieldDebt, yieldPool);
         console.log("asset/debt pool (fee %s): %s", c.feeAssetDebt, assetPool);
         if (yieldPool != c.yieldDebtPool) {
@@ -71,9 +69,7 @@ contract Status is ConfiguredScript {
         try IOracle(c.marketOracle).price() returns (uint256 marketPrice) {
             console.log("market oracle price (1e36-scaled): %s", marketPrice);
         } catch {
-            console.log(
-                "MARKET ORACLE REVERTING (stale Pyth feed?) -- vault operations will fail until it updates"
-            );
+            console.log("MARKET ORACLE REVERTING (stale Pyth feed?) -- vault operations will fail until it updates");
         }
         if (c.yieldOracle != address(0)) {
             console.log("yield oracle (configured): %s", c.yieldOracle);

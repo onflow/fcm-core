@@ -276,9 +276,7 @@ contract FCMVaultTest is Test {
         uint256 assetsOut = vault.redeem(shares / 2, user, user);
 
         // ~half of each leg consumed (within 0.1% — virtual-share offset).
-        assertApproxEqRel(
-            WETH.balanceOf(address(MORPHO)), collateralBefore / 2, 1e15, "collateral halved"
-        );
+        assertApproxEqRel(WETH.balanceOf(address(MORPHO)), collateralBefore / 2, 1e15, "collateral halved");
         assertApproxEqRel(FUSDEV.balanceOf(address(vault)), fusdevBefore / 2, 1e15, "fusdev halved");
         assertApproxEqRel(assetsOut, amount / 2, 1e15, "assetsOut approx half");
 
@@ -370,9 +368,7 @@ contract FCMVaultTest is Test {
         uint256 assetsOut = vault.redeem(shares, user, user);
 
         assertApproxEqRel(assetsOut, fairValue, 0.02e18, "full pro-rata value, not a haircut");
-        assertLt(
-            WETH.balanceOf(address(MORPHO)), mkCollBefore, "collateral sold to cover shortfall"
-        );
+        assertLt(WETH.balanceOf(address(MORPHO)), mkCollBefore, "collateral sold to cover shortfall");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan-token dust");
         assertEq(vault.balanceOf(user), 0, "shares burned");
     }
@@ -567,9 +563,7 @@ contract FCMVaultTest is Test {
 
         uint256 healthAfter = _healthFactor();
         assertGt(healthAfter, 5e18, "health factor still well above target after bob");
-        assertApproxEqRel(
-            healthAfter, healthBefore, 1e15, "bob did not materially change health factor"
-        );
+        assertApproxEqRel(healthAfter, healthBefore, 1e15, "bob did not materially change health factor");
     }
 
     /// @dev When the position health factor is below the target (price has dropped,
@@ -637,9 +631,7 @@ contract FCMVaultTest is Test {
         bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                stranger,
-                vault.DEFAULT_ADMIN_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, vault.DEFAULT_ADMIN_ROLE()
             )
         );
         vm.prank(stranger);
@@ -676,9 +668,7 @@ contract FCMVaultTest is Test {
         WETH.approve(address(vault), amount);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                bob,
-                vault.EARLY_ACCESS_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
             )
         );
         vault.deposit(amount, bob);
@@ -716,9 +706,7 @@ contract FCMVaultTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                bob,
-                vault.EARLY_ACCESS_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
             )
         );
         vault.transfer(bob, shares);
@@ -741,9 +729,7 @@ contract FCMVaultTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                user,
-                vault.EARLY_ACCESS_ROLE()
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user, vault.EARLY_ACCESS_ROLE()
             )
         );
         vm.prank(user);
@@ -1006,9 +992,7 @@ contract FCMVaultTest is Test {
         (uint160 loStart,) = h.exposed_yieldDebtSwapLimit(address(PYUSD0)); // zeroForOne
         (uint160 hiStart,) = h.exposed_yieldDebtSwapLimit(address(FUSDEV)); // oneForZero
         assertEq(uint256(loStart), sqrtFloor, "zeroForOne = Q96*sqrt(1-slip)");
-        assertEq(
-            uint256(hiStart), Math.mulDiv(q96, q96, sqrtFloor), "oneForZero = Q96/sqrt(1-slip)"
-        );
+        assertEq(uint256(hiStart), Math.mulDiv(q96, q96, sqrtFloor), "oneForZero = Q96/sqrt(1-slip)");
 
         // The two directions differ by exactly the slippage factor 1/(1-slip).
         assertApproxEqRel(
@@ -1025,9 +1009,7 @@ contract FCMVaultTest is Test {
         _setPoolPrice(1, 4);
         (uint160 lo,) = h.exposed_yieldDebtSwapLimit(address(PYUSD0));
         (uint160 hi,) = h.exposed_yieldDebtSwapLimit(address(FUSDEV));
-        assertApproxEqRel(
-            uint256(lo) * uint256(hi), _priceX192(1, 4), 1e12, "product ~= P_oracle*2**192"
-        );
+        assertApproxEqRel(uint256(lo) * uint256(hi), _priceX192(1, 4), 1e12, "product ~= P_oracle*2**192");
     }
 
     /// @notice The swap-limit feasibility flag flips with the pool's live spot:
@@ -1206,10 +1188,7 @@ contract FCMVaultTest is Test {
         assertGt(FUSDEV.balanceOf(address(vault)), yieldBefore, "rebalance bought more yield");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token after rebalance");
         assertApproxEqRel(
-            _healthFactor(),
-            HEALTH_FACTOR_MAX_TARGET,
-            1e15,
-            "rebalance restored HF to upper re-entry target"
+            _healthFactor(), HEALTH_FACTOR_MAX_TARGET, 1e15, "rebalance restored HF to upper re-entry target"
         );
 
         // Redeem everything.
@@ -1251,8 +1230,7 @@ contract FCMVaultTest is Test {
         vm.prank(user);
         vault.redeem(shares / 2, user, user);
 
-        (uint256 collateral, uint256 debt, uint256 yield,,,) =
-            _assertVaultStateMatchesCurrentState();
+        (uint256 collateral, uint256 debt, uint256 yield,,,) = _assertVaultStateMatchesCurrentState();
         // A partial redeem leaves a live position behind.
         assertGt(collateral, 0, "collateral remains");
         assertGt(debt, 0, "debt remains");
@@ -1295,8 +1273,7 @@ contract FCMVaultTest is Test {
         vm.recordLogs();
         vault.rebalance();
 
-        (,, uint256 yield, uint256 collPrice,, uint256 yieldPrice) =
-            _assertVaultStateMatchesCurrentState();
+        (,, uint256 yield, uint256 collPrice,, uint256 yieldPrice) = _assertVaultStateMatchesCurrentState();
         assertEq(collPrice, 2300e36, "snapshot collateral price is the new oracle price");
         assertEq(yieldPrice, YIELD_PRICE, "snapshot yield price");
         assertGt(yield, 0, "yield leg present");
@@ -1402,8 +1379,8 @@ contract FCMVaultTest is Test {
         Position memory pos = MORPHO.position(marketId, address(vault));
         if (pos.borrowShares == 0) return 0;
         Market memory mkt = MORPHO.market(marketId);
-        return (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1))
-            / (uint256(mkt.totalBorrowShares) + 1e6);
+        return
+            (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1)) / (uint256(mkt.totalBorrowShares) + 1e6);
     }
 
     /// @dev Simulate a liquidation of the vault's position via the MockMorpho
@@ -1412,12 +1389,7 @@ contract FCMVaultTest is Test {
     function _liquidate(uint256 seizedCollateral, uint256 repaidAssets) internal {
         (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
         MockMorpho(address(MORPHO))
-            .liquidate(
-                MarketParams(lt, ct, oracle, irm, lltv_),
-                address(vault),
-                seizedCollateral,
-                repaidAssets
-            );
+            .liquidate(MarketParams(lt, ct, oracle, irm, lltv_), address(vault), seizedCollateral, repaidAssets);
     }
 
     function _baseParams() internal view returns (FCMVault.InitParams memory) {
@@ -1450,11 +1422,10 @@ contract FCMVaultTest is Test {
         Position memory pos = MORPHO.position(marketId, address(vault));
         Market memory mkt = MORPHO.market(marketId);
         if (pos.borrowShares == 0) return type(uint256).max;
-        uint256 debt = (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1))
-            / (uint256(mkt.totalBorrowShares) + 1e6);
-        uint256 maxBorrow = Math.mulDiv(
-            uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36), 1e18
-        );
+        uint256 debt =
+            (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1)) / (uint256(mkt.totalBorrowShares) + 1e6);
+        uint256 maxBorrow =
+            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36), 1e18);
         return Math.mulDiv(maxBorrow, 1e18, debt);
     }
 
@@ -1673,12 +1644,8 @@ contract FCMVaultTest is Test {
 
         vault.rebalance();
 
-        assertApproxEqAbs(
-            WETH.balanceOf(address(MORPHO)), collBefore, 1, "collateral unchanged (below band)"
-        );
-        assertApproxEqAbs(
-            FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged (below band)"
-        );
+        assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "collateral unchanged (below band)");
+        assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged (below band)");
     }
 
     /// @notice A dust surplus whose swap output rounds to zero must no-op the harvest,
@@ -1750,12 +1717,8 @@ contract FCMVaultTest is Test {
 
         vault.rebalance(); // does not revert while a recovery is merely pending
 
-        assertApproxEqAbs(
-            WETH.balanceOf(address(MORPHO)), collBefore, 1, "harvest frozen: no collateral"
-        );
-        assertApproxEqAbs(
-            FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "harvest frozen: yield untouched"
-        );
+        assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "harvest frozen: no collateral");
+        assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "harvest frozen: yield untouched");
     }
 
     /// @notice With partial-fill swaps (#72), harvest can no longer block the delever: when
@@ -1826,9 +1789,7 @@ contract FCMVaultTest is Test {
 
         uint256 feeShares = vault.balanceOf(feeRcpt);
         assertGt(feeShares, 0, "fee shares minted");
-        assertApproxEqRel(
-            vault.convertToAssets(feeShares), nav * 200 / 10_000, 2e16, "mgmt ~2% NAV"
-        );
+        assertApproxEqRel(vault.convertToAssets(feeShares), nav * 200 / 10_000, 2e16, "mgmt ~2% NAV");
     }
 
     /// @notice Performance fee ~ rate * gain above HWM; not double-charged.
@@ -1846,9 +1807,7 @@ contract FCMVaultTest is Test {
         vault.accrueFees();
         uint256 feeShares = vault.balanceOf(feeRcpt);
         assertGt(feeShares, 0, "perf fee minted");
-        assertApproxEqRel(
-            vault.convertToAssets(feeShares), gain * 2_000 / 10_000, 3e16, "perf ~20% gain"
-        );
+        assertApproxEqRel(vault.convertToAssets(feeShares), gain * 2_000 / 10_000, 3e16, "perf ~20% gain");
 
         // Second accrual with no new gain -> no additional fee (HWM holds).
         uint256 prev = vault.balanceOf(feeRcpt);
@@ -2000,10 +1959,7 @@ contract FCMVaultTest is Test {
         vault.accrueFees();
 
         assertApproxEqRel(
-            vault.convertToAssets(vault.balanceOf(feeRcpt)),
-            nav * 200 / 10_000,
-            2e16,
-            "one year billed, not three"
+            vault.convertToAssets(vault.balanceOf(feeRcpt)), nav * 200 / 10_000, 2e16, "one year billed, not three"
         );
     }
 
@@ -2032,9 +1988,7 @@ contract FCMVaultTest is Test {
 
         // Tight tolerance: a naive (non-grossed) mint would land ~9.09%, far outside.
         uint256 recipientValue = vault.convertToAssets(vault.balanceOf(feeRcpt));
-        assertApproxEqRel(
-            recipientValue, vault.totalAssets() / 10, 1e15, "recipient holds true 10%"
-        );
+        assertApproxEqRel(recipientValue, vault.totalAssets() / 10, 1e15, "recipient holds true 10%");
     }
 
     /// @notice Fees accrue on the `rebalance` path — the hook runs before the

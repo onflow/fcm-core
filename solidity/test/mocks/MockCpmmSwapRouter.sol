@@ -39,8 +39,7 @@ contract MockCpmmSwapRouter {
         require(p.amountOutMinimum == 0, "amountOutMinimum not implemented in this mock");
 
         bool zeroForOne = p.tokenIn < p.tokenOut;
-        (address token0, address token1) =
-            zeroForOne ? (p.tokenIn, p.tokenOut) : (p.tokenOut, p.tokenIn);
+        (address token0, address token1) = zeroForOne ? (p.tokenIn, p.tokenOut) : (p.tokenOut, p.tokenIn);
         uint256 r0 = reserveOf[token0];
         uint256 r1 = reserveOf[token1];
         require(r0 > 0 && r1 > 0, "reserves unset");
@@ -62,9 +61,7 @@ contract MockCpmmSwapRouter {
         if (consumed == 0) return 0;
 
         // out = reserveOut - k / (reserveIn + consumed)
-        amountOut = zeroForOne
-            ? r1 - Math.mulDiv(r0, r1, r0 + consumed)
-            : r0 - Math.mulDiv(r0, r1, r1 + consumed);
+        amountOut = zeroForOne ? r1 - Math.mulDiv(r0, r1, r0 + consumed) : r0 - Math.mulDiv(r0, r1, r1 + consumed);
 
         MockERC20(p.tokenIn).burn(msg.sender, consumed);
         MockERC20(p.tokenOut).mint(p.recipient, amountOut);

@@ -25,12 +25,7 @@ contract MockMorpho {
         market[mp.id()].lastUpdate = uint128(block.timestamp);
     }
 
-    function supplyCollateral(
-        MarketParams memory mp,
-        uint256 assets,
-        address onBehalf,
-        bytes calldata
-    ) external {
+    function supplyCollateral(MarketParams memory mp, uint256 assets, address onBehalf, bytes calldata) external {
         require(assets != 0, "ZERO_ASSETS");
         Id id = mp.id();
         position[id][onBehalf].collateral += uint128(assets);
@@ -44,14 +39,15 @@ contract MockMorpho {
         /*shares*/
         address onBehalf,
         address receiver
-    ) external returns (uint256, uint256) {
+    )
+        external
+        returns (uint256, uint256)
+    {
         Id id = mp.id();
         Market storage m = market[id];
 
         uint256 newShares = _mulDivUp(
-            assets,
-            uint256(m.totalBorrowShares) + VIRTUAL_SHARES,
-            uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
+            assets, uint256(m.totalBorrowShares) + VIRTUAL_SHARES, uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
         );
 
         position[id][onBehalf].borrowShares += uint128(newShares);
@@ -74,13 +70,10 @@ contract MockMorpho {
     ///         mock-only safeguard against rounding overshoot on full repay;
     ///         real Morpho enforces this via its accounting invariants. The
     ///         `shares` and `data` parameters are ignored.
-    function repay(
-        MarketParams memory mp,
-        uint256 assets,
-        uint256 shares,
-        address onBehalf,
-        bytes calldata
-    ) external returns (uint256, uint256) {
+    function repay(MarketParams memory mp, uint256 assets, uint256 shares, address onBehalf, bytes calldata)
+        external
+        returns (uint256, uint256)
+    {
         Id id = mp.id();
         Market storage m = market[id];
 
@@ -90,16 +83,12 @@ contract MockMorpho {
         if (shares > 0) {
             sharesToBurn = shares;
             assets = _mulDivUp(
-                shares,
-                uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS,
-                uint256(m.totalBorrowShares) + VIRTUAL_SHARES
+                shares, uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS, uint256(m.totalBorrowShares) + VIRTUAL_SHARES
             );
         } else {
             // Morpho rounds by-assets repay DOWN (toSharesDown).
             sharesToBurn = _mulDivDown(
-                assets,
-                uint256(m.totalBorrowShares) + VIRTUAL_SHARES,
-                uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
+                assets, uint256(m.totalBorrowShares) + VIRTUAL_SHARES, uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
             );
         }
         // No clamp: like Morpho, over-burning more shares than the position holds
@@ -123,12 +112,7 @@ contract MockMorpho {
     ///         needing HF-bound behavior should drive position state
     ///         explicitly. Redeem tests don't need it because they repay
     ///         debt before withdrawing collateral.
-    function withdrawCollateral(
-        MarketParams memory mp,
-        uint256 assets,
-        address onBehalf,
-        address receiver
-    ) external {
+    function withdrawCollateral(MarketParams memory mp, uint256 assets, address onBehalf, address receiver) external {
         Id id = mp.id();
         position[id][onBehalf].collateral -= uint128(assets);
         IERC20(mp.collateralToken).transfer(receiver, assets);
@@ -153,12 +137,9 @@ contract MockMorpho {
     /// @param  seizedCollateral Collateral units removed from the position.
     /// @param  repaidAssets     Loan-token debt repaid (reduces borrow shares
     ///                          and market totals).
-    function liquidate(
-        MarketParams memory mp,
-        address borrower,
-        uint256 seizedCollateral,
-        uint256 repaidAssets
-    ) external {
+    function liquidate(MarketParams memory mp, address borrower, uint256 seizedCollateral, uint256 repaidAssets)
+        external
+    {
         Id id = mp.id();
         Market storage m = market[id];
 

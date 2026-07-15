@@ -8,8 +8,7 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 ///         Internal helpers — inlined into the caller, recipient is always
 ///         `address(this)`.
 library SwapLib {
-    ISwapRouter internal constant SWAP_ROUTER =
-        ISwapRouter(0xeEDC6Ff75e1b10B903D9013c358e446a73d35341);
+    ISwapRouter internal constant SWAP_ROUTER = ISwapRouter(0xeEDC6Ff75e1b10B903D9013c358e446a73d35341);
 
     /// @notice Swap `amountIn` of `tokenIn` for `tokenOut` with no slippage
     ///         bound. The router decides the realized price. Recipient is
@@ -101,13 +100,10 @@ library SwapLib {
     /// @param  amountOut       Exact amount of `tokenOut` to receive.
     /// @param  amountInMaximum Max `tokenIn` to spend; router reverts above it.
     /// @return amountIn        Realized `tokenIn` spent.
-    function swapExactOut(
-        address tokenIn,
-        address tokenOut,
-        uint24 fee,
-        uint256 amountOut,
-        uint256 amountInMaximum
-    ) internal returns (uint256 amountIn) {
+    function swapExactOut(address tokenIn, address tokenOut, uint24 fee, uint256 amountOut, uint256 amountInMaximum)
+        internal
+        returns (uint256 amountIn)
+    {
         return SWAP_ROUTER.exactOutputSingle(
             ISwapRouter.ExactOutputSingleParams({
                 tokenIn: tokenIn,

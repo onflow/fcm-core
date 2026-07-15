@@ -70,8 +70,7 @@ contract Rebalance is Script {
         Position memory pos = MORPHO.position(mp.id(), address(vault));
         if (pos.borrowShares == 0) return type(uint256).max;
         uint256 debt = _debtFromPosition(mp, pos);
-        uint256 maxBorrow =
-            (uint256(pos.collateral) * ((IOracle(mp.oracle).price() * mp.lltv) / 1e36)) / 1e18;
+        uint256 maxBorrow = (uint256(pos.collateral) * ((IOracle(mp.oracle).price() * mp.lltv) / 1e36)) / 1e18;
         return (maxBorrow * 1e18) / debt;
     }
 
@@ -86,14 +85,9 @@ contract Rebalance is Script {
     /// @dev Converts borrow shares to loan-token debt with Morpho's own
     ///      `SharesMathLib.toAssetsUp`, matching how Morpho charges debt (and
     ///      the contract's `MarketLib.debt`).
-    function _debtFromPosition(MarketParams memory mp, Position memory pos)
-        internal
-        view
-        returns (uint256)
-    {
+    function _debtFromPosition(MarketParams memory mp, Position memory pos) internal view returns (uint256) {
         Market memory mkt = MORPHO.market(mp.id());
-        return uint256(pos.borrowShares)
-            .toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
+        return uint256(pos.borrowShares).toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
     }
 
     function _market(FCMVault vault) internal view returns (MarketParams memory) {

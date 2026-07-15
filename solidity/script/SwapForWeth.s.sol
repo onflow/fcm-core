@@ -52,8 +52,7 @@ contract SwapForWeth is ConfiguredScript {
         uint256 slippageBps = vm.envOr("SLIPPAGE_BPS", uint256(300));
         require(slippageBps < BPS, "SLIPPAGE_BPS must be < 10000");
 
-        address pool =
-            IUniswapV3Factory(c.swapFactory).getPool(address(WFLOW), weth, WFLOW_WETH_FEE);
+        address pool = IUniswapV3Factory(c.swapFactory).getPool(address(WFLOW), weth, WFLOW_WETH_FEE);
         require(pool != address(0), "no WFLOW/WETH pool at fee tier");
 
         vm.startBroadcast();
@@ -86,11 +85,7 @@ contract SwapForWeth is ConfiguredScript {
         vm.stopBroadcast();
 
         console.log("swapped %s WFLOW (wei) for %s WETH (wei)", amountIn, received);
-        console.log(
-            "min acceptable was %s; account now holds %s WETH (wei)",
-            minOut,
-            IERC20(weth).balanceOf(account)
-        );
+        console.log("min acceptable was %s; account now holds %s WETH (wei)", minOut, IERC20(weth).balanceOf(account));
     }
 
     /// @dev Spot-price-derived minimum WETH out for `amountIn` WFLOW, less
