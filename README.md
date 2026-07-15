@@ -69,8 +69,11 @@ account storage minimum.
 
 | Contract | Address |
 | :--- | :--- |
-| FCMVault | _not yet deployed_ |
-| YieldTokenOracle | _not yet deployed_ |
+| FCMVault (WETH) | [`0x8c0567d42a824e11CFd7cE5a1F17Cfe6bAFCF657`](https://evm.flowscan.io/address/0x8c0567d42a824e11CFd7cE5a1F17Cfe6bAFCF657) |
+| FCMVault (WBTC) | [`0x25220b6E832Be6420aA80fFF5a5787369F3a7c8d`](https://evm.flowscan.io/address/0x25220b6E832Be6420aA80fFF5a5787369F3a7c8d) |
+| YieldTokenOracle (shared) | [`0x144F613490DD55C9844Ef139CFB9B63433dD349F`](https://evm.flowscan.io/address/0x144F613490DD55C9844Ef139CFB9B63433dD349F) |
+
+The prior WBTC vault ([`0x23179E15c1eA2d00848B03eC140B3a62A68589f1`](https://evm.flowscan.io/address/0x23179E15c1eA2d00848B03eC140B3a62A68589f1)) is superseded by the current one and remains redeemable. See the `mainnet-deploy-*` releases for full per-deploy records.
 
 ### Deployed contracts (Flow mainnet — Cadence)
 
