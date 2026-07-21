@@ -77,6 +77,7 @@ contract TvlLimitTest is Test {
                 feeYieldDebt: FEE,
                 feeAssetDebt: FEE_ASSET_DEBT,
                 yieldDebtPool: address(new MockUniswapV3Pool()),
+                assetDebtPool: address(new MockUniswapV3Pool()),
                 healthFactorMin: HEALTH_FACTOR_MIN,
                 healthFactorMax: HEALTH_FACTOR_MAX,
                 healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,

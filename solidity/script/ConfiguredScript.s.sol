@@ -42,6 +42,7 @@ abstract contract ConfiguredScript is Script {
         address yieldOracle;
         address swapFactory;
         address yieldDebtPool;
+        address assetDebtPool;
         uint256 recoveryDelay;
     }
 
@@ -70,6 +71,10 @@ abstract contract ConfiguredScript is Script {
         c.yieldOracle = vm.parseTomlAddress(toml, ".yieldOracle");
         c.swapFactory = vm.parseTomlAddress(toml, ".swapFactory");
         c.yieldDebtPool = vm.parseTomlAddress(toml, ".yieldDebtPool");
+        // Derived from the factory rather than a separate config field: the canonical
+        // collateral/loan pool at the asset/debt fee tier, which harvest's leg 2 routes
+        // through. Existence is asserted in `_requirePoolsExist`.
+        c.assetDebtPool = IUniswapV3Factory(c.swapFactory).getPool(c.collateral, c.loanToken, c.feeAssetDebt);
         c.recoveryDelay = vm.parseTomlUint(toml, ".recoveryDelay");
     }
 
@@ -102,10 +107,7 @@ abstract contract ConfiguredScript is Script {
         address yieldPool = IUniswapV3Factory(c.swapFactory).getPool(c.yieldToken, c.loanToken, c.feeYieldDebt);
         require(yieldPool != address(0), "yield/debt pool missing");
         require(yieldPool == c.yieldDebtPool, "config yieldDebtPool does not match factory");
-        require(
-            IUniswapV3Factory(c.swapFactory).getPool(c.collateral, c.loanToken, c.feeAssetDebt) != address(0),
-            "asset/debt pool missing"
-        );
+        require(c.assetDebtPool != address(0), "asset/debt pool missing");
     }
 
     /// @dev The account whose key signs broadcast transactions. Must be

@@ -52,6 +52,7 @@ contract FCMVaultTest is Test {
     MockOracle internal marketOracle;
     MockOracle internal yieldOracle;
     MockUniswapV3Pool internal yieldPool;
+    MockUniswapV3Pool internal assetPool;
 
     address internal admin = address(0x12345);
     address internal user = address(0xA11CE);
@@ -74,6 +75,9 @@ contract FCMVaultTest is Test {
         // oracle so a rebalance's oracle-derived price limit sits on the
         // tradeable side of spot.
         yieldPool = new MockUniswapV3Pool();
+        // Asset/debt pool spot defaults to 1:1 (Q96); harvest tests set the market
+        // oracle to 1:1 so its leg-2 (loan->collateral) limit sits on the tradeable side.
+        assetPool = new MockUniswapV3Pool();
 
         vault = new FCMVault(
             FCMVault.InitParams({
@@ -86,6 +90,7 @@ contract FCMVaultTest is Test {
                 feeYieldDebt: FEE,
                 feeAssetDebt: FEE_ASSET_DEBT,
                 yieldDebtPool: address(yieldPool),
+                assetDebtPool: address(assetPool),
                 healthFactorMin: HEALTH_FACTOR_MIN,
                 healthFactorMax: HEALTH_FACTOR_MAX,
                 healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
@@ -1403,6 +1408,7 @@ contract FCMVaultTest is Test {
             feeYieldDebt: FEE,
             feeAssetDebt: FEE_ASSET_DEBT,
             yieldDebtPool: address(yieldPool),
+            assetDebtPool: address(assetPool),
             healthFactorMin: HEALTH_FACTOR_MIN,
             healthFactorMax: HEALTH_FACTOR_MAX,
             healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
@@ -1591,6 +1597,32 @@ contract FCMVaultTest is Test {
         assertApproxEqAbs(_debt(), debtBefore, 1, "debt unchanged: no re-lever");
         assertGt(_healthFactor(), hfBefore, "hf rose (de-risked, not re-levered)");
         assertApproxEqRel(vault.totalAssets(), navBefore, 1e15, "NAV ~flat");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token");
+    }
+
+    /// @notice Harvest's loan->collateral leg is oracle-floored like the first leg: when the
+    ///         asset/debt pool is priced past the slippage bound, the vault does not buy
+    ///         collateral at the mispriced rate. The leg is skipped and the realized surplus
+    ///         is repaid as debt instead (a deleverage), leaving no loan token idle.
+    function test_Rebalance_HarvestSkipsMispricedCollateralLeg() public {
+        marketOracle.setPrice(1e36);
+        _depositFor(user, 1 ether);
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 20);
+
+        // First leg (yield->loan) trades on `yieldPool`, still at the oracle price, so the
+        // surplus is realized in loan token. The asset/debt pool, however, is dragged far past
+        // the bound, so the second leg (loan->collateral) cannot execute within tolerance.
+        assetPool.setSqrtPriceX96(uint160(_sqrtPriceX96(4, 1)));
+
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+        uint256 debtBefore = _debt();
+        uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance();
+
+        assertLt(FUSDEV.balanceOf(address(vault)), yieldBefore, "surplus yield sold (first leg)");
+        assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "no collateral bought off-oracle");
+        assertLt(_debt(), debtBefore, "realized surplus repaid as debt (leg skipped)");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token");
     }
 
