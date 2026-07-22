@@ -1626,6 +1626,35 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token");
     }
 
+    /// @notice Harvest's loan->collateral leg partial-fills like the rebalance swaps: when
+    ///         the asset/debt pool can only absorb part of the realized surplus within the
+    ///         slippage bound, the vault buys what it can at tolerance, repays the remainder
+    ///         as debt, and leaves no loan token idle — the split-path accounting.
+    function test_Rebalance_HarvestPartialCollateralLegRepaysRemainder() public {
+        // Fair loan-per-collateral sits 0.7% below the CPMM's 1:1 spot, so leg 2's
+        // price-raising limit leaves only ~0.15% of pool depth of room while leg 1
+        // (yield oracle at spot) keeps its full 1% — leg 1 fills, leg 2 can't.
+        marketOracle.setPrice(0.993e36);
+        _depositFor(user, 1 ether);
+        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 20);
+
+        // Shallow CPMM on all three tokens: leg 1's ~0.03e18 surplus fits its ~0.05e18
+        // cap (full fill), leg 2's cap is ~0.015e18 (partial fill).
+        _installCpmmRouter(10e18);
+        MockCpmmSwapRouter(address(SwapLib.SWAP_ROUTER)).setReserves(address(WETH), 10e18);
+
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+        uint256 debtBefore = _debt();
+        uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
+
+        vault.rebalance();
+
+        assertLt(FUSDEV.balanceOf(address(vault)), yieldBefore, "surplus yield sold (leg 1)");
+        assertGt(WETH.balanceOf(address(MORPHO)), collBefore, "some collateral bought within tolerance");
+        assertLt(_debt(), debtBefore, "unconverted remainder repaid as debt");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token");
+    }
+
     /// @notice A surplus large enough to push hf past `healthFactorMax` triggers the
     ///         leverage leg in the same call: harvest adds collateral (hf rises above max),
     ///         then `_adjustLeverage` levers back to `maxTarget`. So debt grows here — unlike

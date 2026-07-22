@@ -423,13 +423,11 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
             : _swapLimit(yieldDebtPool, tokenIn, address(yieldToken), MarketLib.ORACLE_PRICE_SCALE, loanPerYield);
     }
 
-    /// @dev Price limit for a swap on the asset/debt pool (harvest leg 2). The market
-    ///      oracle quotes loan per collateral, 1e36-scaled.
-    function _assetDebtSwapLimit(address tokenIn) internal view returns (uint160, bool) {
-        uint256 loanPerCollateral = market.oraclePrice();
-        return tokenIn == asset()
-            ? _swapLimit(assetDebtPool, tokenIn, address(loanToken), loanPerCollateral, MarketLib.ORACLE_PRICE_SCALE)
-            : _swapLimit(assetDebtPool, tokenIn, asset(), MarketLib.ORACLE_PRICE_SCALE, loanPerCollateral);
+    /// @dev Price limit for harvest leg 2's loan->collateral swap on the asset/debt
+    ///      pool. The market oracle quotes loan per collateral, 1e36-scaled.
+    function _assetDebtSwapLimit() internal view returns (uint160, bool) {
+        return
+            _swapLimit(assetDebtPool, address(loanToken), asset(), MarketLib.ORACLE_PRICE_SCALE, market.oraclePrice());
     }
 
     /// @notice Set the management fee rate (basis points), capped at `MAX_MANAGEMENT_FEE_BPS`.
@@ -1010,7 +1008,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
     ///      partial-fills up to its limit and the leg is skipped when the pool is
     ///      already past it, so harvest never reverts the rebalance or blocks the
     ///      delever leg. Any surplus the second leg does not convert to collateral is
-    ///      repaid as debt, so nothing is left idle as loan token.
+    ///      repaid as debt, capped at the debt outstanding -- loan token idles only in
+    ///      the extreme where the realized surplus exceeds the whole debt.
     ///
     ///      The two legs treat a partial fill differently. Leg 1's unsold surplus stays as
     ///      yield and is retried next harvest; leg 2's is one-way -- loan it cannot convert
@@ -1057,15 +1056,16 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
 
         // Leg 2: loan -> collateral on the asset/debt pool, bounded to the market oracle
         // like leg 1 -- partial-fills up to the limit, skipped when already past the bound.
-        (uint160 assetLimit, bool assetOk) = _assetDebtSwapLimit(address(loanToken));
+        (uint160 assetLimit, bool assetOk) = _assetDebtSwapLimit();
         uint256 collateralAdded =
             assetOk ? SwapLib.swapExactInToLimit(address(loanToken), asset(), feeAssetDebt, loanGot, assetLimit) : 0;
         // Supply as collateral only — no re-lever. This raises hf; `rebalance`'s lever
         // branch redeploys the collateral if/when hf later drifts above the band.
         if (collateralAdded > 0) market.supplyCollateral(collateralAdded);
 
-        // Repay whatever leg 2 did not convert (a partial fill, or all of it when skipped)
-        // so nothing is left idle as loan. Capped at the debt so it cannot over-repay.
+        // Repay whatever leg 2 did not convert (a partial fill, or all of it when skipped),
+        // capped at the debt so it cannot over-repay; only a remainder beyond the whole
+        // debt is left idle as loan.
         uint256 leftover = loanToken.balanceOf(address(this)) - loanBefore;
         uint256 toRepay = Math.min(leftover, currentDebt);
         // slither-disable-next-line unused-return -> repay amount is known (toRepay); Morpho reverts on failure
