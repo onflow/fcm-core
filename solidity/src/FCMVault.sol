@@ -380,8 +380,9 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         view
         returns (uint160 limit, bool ok)
     {
-        // token0 is the lower-address token and the pool price is token1/token0. Selling
-        // token0 (`zeroForOne`) pushes the price down; selling token1 pushes it up.
+        // Uniswap orders the pair by address: token0 is the lower-address token 
+        // and the pool price is token1/token0. Selling token0 (`zeroForOne`) pushes 
+        // the price down; selling token1 pushes it up.
         bool zeroForOne = tokenIn < tokenOut;
 
         // Fair price as an exact token1/token0 fraction. Selling token0 makes token1/token0
