@@ -79,6 +79,10 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
     /// @notice Pool fee tier for the asset/debt pool, used to reconcile
     ///         redeem surplus from loan token back to the underlying asset.
     uint24 public immutable feeAssetDebt;
+    /// @notice FlowSwap V3 asset/debt pool for the harvest loan->collateral leg. Its
+    ///         live `slot0` price is read to bound leg 2 to the market oracle, skipping
+    ///         when the pool is already past the slippage bound.
+    address public immutable assetDebtPool;
     /// @notice Health factor below which `rebalance` will delever (sell yield
     ///         to repay debt). The position is over-levered below this bound.
     ///         WAD-scaled.
@@ -221,6 +225,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         uint24 feeYieldDebt;
         uint24 feeAssetDebt;
         address yieldDebtPool;
+        address assetDebtPool;
         uint256 healthFactorMin;
         uint256 healthFactorMax;
         uint256 healthFactorMinTarget;
@@ -297,12 +302,14 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         require(p.healthFactorMaxTarget <= p.healthFactorMax, "HF maxTarget > max");
         require(p.yieldFactorMax >= MarketLib.WAD, "yieldFactorMax < WAD");
         require(p.yieldDebtPool != address(0), "yieldDebtPool zero");
+        require(p.assetDebtPool != address(0), "assetDebtPool zero");
 
         loanToken = p.loanToken;
         yieldToken = p.yieldToken;
         feeYieldDebt = p.feeYieldDebt;
         feeAssetDebt = p.feeAssetDebt;
         yieldDebtPool = p.yieldDebtPool;
+        assetDebtPool = p.assetDebtPool;
         healthFactorMin = p.healthFactorMin;
         healthFactorMax = p.healthFactorMax;
         healthFactorMinTarget = p.healthFactorMinTarget;
@@ -345,46 +352,46 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         maxSlippageBps = newBps;
     }
 
-    /// @dev Resolve the `sqrtPriceLimitX96` for a rebalance swap selling
-    ///      `tokenIn` on the yield/debt pool, and decide whether a swap is
-    ///      feasible at all.
+    /// @dev Resolve the `sqrtPriceLimitX96` and a go/skip flag for a swap selling
+    ///      `tokenIn` for `tokenOut` on `pool`, bounding price impact to `maxSlippageBps`
+    ///      away from a fair rate of `outPerInNum / outPerInDen` (`tokenOut` per `tokenIn`,
+    ///      with token decimals already baked into the fraction). Pure Uniswap-price math:
+    ///      it does not know or care which token is the loan/oracle side.
     ///
-    ///      The limit is the oracle price discounted by `maxSlippageBps`,
-    ///      expressed in the pool's `sqrt(token1/token0) * 2**96` coordinate.
-    ///      The pool fills a swap only while its marginal price is on the good
-    ///      side of this limit, so the realized average price is bounded by
-    ///      `maxSlippageBps` of *price impact* relative to the oracle.
+    ///      The pool price is `token1/token0` (token0 = the lower-address token). The fair
+    ///      rate is mapped to that coordinate and discounted toward the side the swap moves
+    ///      it: selling token0 (`zeroForOne`) drives the price down (limit below spot),
+    ///      selling token1 drives it up (limit above spot). The pool then fills only while
+    ///      its marginal price is on the good side of the limit, so the realized average
+    ///      price is bounded by `maxSlippageBps` of price impact relative to the fair rate.
     ///
-    ///      Token decimals are already baked into the yield oracle price (the
-    ///      Morpho/IOracle convention: `yield * price / 1e36 = loan` in raw
-    ///      units), so the raw `token1/token0` ratio is read straight off it
-    ///      with no decimal adjustment here.
-    ///
-    ///      `ok` is false when the limit is out of tick-math range, or when the
-    ///      pool's live marginal price is already on the bad side of the limit
-    ///      (so any swap would either be a no-op or revert `SPL`) — in that case
-    ///      the caller should skip the swap.
-    /// @param  tokenIn The token the swap sells.
-    /// @return limit   The Q64.96 price limit to pass to the pool.
-    /// @return ok      Whether a swap should be attempted.
-    function _yieldDebtSwapLimit(address tokenIn) internal view returns (uint160 limit, bool ok) {
-        // Uniswap orders the pair by address: token0 is the lower address and
-        // the pool price is token1/token0. Selling token0 (`zeroForOne`) pushes
+    ///      `ok` is false when the limit is out of tick-math range, or when the pool's live
+    ///      marginal price is already on the bad side of it (any swap would no-op or revert
+    ///      `SPL`) — the caller then skips.
+    /// @param  pool        The Uniswap V3 pool for the `tokenIn`/`tokenOut` pair.
+    /// @param  tokenIn     The token the swap sells.
+    /// @param  tokenOut    The token the swap buys.
+    /// @param  outPerInNum Numerator of the fair `tokenOut`-per-`tokenIn` rate.
+    /// @param  outPerInDen Denominator of the fair `tokenOut`-per-`tokenIn` rate.
+    /// @return limit       The Q64.96 price limit to pass to the pool.
+    /// @return ok          Whether a swap should be attempted.
+    function _swapLimit(address pool, address tokenIn, address tokenOut, uint256 outPerInNum, uint256 outPerInDen)
+        internal
+        view
+        returns (uint160 limit, bool ok)
+    {
+        // Uniswap orders the pair by address: token0 is the lower-address token
+        // and the pool price is token1/token0. Selling token0 (`zeroForOne`) pushes
         // the price down; selling token1 pushes it up.
-        bool yieldIsToken0 = address(yieldToken) < address(loanToken);
-        address token0 = yieldIsToken0 ? address(yieldToken) : address(loanToken);
-        bool zeroForOne = (tokenIn == token0);
+        bool zeroForOne = tokenIn < tokenOut;
 
-        // Oracle price as an exact token1/token0 fraction. yieldOracle.price()
-        // is loan-per-yield scaled by 1e36. yield=token0 -> P = loan/yield =
-        // price/1e36; loan=token0 -> P = yield/loan = 1e36/price.
-        uint256 yieldPrice = IOracle(yieldOracle).price();
-        (uint256 numerator, uint256 denominator) =
-            yieldIsToken0 ? (yieldPrice, MarketLib.ORACLE_PRICE_SCALE) : (MarketLib.ORACLE_PRICE_SCALE, yieldPrice);
+        // Fair price as an exact token1/token0 fraction. Selling token0 makes token1/token0
+        // the tokenOut/tokenIn rate (outPerIn); selling token1 makes it the reciprocal, so
+        // the numerator and denominator swap.
+        (uint256 numerator, uint256 denominator) = zeroForOne ? (outPerInNum, outPerInDen) : (outPerInDen, outPerInNum);
 
-        // Discount the price toward the side the swap moves it: a
-        // price-decreasing swap allows down to price*(1-slip); a price-increasing
-        // swap allows up to price/(1-slip).
+        // Discount the price toward the side the swap moves it: a price-decreasing swap
+        // allows down to price*(1-slip); a price-increasing swap up to price/(1-slip).
         if (zeroForOne) {
             numerator *= (BPS - maxSlippageBps);
             denominator *= BPS;
@@ -397,15 +404,31 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         uint256 raw = Math.sqrt(Math.mulDiv(numerator, ONE_X192, denominator));
         if (raw <= MIN_SQRT_RATIO || raw >= MAX_SQRT_RATIO) return (0, false);
 
-        // The limit must sit on the side the price moves toward: below spot for
-        // a price-decreasing swap, above spot for a price-increasing one. If the
-        // pool is already past it, there is no room to trade within tolerance.
+        // The limit must sit on the side the price moves toward: below spot for a
+        // price-decreasing swap, above spot for a price-increasing one. If the pool
+        // is already past it, there is no room to trade within tolerance.
         // slither-disable-next-line unused-return -> only sqrtPriceX96 is read; the other slot0 fields are unused
-        (uint160 spot,,,,,,) = IUniswapV3Pool(yieldDebtPool).slot0();
+        (uint160 spot,,,,,,) = IUniswapV3Pool(pool).slot0();
         if (zeroForOne && raw >= spot) return (0, false);
         if (!zeroForOne && raw <= spot) return (0, false);
 
         return (uint160(raw), true);
+    }
+
+    /// @dev Price limit for a swap on the yield/debt pool (rebalance lever/delever and
+    ///      harvest leg 1). The yield oracle quotes loan per yield token, 1e36-scaled.
+    function _yieldDebtSwapLimit(address tokenIn) internal view returns (uint160, bool) {
+        uint256 loanPerYield = IOracle(yieldOracle).price();
+        return tokenIn == address(yieldToken)
+            ? _swapLimit(yieldDebtPool, tokenIn, address(loanToken), loanPerYield, MarketLib.ORACLE_PRICE_SCALE)
+            : _swapLimit(yieldDebtPool, tokenIn, address(yieldToken), MarketLib.ORACLE_PRICE_SCALE, loanPerYield);
+    }
+
+    /// @dev Price limit for harvest leg 2's loan->collateral swap on the asset/debt
+    ///      pool. The market oracle quotes loan per collateral, 1e36-scaled.
+    function _assetDebtSwapLimit() internal view returns (uint160, bool) {
+        return
+            _swapLimit(assetDebtPool, address(loanToken), asset(), MarketLib.ORACLE_PRICE_SCALE, market.oraclePrice());
     }
 
     /// @notice Set the management fee rate (basis points), capped at `MAX_MANAGEMENT_FEE_BPS`.
@@ -981,11 +1004,21 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
     ///      `rho = yieldValue / debt` is within the band (`rho <= yieldFactorMax` — before
     ///      enough surplus accrues, or a yield depeg), or while a recovery is pending.
     ///
-    ///      The yield->loan leg swaps under an oracle-derived `sqrtPriceLimitX96`
-    ///      (`maxSlippageBps` price-impact bound): the pool partial-fills up to the
-    ///      limit and the leg is skipped when the pool is already past it, so harvest
-    ///      never reverts the rebalance or blocks the delever leg. The loan->collateral
-    ///      leg uses the same unbounded swap as the redeem surplus reconciliation.
+    ///      Both legs (yield->loan, then loan->collateral) swap under an oracle-derived
+    ///      `sqrtPriceLimitX96` (`maxSlippageBps` price-impact bound): each pool
+    ///      partial-fills up to its limit and the leg is skipped when the pool is
+    ///      already past it, so harvest never reverts the rebalance or blocks the
+    ///      delever leg. Any surplus the second leg does not convert to collateral is
+    ///      repaid as debt, capped at the debt outstanding -- loan token idles only in
+    ///      the extreme where the realized surplus exceeds the whole debt.
+    ///
+    ///      The two legs treat a partial fill differently. Leg 1's unsold surplus stays as
+    ///      yield and is retried next harvest; leg 2's is one-way -- loan it cannot convert
+    ///      is repaid as debt, so that round the surplus deleverages the position instead of
+    ///      growing collateral. That is value-preserving (a debt paydown, NAV ~flat); the
+    ///      vault is left underlevered until the health factor drifts above the band and the
+    ///      lever leg re-levers. Leg 2's throughput tracks asset/debt pool depth, which
+    ///      `maxTvl` bounds and which `redeemInKind` sidesteps entirely for exits.
     function _harvest() internal {
         // Frozen while a recovery is pending or executed: don't reshape the position
         // (yield -> collateral) while it is being wound down.
@@ -1005,6 +1038,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         if (yieldBalance <= yieldForDebt.mulDiv(yieldFactorMax, MarketLib.WAD)) return;
         uint256 yieldToHarvest = yieldBalance - yieldForDebt;
 
+        uint256 loanBefore = loanToken.balanceOf(address(this));
+
         // Leg 1: sell surplus yield -> loan on the yield/debt pool, bounded by an
         // oracle-derived price limit (`maxSlippageBps` of price impact). The pool
         // partial-fills up to the limit; when it is already past the bound the swap
@@ -1020,15 +1055,22 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         // slither-disable-next-line incorrect-equality -> exact-zero guard: nothing realized, skip
         if (loanGot == 0) return;
 
-        // Leg 2: loan -> collateral on the asset/debt pool -- the same unbounded swap
-        // the redeem surplus reconciliation uses.
-        uint256 collateralAdded = SwapLib.swapExactIn(address(loanToken), asset(), feeAssetDebt, loanGot);
-        // slither-disable-next-line incorrect-equality -> exact-zero guard: nothing realized, skip
-        if (collateralAdded == 0) return;
-
+        // Leg 2: loan -> collateral on the asset/debt pool, bounded to the market oracle
+        // like leg 1 -- partial-fills up to the limit, skipped when already past the bound.
+        (uint160 assetLimit, bool assetOk) = _assetDebtSwapLimit();
+        uint256 collateralAdded =
+            assetOk ? SwapLib.swapExactInToLimit(address(loanToken), asset(), feeAssetDebt, loanGot, assetLimit) : 0;
         // Supply as collateral only — no re-lever. This raises hf; `rebalance`'s lever
         // branch redeploys the collateral if/when hf later drifts above the band.
-        market.supplyCollateral(collateralAdded);
+        if (collateralAdded > 0) market.supplyCollateral(collateralAdded);
+
+        // Repay whatever leg 2 did not convert (a partial fill, or all of it when skipped),
+        // capped at the debt so it cannot over-repay; only a remainder beyond the whole
+        // debt is left idle as loan.
+        uint256 leftover = loanToken.balanceOf(address(this)) - loanBefore;
+        uint256 toRepay = Math.min(leftover, currentDebt);
+        // slither-disable-next-line unused-return -> repay amount is known (toRepay); Morpho reverts on failure
+        if (toRepay > 0) market.repay(toRepay);
 
         emit Harvested(yieldToHarvest, collateralAdded);
     }
