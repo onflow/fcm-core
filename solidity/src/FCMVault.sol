@@ -176,6 +176,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
     /// @dev Deposits are frozen while a recovery is pending or after it executes.
     error EmergencyRecoveryActive();
     error EmergencyRecoveryNotReady();
+    /// @dev Deposit blocked while the vault is marked underwater with shares outstanding.
+    error VaultUnderwater();
 
     // ── Management & performance fees ──────────────────────────────────────
     /// @notice Flat yearly management fee on NAV, in basis points. 0 = off.
@@ -595,6 +597,11 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         _accrueFees();
 
         uint256 navBefore = totalAssets();
+        // Hardening (#91): if the position is marked underwater (totalAssets() clamped to
+        // 0) while shares are outstanding, the `navBefore + 1` denominator below collapses
+        // and a tiny deposit would mint a hyperinflated share amount. Block it. The
+        // empty-vault first deposit (totalSupply() == 0) is unaffected.
+        if (navBefore == 0 && totalSupply() > 0) revert VaultUnderwater();
         if (navBefore + assets > maxTvl) {
             revert ERC4626ExceededMaxDeposit(receiver, assets, maxDeposit(receiver));
         }
@@ -1219,6 +1226,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         if (recoveryValidAt != 0 || recovered) return 0;
         if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
         uint256 cachedTotalAssets = totalAssets();
+        // Mirror the deposit() underwater guard (#91): 0 when marked underwater with holders.
+        if (cachedTotalAssets == 0 && totalSupply() > 0) return 0;
         return maxTvl > cachedTotalAssets ? maxTvl - cachedTotalAssets : 0;
     }
 
