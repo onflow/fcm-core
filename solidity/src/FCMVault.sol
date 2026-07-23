@@ -597,10 +597,11 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         _accrueFees();
 
         uint256 navBefore = totalAssets();
-        // Hardening (#91): if the position is marked underwater (totalAssets() clamped to
-        // 0) while shares are outstanding, the `navBefore + 1` denominator below collapses
-        // and a tiny deposit would mint a hyperinflated share amount. Block it. The
-        // empty-vault first deposit (totalSupply() == 0) is unaffected.
+        // Robustness (#91): don't mint against a zero-valued NAV while shares exist. If the
+        // position is marked underwater (totalAssets() clamped to 0) with holders present, the
+        // `navBefore + 1` denominator below collapses and would mint a disproportionate share
+        // amount. The empty-vault first deposit (totalSupply() == 0) is unaffected. This mirrors
+        // Yearn v3's `if (totalAssets == 0) return 0` behaviour, which OZ's base math omits.
         if (navBefore == 0 && totalSupply() > 0) revert VaultUnderwater();
         if (navBefore + assets > maxTvl) {
             revert ERC4626ExceededMaxDeposit(receiver, assets, maxDeposit(receiver));
