@@ -216,6 +216,32 @@ contract FCMVaultTest is Test {
         vault.deposit(amount, user);
     }
 
+    /// @notice Robustness: while the vault is marked underwater (totalAssets() == 0)
+    ///         with shares outstanding, minting against the collapsed `navBefore + 1`
+    ///         denominator would produce a disproportionate share amount. The guard reverts
+    ///         instead, and maxDeposit mirrors it as 0. The empty-vault first deposit is
+    ///         unaffected (see test_Deposit_FirstDepositMintsShares).
+    function test_Deposit_RevertsWhenUnderwaterWithHolders() public {
+        _depositFor(user, 1 ether);
+
+        // Crush both legs below the debt so totalAssets() clamps to 0: yield ~worthless and
+        // the collateral (fixed WETH amount) worth less than the debt once the mark drops.
+        yieldOracle.setPrice(1);
+        marketOracle.setPrice(1000e36);
+        assertEq(vault.totalAssets(), 0, "precondition: marked underwater");
+        assertGt(vault.totalSupply(), 0, "precondition: holders outstanding");
+
+        _allow(bob);
+        MockERC20(address(WETH)).mint(bob, 1 ether);
+        vm.startPrank(bob);
+        WETH.approve(address(vault), 1 ether);
+        vm.expectRevert(FCMVault.VaultUnderwater.selector);
+        vault.deposit(1 ether, bob);
+        vm.stopPrank();
+
+        assertEq(vault.maxDeposit(bob), 0, "maxDeposit mirrors the guard");
+    }
+
     // ---- redeem tests ------------------------------------------------------
 
     /// @dev    Test helper: mint `amount` of (mock) WETH to `who`, approve
