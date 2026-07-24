@@ -216,7 +216,7 @@ contract FCMVaultTest is Test {
         vault.deposit(amount, user);
     }
 
-    /// @notice Robustness (#91): while the vault is marked underwater (totalAssets() == 0)
+    /// @notice Robustness: while the vault is marked underwater (totalAssets() == 0)
     ///         with shares outstanding, minting against the collapsed `navBefore + 1`
     ///         denominator would produce a disproportionate share amount. The guard reverts
     ///         instead, and maxDeposit mirrors it as 0. The empty-vault first deposit is
