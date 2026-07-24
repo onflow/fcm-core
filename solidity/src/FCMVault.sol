@@ -601,6 +601,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         // Don't mint against a zero NAV while shares exist: the `navBefore + 1` denominator
         // below would collapse and mint a disproportionate amount. Empty-vault first deposits
         // (totalSupply() == 0) are unaffected.
+        // slither-disable-next-line incorrect-equality -> exact-zero is the intended guard (totalAssets clamps to 0)
         if (navBefore == 0 && totalSupply() > 0) revert VaultUnderwater();
         if (navBefore + assets > maxTvl) {
             revert ERC4626ExceededMaxDeposit(receiver, assets, maxDeposit(receiver));
@@ -1227,6 +1228,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
         uint256 cachedTotalAssets = totalAssets();
         // Mirror the deposit() underwater guard: 0 when marked underwater with holders.
+        // slither-disable-next-line incorrect-equality -> exact-zero is the intended guard (totalAssets clamps to 0)
         if (cachedTotalAssets == 0 && totalSupply() > 0) return 0;
         return maxTvl > cachedTotalAssets ? maxTvl - cachedTotalAssets : 0;
     }
