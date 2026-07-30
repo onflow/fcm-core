@@ -885,6 +885,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         // we compute inline here rather than use MarketLib.healthFactor to save a SLOAD
         uint256 hfBefore = currentDebt == 0 ? type(uint256).max : maxBorrow.mulDiv(MarketLib.WAD, currentDebt);
 
+        // slither-disable-next-line incorrect-equality -> exact-zero is the intended "no recovery pending" guard
         if (hfBefore > healthFactorMax && recoveryValidAt == 0) {
             // Lever-up is frozen while an emergency recovery is pending: the position
             // is slated for in-kind wind-down, so re-levering (more debt + AMM cost)
