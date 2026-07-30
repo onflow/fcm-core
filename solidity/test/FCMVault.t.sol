@@ -836,6 +836,49 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
+    /// @notice While an emergency recovery is pending, a permissionless `rebalance`
+    ///         must NOT lever up — the position is slated for in-kind wind-down, so
+    ///         re-levering (more debt + AMM cost) works against it. HF above max
+    ///         would normally trigger a lever-up; here it is suppressed.
+    function test_Recovery_NoLeverUpWhilePending() public {
+        _depositFor(user, 1 ether);
+
+        // Schedule (but do not execute) a recovery: recoveryValidAt != 0.
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+
+        // Push HF above max — the lever-up trigger.
+        marketOracle.setPrice(2300e36);
+        assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "above max");
+
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+        vault.rebalance(); // must not revert, must not lever up
+
+        // No lever-up: no yield bought, no new debt swapped, no idle loan left.
+        assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "no lever-up while recovery pending");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
+    }
+
+    /// @notice Delever stays LIVE during a pending recovery — it only de-risks the
+    ///         position, so it should keep firing (matching `_harvest`'s gate, which
+    ///         freezes only the position-reshaping legs, not the safety leg).
+    function test_Recovery_DeleverStaysLiveWhilePending() public {
+        _depositFor(user, 1 ether);
+
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+
+        // Push HF below min — the delever trigger.
+        marketOracle.setPrice(1700e36);
+        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
+
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+        vault.rebalance();
+
+        // Delever still fires: yield sold to repay debt.
+        assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "delever fires while recovery pending");
+    }
+
     // ---- rebalance price-limit guard -------------------------------------
 
     /// @notice When the pool's marginal price is already past the oracle-derived
