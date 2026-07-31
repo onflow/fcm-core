@@ -1101,7 +1101,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         revert("not implemented");
     }
 
-    // TODO: reverts
+    /// @notice Not implemented. Use `redeem` instead; `maxWithdraw` reports 0.
     function withdraw(
         uint256,
         /*assets*/
@@ -1235,8 +1235,13 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
 
     /// @inheritdoc IERC4626
     /// @notice Mint is disabled in favor of deposit.
-    function maxMint(address receiver) public view override returns (uint256) {
-        if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
+    function maxMint(address) public pure override returns (uint256) {
+        return 0;
+    }
+
+    /// @inheritdoc IERC4626
+    /// @notice Withdraw is disabled in favor of redeem.
+    function maxWithdraw(address) public pure override returns (uint256) {
         return 0;
     }
 
