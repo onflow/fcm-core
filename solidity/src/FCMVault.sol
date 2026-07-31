@@ -436,8 +436,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
 
     /// @notice Set the management fee rate (basis points), capped at `MAX_MANAGEMENT_FEE_BPS`.
     /// @dev    Accrues at the OLD rate first so the change isn't retroactive.
-    // slither-disable-next-line reentrancy-no-eth -> admin-only setter; _accrueFees only calls the trusted Morpho singleton, which cannot reenter
-    function setManagementFeeBps(uint256 newBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    // slither-disable-next-line reentrancy-no-eth -> owner-only setter; _accrueFees only calls the trusted Morpho singleton, which cannot reenter
+    function setManagementFeeBps(uint256 newBps) external onlyOwner {
         if (newBps > MAX_MANAGEMENT_FEE_BPS) revert InvalidFee();
         _accrueFees();
         emit ManagementFeeSet(managementFeeBps, newBps);
@@ -446,8 +446,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
 
     /// @notice Set the performance fee rate (basis points), capped at `MAX_PERFORMANCE_FEE_BPS`.
     /// @dev    Accrues at the OLD rate first so the change isn't retroactive.
-    // slither-disable-next-line reentrancy-no-eth -> admin-only setter; _accrueFees only calls the trusted Morpho singleton, which cannot reenter
-    function setPerformanceFeeBps(uint256 newBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    // slither-disable-next-line reentrancy-no-eth -> owner-only setter; _accrueFees only calls the trusted Morpho singleton, which cannot reenter
+    function setPerformanceFeeBps(uint256 newBps) external onlyOwner {
         if (newBps > MAX_PERFORMANCE_FEE_BPS) revert InvalidFee();
         _accrueFees();
         emit PerformanceFeeSet(performanceFeeBps, newBps);
@@ -457,8 +457,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
     /// @notice Set the fee recipient. Accrues to the old recipient first.
     /// @dev    The recipient must hold `EARLY_ACCESS_ROLE` to receive minted fee
     ///         shares; if it doesn't, accrual silently skips (see `_accrueFees`).
-    // slither-disable-next-line reentrancy-no-eth -> admin-only setter; _accrueFees only calls the trusted Morpho singleton, which cannot reenter
-    function setFeeRecipient(address newRecipient) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    // slither-disable-next-line reentrancy-no-eth -> owner-only setter; _accrueFees only calls the trusted Morpho singleton, which cannot reenter
+    function setFeeRecipient(address newRecipient) external onlyOwner {
         _accrueFees();
         emit FeeRecipientSet(feeRecipient, newRecipient);
         feeRecipient = newRecipient;
