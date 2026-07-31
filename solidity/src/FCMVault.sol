@@ -1101,11 +1101,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         revert("not implemented");
     }
 
-    /// @notice Not implemented. Use `redeem` instead.
-    /// @dev    `withdraw` would need to invert the unwind to solve for the
-    ///         share input that produces an exact asset output — non-trivial
-    ///         because the yield leg goes through an AMM whose realized price
-    ///         is only known after execution. `maxWithdraw` reports 0.
+    /// @notice Not implemented. Use `redeem` instead; `maxWithdraw` reports 0.
     function withdraw(
         uint256,
         /*assets*/
