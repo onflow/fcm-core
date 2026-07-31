@@ -784,12 +784,12 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
     ///         `owner`'s `shares`; `receiver` receives the pro-rata collateral and
     ///         yield tokens directly. Needs no swap — the yield leg is delivered
     ///         in kind rather than sold on the AMM; the collateral leg still
-    ///         settles through Morpho. Not oracle-free, though: fee accrual runs
-    ///         on entry and marks NAV via the yield and market oracles (see
-    ///         `_accrueFees`), so this exit inherits their liveness — the
-    ///         pro-rata slices themselves need no price. Rounding favors the
-    ///         vault: the debt slice rounds up, collateral/yield slices round
-    ///         down.
+    ///         settles through Morpho. The slice math is pure `shares/claims`
+    ///         arithmetic and reads no price, but the function is still not
+    ///         oracle-free: fee accrual runs on entry and marks NAV via the
+    ///         yield and market oracles (see `_accrueFees`), so this exit
+    ///         inherits their liveness. Rounding favors the vault: the debt
+    ///         slice rounds up, collateral/yield slices round down.
     ///
     ///         Reverts if `msg.sender != owner` and allowance is insufficient, if
     ///         the caller has not approved this vault for the debt slice, if the
@@ -1186,9 +1186,14 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
 
     /// @notice Execute a scheduled recovery once its timelock elapses. The owner
     ///         funds the full debt in `loanToken`; the position is fully unwound
-    ///         (no swap) and all assets are swept to the owner. Burns no shares and
-    ///         permanently blocks deposits. `redeem` stays callable throughout the
-    ///         window so holders may exit first.
+    ///         (no swap, no oracle read) and all assets are swept to the owner.
+    ///         Burns no shares and permanently blocks deposits. `redeem` stays
+    ///         callable throughout the window so holders may exit first.
+    /// @dev    Oracle-independent by construction: fees are never accrued here
+    ///         (no NAV mark), and `repayAll` zeroes the debt before
+    ///         `withdrawCollateral`, so Morpho's health check short-circuits on
+    ///         `borrowShares == 0` without reading its oracle. Recovery stays
+    ///         executable when oracles are bricked.
     function executeEmergencyRecovery() external onlyOwner {
         if (recoveryValidAt == 0 || block.timestamp < recoveryValidAt) {
             revert EmergencyRecoveryNotReady();
