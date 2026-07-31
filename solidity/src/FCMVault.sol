@@ -784,12 +784,17 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
     ///         `owner`'s `shares`; `receiver` receives the pro-rata collateral and
     ///         yield tokens directly. Needs no swap — the yield leg is delivered
     ///         in kind rather than sold on the AMM; the collateral leg still
-    ///         settles through Morpho. Rounding favors the vault: the debt slice
-    ///         rounds up, collateral/yield slices round down.
+    ///         settles through Morpho. Not oracle-free, though: fee accrual runs
+    ///         on entry and marks NAV via the yield and market oracles (see
+    ///         `_accrueFees`), so this exit inherits their liveness — the
+    ///         pro-rata slices themselves need no price. Rounding favors the
+    ///         vault: the debt slice rounds up, collateral/yield slices round
+    ///         down.
     ///
     ///         Reverts if `msg.sender != owner` and allowance is insufficient, if
-    ///         the caller has not approved this vault for the debt slice, or if the
-    ///         position is underwater (Morpho blocks the collateral withdrawal).
+    ///         the caller has not approved this vault for the debt slice, if the
+    ///         position is underwater (Morpho blocks the collateral withdrawal),
+    ///         or if an oracle read reverts during fee accrual.
     /// @param  shares        Vault shares to burn.
     /// @param  receiver      Account credited with the collateral + yield in kind.
     /// @param  owner         Account whose shares are burned and whose pro-rata
