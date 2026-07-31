@@ -885,12 +885,18 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         // we compute inline here rather than use MarketLib.healthFactor to save a SLOAD
         uint256 hfBefore = currentDebt == 0 ? type(uint256).max : maxBorrow.mulDiv(MarketLib.WAD, currentDebt);
 
-        if (hfBefore > healthFactorMax) {
+        // slither-disable-next-line incorrect-equality -> exact-zero is the intended "no recovery pending" guard
+        if (hfBefore > healthFactorMax && recoveryValidAt == 0) {
+            // Lever-up is frozen while an emergency recovery is pending: the position
+            // is slated for in-kind wind-down, so re-levering (more debt + AMM cost)
+            // would work against it. Delever stays live — it only de-risks — matching
+            // `_harvest`'s recovery gate. Cancelling recovery (`recoveryValidAt = 0`)
+            // restores lever-up immediately.
             _rebalanceLever(maxBorrow, currentDebt);
         } else if (hfBefore < healthFactorMin) {
             _rebalanceDelever(maxBorrow, currentDebt);
         } else {
-            // Inside the dead band — nothing to do.
+            // Inside the dead band, or lever-up suppressed during a pending recovery.
             return;
         }
 
