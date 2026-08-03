@@ -65,15 +65,11 @@ Calldata is hardcoded to `rebalance()` and scheduler priority to Medium.
 The deployer must hold enough FLOW for the per-tick scheduling fee plus the
 account storage minimum.
 
-### Deployed contracts (Flow EVM mainnet)
+### Development deployment (Flow EVM mainnet)
 
-| Contract | Address |
-| :--- | :--- |
-| FCMVault (WETH) | [`0x8c0567d42a824e11CFd7cE5a1F17Cfe6bAFCF657`](https://evm.flowscan.io/address/0x8c0567d42a824e11CFd7cE5a1F17Cfe6bAFCF657) |
-| FCMVault (WBTC) | [`0x25220b6E832Be6420aA80fFF5a5787369F3a7c8d`](https://evm.flowscan.io/address/0x25220b6E832Be6420aA80fFF5a5787369F3a7c8d) |
-| YieldTokenOracle (shared) | [`0x144F613490DD55C9844Ef139CFB9B63433dD349F`](https://evm.flowscan.io/address/0x144F613490DD55C9844Ef139CFB9B63433dD349F) |
-
-The prior WBTC vault ([`0x23179E15c1eA2d00848B03eC140B3a62A68589f1`](https://evm.flowscan.io/address/0x23179E15c1eA2d00848B03eC140B3a62A68589f1)) is superseded by the current one and remains redeemable. See the `mainnet-deploy-*` releases for full per-deploy records.
+A pre-release development deployment exists for internal testing. It will be
+redeployed before launch and is not intended for external use — do not deposit.
+Per-deploy records live in the [`mainnet-deploy-*` releases](https://github.com/onflow/flow-credit-markets/releases).
 
 ### Deployed contracts (Flow mainnet — Cadence)
 
