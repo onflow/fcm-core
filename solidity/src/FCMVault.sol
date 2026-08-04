@@ -980,9 +980,9 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         uint256 repayAmount = currentDebt - targetDebt;
 
         uint256 yieldPrice = IOracle(yieldOracle).price();
-        // Oracle-implied yield amount whose loan-token value equals
-        // `repayAmount` (not accounting for slippage)
-        uint256 yieldToSell = repayAmount.mulDiv(MarketLib.ORACLE_PRICE_SCALE, yieldPrice);
+        // Oracle-implied yield amount whose loan-token value is at least
+        // `repayAmount` (rounded up; not accounting for slippage)
+        uint256 yieldToSell = repayAmount.mulDiv(MarketLib.ORACLE_PRICE_SCALE, yieldPrice, Math.Rounding.Ceil);
 
         uint256 yieldBalance = yieldToken.balanceOf(address(this));
         if (yieldToSell > yieldBalance) yieldToSell = yieldBalance;
@@ -1037,9 +1037,9 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IMorphoFlashLoanCallb
         uint256 yieldBalance = yieldToken.balanceOf(address(this));
 
         // Yield needed to back the debt at oracle value; only the excess is harvestable
-        // surplus. Selling just the excess keeps the yield leg's oracle value >= debt, so
-        // the unwind invariant is unchanged.
-        uint256 yieldForDebt = currentDebt.mulDiv(MarketLib.ORACLE_PRICE_SCALE, yieldPrice);
+        // surplus. Round up so the retained yield's oracle value stays >= debt (a floor
+        // residue would leave it a hair short), keeping the unwind invariant intact.
+        uint256 yieldForDebt = currentDebt.mulDiv(MarketLib.ORACLE_PRICE_SCALE, yieldPrice, Math.Rounding.Ceil);
         // Fire only when the yield factor is above the band's upper edge: yieldBalance >
         // yieldForDebt * yieldFactorMax / WAD (equivalently rho > yieldFactorMax). Then realize
         // back down to yieldForDebt (rho = 1, bare backing).
