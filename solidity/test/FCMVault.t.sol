@@ -403,6 +403,10 @@ contract FCMVaultTest is Test {
         // Under-back: burn 10% of the vault's yield so the yield sale can't cover
         // the debt slice (Case B) with a meaningful shortfall.
         MockERC20(address(FUSDEV)).burn(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
+        // Morpho's singleton custodies collateral across every market, so it can
+        // always lend the flashed slice AND fund the in-callback withdraw. The mock
+        // singleton holds only this vault's collateral, so give it that buffer.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         uint256 fairValue = vault.convertToAssets(shares);
         uint256 mkCollBefore = WETH.balanceOf(address(MORPHO));
 
@@ -417,14 +421,18 @@ contract FCMVaultTest is Test {
 
     /// @notice Deep impairment: the shortfall exceeds the health-factor headroom,
     ///         so the collateral can only be withdrawn after the debt slice is
-    ///         repaid. The flash loan supplies the shortfall up front, so redeem
-    ///         still delivers full pro-rata value at any health factor.
+    ///         repaid. The flash borrows the collateral slice and repays the debt
+    ///         before withdrawing, so redeem still delivers full pro-rata value at
+    ///         any health factor.
     function test_Redeem_CaseB_DeepImpairmentFlashCoversAnyHF() public {
         marketOracle.setPrice(1e36); // 1:1 so debtToCollateral matches the mock swap
         uint256 shares = _depositFor(user, 1 ether);
         // Burn 60% of the vault's yield: the shortfall now dwarfs the hf headroom,
-        // which the pre-flash path could not have covered without breaching hf.
+        // which a repay-after-withdraw path could not have covered without breaching hf.
         MockERC20(address(FUSDEV)).burn(address(vault), FUSDEV.balanceOf(address(vault)) * 6 / 10);
+        // Cross-market collateral buffer (see Case-B FillsShortfall) so the mock
+        // singleton can lend the flashed slice and fund the in-callback withdraw.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         uint256 fairValue = vault.convertToAssets(shares);
 
         vm.prank(user);
@@ -432,6 +440,31 @@ contract FCMVaultTest is Test {
 
         assertApproxEqRel(assetsOut, fairValue, 0.02e18, "full pro-rata value, not a haircut");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan-token dust");
+        assertEq(vault.balanceOf(user), 0, "shares burned");
+    }
+
+    /// @notice The Case-B flash is SELF-COLLATERALIZED: it borrows the redeemer's
+    ///         own collateral (asset), never the loan token. The vault is a net
+    ///         borrower of loan token, so on-chain the Morpho singleton holds none
+    ///         idle to flash; the redeem must not depend on that liquidity. Here the
+    ///         singleton is funded with collateral (as it always is) but ZERO loan
+    ///         token, and the flash lends from real balance — so a loan-token flash
+    ///         would revert. This redeem completing full-value proves the shortfall
+    ///         is covered entirely from supplied collateral, with no idle loan.
+    function test_Redeem_CaseB_SelfCollateralizedNoIdleLoanLiquidity() public {
+        marketOracle.setPrice(1e36); // 1:1 so debtToCollateral matches the mock swap
+        uint256 shares = _depositFor(user, 1 ether);
+        MockERC20(address(FUSDEV)).burn(address(vault), FUSDEV.balanceOf(address(vault)) * 6 / 10); // deep Case B
+        // Buffer only COLLATERAL in the singleton (its cross-market custody); loan
+        // token stays at zero. A flash of the loan token could not be served here.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
+        assertEq(PYUSD0.balanceOf(address(MORPHO)), 0, "singleton holds no idle loan token to flash");
+        uint256 fairValue = vault.convertToAssets(shares);
+
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(shares, user, user);
+
+        assertApproxEqRel(assetsOut, fairValue, 0.02e18, "full value with zero idle loan liquidity");
         assertEq(vault.balanceOf(user), 0, "shares burned");
     }
 

@@ -326,8 +326,45 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         emit Deposit(msg.sender, receiver, assets, shares);
     }
 
-    /// @inheritdoc IFCMVault
-    function redeem(uint256 shares, address receiver, address owner) external logsVaultState returns (uint256 assets) {
+    /// @notice Redeem `shares` of this vault for the underlying asset. The
+    ///         owner's shares are burned, a proportional slice of the
+    ///         underlying leveraged position is unwound through the AMM, and
+    ///         the resulting asset is delivered to `receiver`.
+    /// @dev    Unwind sequence (AMM-mediated, see docs/architecture.md §A).
+    ///         Let `p = shares / _totalClaims()`, the redeemed fraction of
+    ///         the total claim pool (existing supply + virtual-share offset),
+    ///         and `d* = p × debt`, the pro-rata debt slice. The unwind:
+    ///         1. Sell exactly `p × yieldToken` for loanToken on FlowSwap V3.
+    ///            Call the realized loanToken output `loanGot`.
+    ///         2. If `loanGot ≥ d*` (Case A — fair or favorable AMM
+    ///            execution): repay `d*`, withdraw `p × collateral` of the
+    ///            asset, and swap the surplus `loanGot - d*` loanToken to
+    ///            the asset.
+    ///         3. If `loanGot < d*` (Case B — yield underperformed): flash-borrow
+    ///            `p × collateral` of the collateral (asset), sell just enough of
+    ///            it for the shortfall `d* - loanGot` in loanToken, repay the full
+    ///            `d*`, then withdraw the full `p × collateral` — repaying the flash
+    ///            from the withdrawn slice. The redeemer takes home their full
+    ///            pro-rata value; the collateral sold covers the debt the yield leg
+    ///            could not.
+    ///         4. Burn shares and transfer the new asset balance to receiver.
+    ///
+    ///         Rounding favors the vault: all pro-rata slices round down, so
+    ///         residuals accrue to remaining shareholders rather than leaking to
+    ///         the redeemer.
+    ///
+    ///         Reverts if `msg.sender != owner` and allowance is
+    ///         insufficient.
+    /// @param  shares    Vault shares to burn.
+    /// @param  receiver  Account to credit with the asset payout.
+    /// @param  owner     Account whose shares are burned.
+    /// @return assets    Asset actually delivered to `receiver`.
+    function redeem(uint256 shares, address receiver, address owner)
+        public
+        override
+        logsVaultState
+        returns (uint256 assets)
+    {
         if (shares == 0) return 0;
         // If someone besides the owner attempts to redeem, this will:
         // 1. Verify the redeemer's allowance is <= shares.
@@ -347,7 +384,130 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         emit Withdraw(msg.sender, receiver, owner, assets, shares);
     }
 
-    /// @inheritdoc IFCMVault
+    /// @dev Unwind a slice of the vault's position,
+    ///      anchored on `p = shares / _totalClaims()` and the realized AMM
+    ///      execution price on the yield leg.
+    ///
+    ///      Step 1 — yield leg (always full pro-rata):
+    ///      Sell exactly `p × yieldToken.balanceOf(vault)` for loanToken on
+    ///      the yield/debt pool. Let `loanGot` be the loanToken received
+    ///      from this swap (measured as a balance delta so any preexisting
+    ///      loanToken dust is not credited to this redeem).
+    ///
+    ///      Step 2 — branch on realized execution vs. pro-rata debt slice
+    ///      `d* = p × debt`:
+    ///
+    ///      Case A (`loanGot ≥ d*`, fair or favorable execution):
+    ///         a. Repay exactly `d*` to Morpho.
+    ///         b. Withdraw exactly `p × collateral` of the asset from Morpho.
+    ///         c. Reconcile the surplus `loanGot - d*` loanToken to the
+    ///            asset on the asset/debt pool. Surplus is real economic
+    ///            value (yield leg outgrew the debt leg) and accrues to the
+    ///            redeemer.
+    ///
+    ///      Case B (`loanGot < d*`, yield underperformed at the AMM):
+    ///         a. Flash-borrow `p × collateral` of the *collateral* (asset) from
+    ///            Morpho and sell just enough of it for the shortfall `d* - loanGot`
+    ///            in loanToken, so the vault holds the full `d*`.
+    ///         b. Repay the full `d*`, then withdraw the redeemer's `p × collateral`.
+    ///            Repaying before withdrawing makes the withdrawal
+    ///            health-factor-neutral, so it is permitted at any health factor.
+    ///         c. The flash is repaid in the flashed collateral (the withdrawn slice
+    ///            covers it); the unsold remainder is the redeemer's full pro-rata
+    ///            value. No surplus reconcile leg runs in this case.
+    ///
+    ///      The flash borrows the COLLATERAL, not the loan token, on purpose: the
+    ///      vault is a net borrower of loan token (none sits idle in the Morpho
+    ///      singleton for us), so flashing loan token would depend on other
+    ///      suppliers' liquidity and fail at high utilization. Flashing the
+    ///      redeemer's own `collSlice` — already in the singleton — is
+    ///      self-collateralized and always available. That self-sufficiency is the
+    ///      entire reason to use a flash here: a deterministic unwind at any HF with
+    ///      no dependence on external loan-token liquidity (see `onMorphoFlashLoan`).
+    ///
+    ///      Rounding favors the vault: pro-rata slices are computed with mulDiv
+    ///      rounding down.
+    /// @param shares Vault shares being redeemed (numerator of `p`).
+    function _unwindSlice(uint256 shares) internal {
+        uint256 claims = _totalClaims();
+
+        // yieldOut is the quantity of yield tokens we are selling to satisfy the redemption
+        uint256 yieldOut = YIELD_TOKEN.balanceOf(address(this)).mulDiv(shares, claims);
+        uint256 loanBefore = LOAN_TOKEN.balanceOf(address(this));
+        if (yieldOut > 0) {
+            // slither-disable-next-line unused-return -> loanGot is measured from the loanToken balance delta below,
+            // not this return
+            SwapLib.swapExactIn(address(YIELD_TOKEN), address(LOAN_TOKEN), FEE_YIELD_DEBT, yieldOut);
+        }
+        uint256 loanGot = LOAN_TOKEN.balanceOf(address(this)) - loanBefore;
+
+        uint256 debtSlice = market().debt().mulDiv(shares, claims);
+        uint256 collSlice = market().collateral().mulDiv(shares, claims);
+
+        if (loanGot >= debtSlice) {
+            // Case A: full pro-rata unwind, reconcile surplus to the asset.
+            // slither-disable-next-line unused-return -> repay amount is known (debtSlice); Morpho reverts on failure
+            if (debtSlice > 0) market().repay(debtSlice);
+            if (collSlice > 0) market().withdrawCollateral(collSlice);
+            uint256 surplus = loanGot - debtSlice;
+            if (surplus > 0) {
+                // slither-disable-next-line unused-return -> surplus-swap output is captured by the redeem balance
+                // delta, not this return
+                SwapLib.swapExactIn(address(LOAN_TOKEN), address(COLLATERAL_TOKEN), FEE_ASSET_DEBT, surplus);
+            }
+        } else {
+            // Case B: yield sale fell short. Flash the redeemer's own collateral
+            // slice (self-collateralized — rationale in the @dev above), sell enough
+            // for the shortfall, and cover the full debt slice in `onMorphoFlashLoan`.
+            MarketLib.MORPHO.flashLoan(address(COLLATERAL_TOKEN), collSlice, abi.encode(debtSlice, debtSlice - loanGot));
+        }
+    }
+
+    /// @notice Morpho flash-loan callback for redeem's Case-B path. Only callable
+    ///         by Morpho, which only invokes it when the vault itself initiated the
+    ///         flash loan (Morpho calls back the caller of `flashLoan`).
+    /// @dev    On entry the vault holds `loanGot` (from the yield sale) plus the
+    ///         flash-borrowed collateral (`collSlice`, the first arg). Sell just
+    ///         enough of it for the `shortfall` loan token so the vault holds the
+    ///         full `debtSlice`, repay the slice, then withdraw the redeemer's
+    ///         `collSlice` (hf-neutral, permitted at any HF). Morpho reclaims the
+    ///         flashed `collSlice`; the withdrawn slice covers it and the unsold
+    ///         remainder is delivered to the redeemer by `redeem`. Reverts if the
+    ///         redeemer's own collateral slice cannot cover the shortfall (underwater).
+    function onMorphoFlashLoan(uint256 collSlice, bytes calldata data) external {
+        require(msg.sender == address(MarketLib.MORPHO), Unauthorized());
+        (uint256 debtSlice, uint256 shortfall) = abi.decode(data, (uint256, uint256));
+
+        // Sell just enough of the flashed collateral for exactly `shortfall` loan
+        // token, spending at most the slice; with `loanGot` already held that makes
+        // the full `debtSlice`.
+        // slither-disable-next-line unused-return -> collateral spent is captured by the redeem balance delta, not this
+        // return
+        SwapLib.swapExactOut(address(COLLATERAL_TOKEN), address(LOAN_TOKEN), FEE_ASSET_DEBT, shortfall, collSlice);
+        // Repay the slice, THEN withdraw the redeemer's collateral (hf-neutral). Morpho
+        // reclaims the flashed `collSlice`; the withdrawn slice covers it, unsold rest stays.
+        // slither-disable-next-line unused-return -> repay amount is known (debtSlice); Morpho reverts on failure
+        market().repay(debtSlice);
+        market().withdrawCollateral(collSlice);
+    }
+
+    /// @notice Escape hatch — swap-free, in-kind redemption: the caller
+    ///         repays `owner`'s pro-rata debt slice in `loanToken` and burns
+    ///         `owner`'s `shares`; `receiver` receives the pro-rata collateral and
+    ///         yield tokens directly. Needs no swap — the yield leg is delivered
+    ///         in kind rather than sold on the AMM; the collateral leg still
+    ///         settles through Morpho. Rounding favors the vault: the debt slice
+    ///         rounds up, collateral/yield slices round down.
+    ///
+    ///         Reverts if `msg.sender != owner` and allowance is insufficient, if
+    ///         the caller has not approved this vault for the debt slice, or if the
+    ///         position is underwater (Morpho blocks the collateral withdrawal).
+    /// @param  shares        Vault shares to burn.
+    /// @param  receiver      Account credited with the collateral + yield in kind.
+    /// @param  owner         Account whose shares are burned and whose pro-rata
+    ///                       debt the caller repays.
+    /// @return collateralOut Collateral tokens delivered to `receiver`.
+    /// @return yieldOut      Yield tokens delivered to `receiver`.
     function redeemInKind(uint256 shares, address receiver, address owner)
         external
         logsVaultState
@@ -470,89 +630,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         }
         return 0;
     }
-
-    /// @notice Unwind a pro-rata slice of the vault's three-leg position for a redeem.
-    /// @dev anchored on `p = shares / _totalClaims()` and the realized AMM execution price on the yield leg.
-    ///
-    /// Step 1 — yield leg (always full pro-rata): Sell exactly `p × YIELD_TOKEN.balanceOf(vault)` for LOAN_TOKEN on
-    /// the yield/debt pool. Let `loanGot` be the LOAN_TOKEN received from this swap (measured as a balance delta so any
-    /// preexisting LOAN_TOKEN dust is not credited to this redeem).
-    /// Step 2 — branch on realized execution vs. pro-rata debt slice `d* = p × debt`:
-    ///
-    /// Case A (`loanGot ≥ d*`, fair or favorable execution): a. Repay exactly `d*` to Morpho. b. Withdraw exactly `p
-    /// × collateral` of the asset from Morpho. c. Reconcile the surplus `loanGot - d*` LOAN_TOKEN to the asset on the
-    /// asset/debt pool. Surplus is real economic value (yield leg outgrew the debt leg) and accrues to the redeemer.
-    /// Case B (`loanGot < d*`, yield underperformed at the AMM): a. Flash-borrow the shortfall `d* - loanGot` in
-    /// LOAN_TOKEN from Morpho, so the vault holds the full `d*`. b. Repay the full `d*` to Morpho, then withdraw the
-    /// full `p × collateral`. Repaying before withdrawing makes the withdrawal health-factor-neutral, so it is
-    /// permitted at any health factor (see `onMorphoFlashLoan`). c. Sell just enough of the withdrawn collateral back
-    /// to LOAN_TOKEN to repay the flash. The redeemer takes home their full pro-rata value; the collateral sold covers
-    /// the debt the yield leg could not. No surplus reconcile leg runs in this case.
-    /// Rounding favors the vault: pro-rata slices are computed with mulDiv rounding down.
-    /// @param shares Vault shares being redeemed (numerator of `p`).
-    function _unwindSlice(uint256 shares) internal {
-        uint256 claims = _totalClaims();
-
-        // yieldOut is the quantity of yield tokens we are selling to satisfy the redemption
-        uint256 yieldOut = YIELD_TOKEN.balanceOf(address(this)).mulDiv(shares, claims, Math.Rounding.Floor);
-        uint256 loanBefore = LOAN_TOKEN.balanceOf(address(this));
-        if (yieldOut > 0) {
-            // slither-disable-next-line unused-return -> loanGot is measured from the loanToken balance delta below
-            SwapLib.swapExactIn(address(YIELD_TOKEN), address(LOAN_TOKEN), FEE_YIELD_DEBT, yieldOut);
-        }
-        uint256 loanGot = LOAN_TOKEN.balanceOf(address(this)) - loanBefore;
-
-        uint256 debtSlice = market().debt().mulDiv(shares, claims, Math.Rounding.Ceil);
-        uint256 collSlice = market().collateral().mulDiv(shares, claims, Math.Rounding.Floor);
-
-        if (loanGot >= debtSlice) {
-            // Case A: full pro-rata unwind, reconcile surplus to the asset.
-            // slither-disable-next-line unused-return -> repay amount is known (debtSlice); Morpho reverts on failure
-            if (debtSlice > 0) market().repay(debtSlice);
-            if (collSlice > 0) market().withdrawCollateral(collSlice);
-            uint256 surplus = loanGot - debtSlice;
-            if (surplus > 0) {
-                // slither-disable-next-line unused-return -> surplus-swap output is captured by the redeem balance
-                SwapLib.swapExactIn(address(LOAN_TOKEN), address(COLLATERAL_TOKEN), FEE_ASSET_DEBT, surplus);
-            }
-        } else {
-            // Case B: the yield sale (loanGot) fell short of the pro-rata debt
-            // slice. Cover the shortfall by selling a slice of the redeemer's own
-            // collateral so they get their full pro-rata value instead of a
-            // scaled-down haircut. A Morpho flash loan supplies the shortfall so
-            // the full debt slice is repaid BEFORE the collateral is withdrawn,
-            // making the withdrawal hf-neutral and permitted at any health factor.
-            // The unsold collateral is delivered to the redeemer as the asset
-            // balance delta (see `onMorphoFlashLoan`).
-            MarketLib.MORPHO.flashLoan(address(LOAN_TOKEN), debtSlice - loanGot, abi.encode(debtSlice, collSlice));
-        }
-    }
-
-    // solhint-disable ordering, morpho-flash-loan
-    /// @notice Morpho flash-loan callback for redeem's Case-B path. Only callable by Morpho, which only invokes it when
-    /// the vault itself initiated the flash loan (Morpho calls back the caller of `flashLoan`).
-    /// @dev On entry the vault
-    /// holds `loanGot` (from the yield sale) plus the flash-borrowed `shortfall`, together the full pro-rata
-    /// `debtSlice`. Repay the slice, withdraw the redeemer's full `collSlice`, then sell exactly `shortfall` of it back
-    /// to loan token to repay the flash. The unsold collateral stays as the vault's asset balance and is delivered to
-    /// the redeemer by `redeem`. Reverts if the redeemer's own collateral slice cannot cover the shortfall (genuinely
-    /// underwater).
-    /// @param shortfall Loan-token amount flash-borrowed to cover the debt gap.
-    /// @param data ABI-encoded `(debtSlice, collSlice)` from `_unwindSlice`.
-    function onMorphoFlashLoan(uint256 shortfall, bytes calldata data) external {
-        require(msg.sender == address(MarketLib.MORPHO), Unauthorized());
-        (uint256 debtSlice, uint256 collSlice) = abi.decode(data, (uint256, uint256));
-
-        // slither-disable-next-line unused-return -> repay amount is known (debtSlice); Morpho reverts on failure
-        market().repay(debtSlice);
-        market().withdrawCollateral(collSlice);
-        // Sell collateral for exactly `shortfall` loan token to repay the flash,
-        // spending at most the withdrawn slice; the rest stays for the redeemer.
-        // slither-disable-next-line unused-return -> collateral spent is captured by the redeem balance delta
-        SwapLib.swapExactOut(address(COLLATERAL_TOKEN), address(LOAN_TOKEN), FEE_ASSET_DEBT, shortfall, collSlice);
-    }
-
-    // solhint-enable ordering
 
     /// @dev Leverage leg of `rebalance`, rebalancing only to the re-entry target just inside the nearest bound rather
     /// than to a central target. - If `hf ∈ [HEALTH_FACTOR_MIN, HEALTH_FACTOR_MAX]`, the call is a no-op. - If `hf >
