@@ -148,11 +148,13 @@ interface IFCMVault is IERC4626 {
     /// @notice Permissionlessly accrue fees up to the current block (mints fee shares to the recipient). Lets a keeper
     /// tick the management fee during idle stretches so it tracks NAV-over-time more closely.
     function accrueFees() external;
-    /// @notice Drive the vault's leveraged Morpho position back inside the `[healthFactorMin, healthFactorMax]` band
-    /// and realize surplus yield above the yield-factor band.
-    /// @dev Two legs: `_harvest` (realize surplus) then
-    /// `_adjustLeverage` (restore the band).
+    /// @notice Drive the vault's leveraged Morpho position back inside the `[healthFactorMin, healthFactorMax]` band.
+    /// @dev Leverage adjustment only; harvest is a separate entry point.
     function rebalance() external;
+    /// @notice Harvest surplus yield into collateral. Separate from `rebalance` so the keeper can control the maximum
+    ///        yield sold per call.
+    /// @param maximum_yield Maximum yield tokens to sell in this harvest.
+    function harvest(uint256 maximum_yield) external;
     /// @notice Cancel a pending recovery during its timelock window.
     function cancelEmergencyRecovery() external;
 

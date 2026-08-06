@@ -792,7 +792,7 @@ contract FCMVaultTest is Test {
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
         uint256 hfBefore = _healthFactor();
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertEq(WETH.balanceOf(address(MORPHO)), collBefore, "coll unchanged");
         assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev unchanged");
@@ -814,7 +814,7 @@ contract FCMVaultTest is Test {
 
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         // HF returns to the upper re-entry target (within rounding from share math).
         assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_MAX_TARGET, 1e15, "hf at maxTarget");
@@ -838,7 +838,7 @@ contract FCMVaultTest is Test {
 
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_MIN_TARGET, 1e15, "hf at minTarget");
         // Delever path: yield token shrunk.
@@ -863,7 +863,7 @@ contract FCMVaultTest is Test {
         assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "above max");
 
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
-        vault.rebalance(); // must not revert, must not lever up
+        _harvestAndRebalance(); // must not revert, must not lever up
 
         // No lever-up: no yield bought, no new debt swapped, no idle loan left.
         assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "no lever-up while recovery pending");
@@ -884,7 +884,7 @@ contract FCMVaultTest is Test {
         assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
 
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
-        vault.rebalance();
+        _harvestAndRebalance();
 
         // Delever still fires: yield sold to repay debt.
         assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "delever fires while recovery pending");
@@ -910,7 +910,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance(); // no revert; spot past bound, so no swap
+        _harvestAndRebalance(); // no revert; spot past bound, so no swap
 
         assertEq(_healthFactor(), hfBefore, "hf unchanged");
         assertEq(_debt(), debtBefore, "debt unchanged");
@@ -934,7 +934,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance(); // no revert; spot past bound, so no swap
+        _harvestAndRebalance(); // no revert; spot past bound, so no swap
 
         assertEq(_healthFactor(), hfBefore, "hf unchanged");
         assertEq(_debt(), debtBefore, "debt unchanged");
@@ -997,7 +997,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         uint256 hfAfter = _healthFactor();
         assertGt(hfAfter, hfBefore, "delever raised HF");
@@ -1023,7 +1023,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         uint256 hfAfter = _healthFactor();
         assertLt(hfAfter, hfBefore, "lever lowered HF");
@@ -1047,14 +1047,14 @@ contract FCMVaultTest is Test {
         _setPoolPrice(102, 100);
 
         // Default 1% bound: spot is past it, so the delever is a no-op.
-        vault.rebalance();
+        _harvestAndRebalance();
         assertEq(_healthFactor(), hfBefore, "1% bound skips: HF unchanged");
 
         // Loosen to 5%: the bound now sits past spot, so the delever proceeds.
         vm.prank(admin);
         vault.setMaxSlippageBps(500);
 
-        vault.rebalance();
+        _harvestAndRebalance();
         assertGt(_healthFactor(), hfBefore, "5% bound admits the delever: HF raised");
     }
 
@@ -1157,7 +1157,7 @@ contract FCMVaultTest is Test {
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
         uint256 collBefore = WETH.balanceOf(address(MORPHO));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertEq(_healthFactor(), hfBefore, "hf unchanged");
         assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev unchanged");
@@ -1190,11 +1190,82 @@ contract FCMVaultTest is Test {
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
         // Best-effort: should succeed even though target is unreachable.
-        vault.rebalance();
+        _harvestAndRebalance();
 
         // rebalance made progress: debt repaid and yield consumed.
         assertLt(_debt(), debtBefore, "debt reduced");
         assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield consumed");
+    }
+
+    /// @notice After a heavy liquidation (most collateral seized, most debt repaid,
+    ///         yield untouched), the position is left with few collateral, little
+    ///         debt, and a large yield surplus relative to that debt. Harvest's leg 1
+    ///         (yield->loan) still executes at a good price (the yield/debt pool is
+    ///         untouched, so it fills in full) and converts almost all of that surplus
+    ///         into loan token. Leg 2 (loan->collateral) is priced far off the oracle
+    ///         here and is skipped entirely, so leg 1's proceeds can't be redeployed as
+    ///         collateral -- and the realized loan token now exceeds the (now tiny)
+    ///         outstanding debt, so there'd be nowhere for the excess to go.
+    /// @dev    FIXED: `harvest` used to silently cap the repay at outstanding debt and
+    ///         strand the rest as idle loan token -- invisible to `totalAssets()` and
+    ///         effectively lost. It now reverts (`"leftover debt"`) instead, so no value
+    ///         is ever silently stranded; the caller (an off-chain harvester) is expected
+    ///         to size `maximum_yield` to what the market can currently absorb and retry.
+    function test_Rebalance_HarvestRevertsInsteadOfStrandingSurplusWhenCollateralLegMispriced() public {
+        marketOracle.setPrice(1e36);
+        _depositFor(user, 10 ether);
+
+        uint256 debtBefore = _debt();
+        uint256 collBefore = _collateral();
+
+        // Heavy liquidation: seize 90% of collateral and repay 90% of debt, leaving
+        // few collateral and little debt -- but yield is untouched by a liquidation,
+        // so it now vastly outweighs what's left of the debt it used to back.
+        _liquidate({seizedCollateral: collBefore * 90 / 100, repaidAssets: debtBefore * 90 / 100});
+
+        // Leg 1 (yield->loan) stays on-oracle (yieldPool untouched) so it fills in full
+        // -- "good price". Leg 2 (loan->collateral) is dragged far off the oracle so it
+        // is skipped entirely -- "can't swap anything" on that leg.
+        assetPool.setSqrtPriceX96(uint160(_sqrtPriceX96(4, 1)));
+
+        vm.expectRevert(bytes("leftover debt"));
+        _harvestAndRebalance();
+
+        // The workaround: a caller who instead picks a smaller manual limit -- one leg 1
+        // can convert without exceeding the (now tiny) outstanding debt -- still succeeds.
+        uint256 debtAfterLiquidation = _debt();
+        vault.harvest(debtAfterLiquidation / 2);
+        assertLt(_debt(), debtAfterLiquidation, "smaller manual limit still makes progress, no revert");
+    }
+
+    /// @notice Counterpart to the revert case above: when leg 2 is skipped but leg 1's
+    ///         realized surplus does NOT exceed the outstanding debt, `harvest` does not
+    ///         revert -- it repays exactly that surplus as debt, leaving the remainder of
+    ///         the debt outstanding (a partial repay, not a full clear) and no loan token
+    ///         stranded.
+    function test_Rebalance_HarvestRepaysPartialDebtWhenLeftoverWithinDebt() public {
+        marketOracle.setPrice(1e36);
+        _depositFor(user, 10 ether);
+
+        uint256 debtBefore = _debt();
+        uint256 collBefore = _collateral();
+
+        // A lighter liquidation: seize/repay only 20% each, so the yield surplus this
+        // opens up (~20% of the original debt's worth) stays comfortably below the 80%
+        // of debt that remains -- no revert, just a partial repay.
+        _liquidate({seizedCollateral: collBefore * 20 / 100, repaidAssets: debtBefore * 20 / 100});
+        uint256 debtAfterLiquidation = _debt();
+        assertGt(debtAfterLiquidation, 0, "meaningful debt remains after the light liquidation");
+
+        // Leg 2 (loan->collateral) skipped, same as the revert case above.
+        assetPool.setSqrtPriceX96(uint160(_sqrtPriceX96(4, 1)));
+
+        _harvestAndRebalance(); // must not revert: leftover <= outstanding debt
+
+        assertLt(_debt(), debtAfterLiquidation, "surplus repaid a portion of the debt");
+        assertGt(_debt(), 0, "debt not fully cleared -- only a portion was repaid");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "leftover fully absorbed by the partial repay, nothing stranded");
+        assertApproxEqAbs(_collateral(), collBefore * 80 / 100, 1, "no collateral bought (leg 2 skipped)");
     }
 
     /// @notice Constructor rejects malformed band configs: the HF band/targets
@@ -1279,7 +1350,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertGt(_debt(), debtBefore, "rebalance borrowed more debt");
         assertGt(FUSDEV.balanceOf(address(vault)), yieldBefore, "rebalance bought more yield");
@@ -1356,7 +1427,7 @@ contract FCMVaultTest is Test {
         _depositFor(user, 1 ether);
 
         vm.recordLogs();
-        vault.rebalance(); // HF in band → no-op body, but modifier emits
+        _harvestAndRebalance(); // HF in band → no-op body, but modifier emits
 
         _assertVaultStateMatchesCurrentState();
     }
@@ -1368,7 +1439,7 @@ contract FCMVaultTest is Test {
         marketOracle.setPrice(2300e36); // push HF above max so rebalance levers
 
         vm.recordLogs();
-        vault.rebalance();
+        _harvestAndRebalance();
 
         (,, uint256 yield, uint256 collPrice,, uint256 yieldPrice) = _assertVaultStateMatchesCurrentState();
         assertEq(collPrice, 2300e36, "snapshot collateral price is the new oracle price");
@@ -1534,6 +1605,11 @@ contract FCMVaultTest is Test {
         vm.warp(block.timestamp + vault.RECOVERY_DELAY());
     }
 
+    function _harvestAndRebalance() internal {
+        vault.harvest(type(uint256).max);
+        vault.rebalance();
+    }
+
     /// @notice Happy path: after the timelock, the owner funds the debt and the
     ///         whole position (collateral + yield) is swept to the owner.
     function test_Recovery_ExecuteSweepsPositionToOwner() public {
@@ -1574,6 +1650,9 @@ contract FCMVaultTest is Test {
         // rebalancer gets an explicit signal to stop.
         vm.expectRevert(IFCMVault.EmergencyRecoveryActive.selector);
         vault.rebalance();
+
+        vm.expectRevert(IFCMVault.EmergencyRecoveryActive.selector);
+        vault.harvest(type(uint256).max);
     }
 
     /// @notice Deposits are frozen as soon as a recovery is scheduled (before
@@ -1678,7 +1757,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 hfBefore = _healthFactor();
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertGt(WETH.balanceOf(address(MORPHO)), collBefore, "collateral grew");
         assertLt(FUSDEV.balanceOf(address(vault)), yieldBefore, "surplus yield sold");
@@ -1706,7 +1785,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertLt(FUSDEV.balanceOf(address(vault)), yieldBefore, "surplus yield sold (first leg)");
         assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "no collateral bought off-oracle");
@@ -1735,7 +1814,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertLt(FUSDEV.balanceOf(address(vault)), yieldBefore, "surplus yield sold (leg 1)");
         assertGt(WETH.balanceOf(address(MORPHO)), collBefore, "some collateral bought within tolerance");
@@ -1757,7 +1836,7 @@ contract FCMVaultTest is Test {
         uint256 collBefore = WETH.balanceOf(address(MORPHO));
         uint256 debtBefore = _debt();
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertGt(WETH.balanceOf(address(MORPHO)), collBefore, "harvest added collateral");
         assertGt(_debt(), debtBefore, "leverage leg fired (debt grew)");
@@ -1772,7 +1851,7 @@ contract FCMVaultTest is Test {
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
         uint256 debtBefore = _debt();
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "collateral unchanged");
         assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged");
@@ -1791,7 +1870,7 @@ contract FCMVaultTest is Test {
         uint256 collBefore = WETH.balanceOf(address(MORPHO));
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "collateral unchanged (below band)");
         assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged (below band)");
@@ -1845,7 +1924,7 @@ contract FCMVaultTest is Test {
 
         uint256 collBefore = WETH.balanceOf(address(MORPHO));
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "no harvest on depeg");
         assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged");
@@ -1864,7 +1943,7 @@ contract FCMVaultTest is Test {
         uint256 collBefore = WETH.balanceOf(address(MORPHO));
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance(); // does not revert while a recovery is merely pending
+        _harvestAndRebalance(); // does not revert while a recovery is merely pending
 
         assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "harvest frozen: no collateral");
         assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "harvest frozen: yield untouched");
@@ -1884,7 +1963,7 @@ contract FCMVaultTest is Test {
         uint256 hfBefore = _healthFactor();
         assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
 
-        vault.rebalance(); // no revert: harvest is best-effort, then the delever fires
+        _harvestAndRebalance(); // no revert: harvest is best-effort, then the delever fires
 
         assertGt(_healthFactor(), hfBefore, "position deleveraged (harvest didn't block it)");
     }
@@ -2148,7 +2227,7 @@ contract FCMVaultTest is Test {
         _depositFor(user, 1 ether);
 
         vm.warp(block.timestamp + 30 days);
-        vault.rebalance(); // accrues fees at the top of rebalance
+        _harvestAndRebalance(); // accrues fees at the top of rebalance
         assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the rebalance path");
     }
 

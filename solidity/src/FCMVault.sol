@@ -228,9 +228,21 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
         if (recovered) revert EmergencyRecoveryActive();
         _accrueFees();
 
-        // harvest must run before _adjustLeverage
-        _harvest();
         _adjustLeverage();
+    }
+
+    /// @inheritdoc IFCMVault
+    /// @notice Harvest surplus yield into collateral. Separate from `rebalance` so the keeper can
+    ///         control the maximum yield sold per call.
+    /// @param  maximum_yield Maximum yield tokens to sell in this harvest.
+    function harvest(uint256 maximum_yield) external logsVaultState {
+        // After a recovery the position is terminal; revert with an explicit
+        // error so the off-chain rebalancer surfaces it and stops, rather than
+        // silently no-op'ing and running indefinitely.
+        if (recovered) revert EmergencyRecoveryActive();
+        _accrueFees();
+
+        _harvest(maximum_yield);
     }
 
     /// @inheritdoc IFCMVault
@@ -693,7 +705,7 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
     /// the position instead of growing collateral. That is value-preserving (a debt paydown, NAV ~flat); the vault is
     /// left underlevered until the health factor drifts above the band and the lever leg re-levers. Leg 2's throughput
     /// tracks asset/debt pool depth, which `maxTvl` bounds and which `redeemInKind` sidesteps entirely for exits.
-    function _harvest() internal {
+    function _harvest(uint256 maximum_yield) internal {
         // Frozen while a recovery is pending or executed: don't reshape the position
         // (yield -> collateral) while it is being wound down.
         if (recoveryValidAt != 0 || recovered) return;
@@ -711,6 +723,7 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
         // back down to yieldForDebt (rho = 1, bare backing).
         if (yieldBalance <= yieldForDebt.mulDiv(YIELD_FACTOR_MAX, MarketLib.WAD)) return;
         uint256 yieldToHarvest = yieldBalance - yieldForDebt;
+        yieldToHarvest = Math.min(yieldToHarvest, maximum_yield);
 
         uint256 loanBefore = LOAN_TOKEN.balanceOf(address(this));
 
@@ -746,9 +759,11 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
         // capped at the debt so it cannot over-repay; only a remainder beyond the whole
         // debt is left idle as loan.
         uint256 leftover = LOAN_TOKEN.balanceOf(address(this)) - loanBefore;
-        uint256 toRepay = Math.min(leftover, currentDebt);
-        // slither-disable-next-line unused-return -> repay amount is known (toRepay); Morpho reverts on failure
-        if (toRepay > 0) market().repay(toRepay);
+        if (leftover > currentDebt) {
+            revert("leftover debt");
+        }
+        // slither-disable-next-line unused-return -> repay amount is known (leftover); Morpho reverts on failure
+        if (leftover > 0) market().repay(leftover);
 
         emit Harvested(yieldToHarvest, collateralAdded);
     }
