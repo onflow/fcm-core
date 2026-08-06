@@ -20,9 +20,37 @@ contract MockMorpho {
 
     mapping(Id => mapping(address => Position)) public position;
     mapping(Id => Market) public market;
+    /// @notice Test-only cap on total outstanding debt for a market,
+    ///         0 = uncapped. See `setBorrowCap`.
+    mapping(Id => uint256) public borrowCap;
+    /// @notice Test-only floor on a position's collateral, 0 = unconstrained.
+    ///         See `setMinCollateral`.
+    mapping(Id => mapping(address => uint256)) public minCollateral;
 
     uint256 internal constant VIRTUAL_SHARES = 1e6;
     uint256 internal constant VIRTUAL_ASSETS = 1;
+
+    /// @notice Test-only setter that caps how much a market can ever have
+    ///         borrowed in total (`Market.totalBorrowAssets`), mirroring a
+    ///         market with limited lender supply. Left at the zero default,
+    ///         `borrow` is uncapped, so every pre-existing test that never
+    ///         calls this keeps its previous unconstrained behavior.
+    function setBorrowCap(MarketParams memory mp, uint256 cap) external {
+        borrowCap[mp.id()] = cap;
+    }
+
+    /// @notice Test-only setter that stops `withdrawCollateral` from taking
+    ///         `borrower`'s collateral below `floor` for this market,
+    ///         mirroring "Morpho blocks a withdrawal that would leave the
+    ///         position underwater" without deriving it from real LTV/oracle
+    ///         math -- the test decides directly when a position is blocked
+    ///         (set a floor) and when it's healthy again (set it back to 0).
+    ///         Left at the zero default, `withdrawCollateral` is
+    ///         unconstrained, so every pre-existing test that never calls
+    ///         this keeps its previous behavior.
+    function setMinCollateral(MarketParams memory mp, address borrower, uint256 floor) external {
+        minCollateral[mp.id()][borrower] = floor;
+    }
 
     function accrueInterest(MarketParams memory mp) external {
         market[mp.id()].lastUpdate = uint128(block.timestamp);
@@ -35,6 +63,12 @@ contract MockMorpho {
         IERC20(mp.collateralToken).safeTransferFrom(msg.sender, address(this), assets);
     }
 
+    /// @dev Mirrors a market with limited lender supply: a borrow that would
+    ///      push `totalBorrowAssets` past `borrowCap` reverts
+    ///      `INSUFFICIENT_LIQUIDITY`. The check is opt-in — skipped entirely
+    ///      while `borrowCap == 0` (the untouched default), so every
+    ///      pre-existing test that never calls `setBorrowCap` keeps its
+    ///      previous unconstrained behavior.
     function borrow(
         MarketParams memory mp,
         uint256 assets,
@@ -48,6 +82,11 @@ contract MockMorpho {
     {
         Id id = mp.id();
         Market storage m = market[id];
+
+        uint256 cap = borrowCap[id];
+        if (cap > 0) {
+            require(uint256(m.totalBorrowAssets) + assets <= cap, "INSUFFICIENT_LIQUIDITY");
+        }
 
         uint256 newShares = _mulDivUp(
             assets, uint256(m.totalBorrowShares) + VIRTUAL_SHARES, uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS
@@ -109,15 +148,20 @@ contract MockMorpho {
     /// @notice Mock for Morpho's `withdrawCollateral`. Decrements the
     ///         position's collateral balance and transfers the collateral
     ///         token to `receiver`.
-    /// @dev    The real Morpho enforces post-state health factor >= 1 here,
-    ///         rejecting withdrawals that would put the position
-    ///         under-collateralized. This mock skips that check; tests
-    ///         needing HF-bound behavior should drive position state
-    ///         explicitly. Redeem tests don't need it because they repay
-    ///         debt before withdrawing collateral.
+    /// @dev    Reverts if the withdrawal would take the position below its
+    ///         `minCollateral` floor (opt-in, see `setMinCollateral`); 0 is
+    ///         always satisfied, so every pre-existing test that never sets a
+    ///         floor keeps its previous unconstrained behavior.
     function withdrawCollateral(MarketParams memory mp, uint256 assets, address onBehalf, address receiver) external {
         Id id = mp.id();
-        position[id][onBehalf].collateral -= SafeCast.toUint128(assets);
+        // position[id][onBehalf].collateral -= SafeCast.toUint128(assets);
+        // IERC20(mp.collateralToken).safeTransfer(receiver, assets);
+        Position storage pos = position[id][onBehalf];
+        uint256 newCollateral = uint256(pos.collateral) - assets;
+
+        require(newCollateral >= minCollateral[id][onBehalf], "INSUFFICIENT_COLLATERAL");
+
+        pos.collateral = SafeCast.toUint128(newCollateral);
         IERC20(mp.collateralToken).safeTransfer(receiver, assets);
     }
 
