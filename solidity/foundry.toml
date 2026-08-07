@@ -13,6 +13,7 @@ optimizer = true
 optimizer_runs = 200
 fs_permissions = [{ access = "read", path = "./deployments"}]
 no_match_contract = "ForkTest"
+deny = "notes"
 
 [rpc_endpoints]
 flow_mainnet = "https://mainnet.evm.nodes.onflow.org"

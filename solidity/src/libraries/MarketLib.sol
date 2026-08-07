@@ -4,10 +4,9 @@ pragma solidity ^0.8.24;
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
-
-import {MORPHO} from "../FCMVault.sol";
 
 /// @title MarketLib
 /// @author Flow Foundation
@@ -19,6 +18,9 @@ import {MORPHO} from "../FCMVault.sol";
 library MarketLib {
     using Math for uint256;
     using MarketParamsLib for MarketParams;
+
+    /// @custom:security non-reentrant
+    IMorpho internal constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
 
     uint256 internal constant ORACLE_PRICE_SCALE = 1e36;
     uint256 internal constant WAD = 1e18;

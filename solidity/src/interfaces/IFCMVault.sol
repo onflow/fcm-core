@@ -144,6 +144,8 @@ interface IFCMVault is IERC4626 {
     /// @param lower The lower bound that violated the inequality.
     /// @param upper The upper bound that was exceeded.
     error InvalidHealthFactorBounds(uint256 lower, uint256 upper);
+    /// @notice Thrown when there is leftover debt after the harvest.
+    error LeftoverDebt();
 
     /// @notice Permissionlessly accrue fees up to the current block (mints fee shares to the recipient). Lets a keeper
     /// tick the management fee during idle stretches so it tracks NAV-over-time more closely.
@@ -153,8 +155,8 @@ interface IFCMVault is IERC4626 {
     function rebalance() external;
     /// @notice Harvest surplus yield into collateral. Separate from `rebalance` so the keeper can control the maximum
     ///        yield sold per call.
-    /// @param maximum_yield Maximum yield tokens to sell in this harvest.
-    function harvest(uint256 maximum_yield) external;
+    /// @param maximumYield Maximum yield tokens to sell in this harvest.
+    function harvest(uint256 maximumYield) external;
     /// @notice Cancel a pending recovery during its timelock window.
     function cancelEmergencyRecovery() external;
 

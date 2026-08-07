@@ -7,10 +7,11 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {console} from "forge-std/Script.sol";
 
-import {MORPHO} from "../src/FCMVault.sol";
+import {MORPHO_ADDRESS} from "../src/FCMVault.sol";
 import {YieldTokenOracle} from "../src/YieldTokenOracle.sol";
 import {IUniswapV3Pool} from "../src/interfaces/external/IUniswapV3Pool.sol";
 import {ConfiguredScript, IUniswapV3Factory} from "./ConfiguredScript.s.sol";
+import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 
 /// @title Status
 /// @notice Read-only report on everything a deployment depends on: the
@@ -35,7 +36,7 @@ contract Status is ConfiguredScript {
         console.log("--- Morpho market");
         console.log("market id:");
         console.logBytes32(Id.unwrap(_marketId(c)));
-        Market memory m = MORPHO.market(_marketId(c));
+        Market memory m = IMorpho(MORPHO_ADDRESS).market(_marketId(c));
         if (m.lastUpdate == 0) {
             console.log("MARKET DOES NOT EXIST for config params -- fix config before deploying");
             return;

@@ -11,6 +11,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 /// @notice Thin wrapper around FlowSwap V3's SwapRouter02 on Flow EVM mainnet. Internal helpers — inlined into the
 /// caller, recipient is always `address(this)`.
 library SwapLib {
+    /// @custom:security non-reentrant
     ISwapRouter02 internal constant SWAP_ROUTER = ISwapRouter02(0xeEDC6Ff75e1b10B903D9013c358e446a73d35341);
     /// @dev Uniswap V3 tick-math bounds on a valid `sqrtPriceLimitX96`. A limit outside `(MIN_SQRT_RATIO,
     /// MAX_SQRT_RATIO)` is rejected by the pool; the vault treats such a limit as "no feasible swap" and skips.

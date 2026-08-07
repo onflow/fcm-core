@@ -17,7 +17,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 // Morpho Blue singleton address for Flow EVM
-IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
+address constant MORPHO_ADDRESS = 0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f;
 uint256 constant BPS = 10_000;
 
 /// @title FCMVault
@@ -41,6 +41,8 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
     /// expensive. See
     /// https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     uint8 internal constant DECIMALS_OFFSET = 6;
+    /// @custom:security non-reentrant
+    IMorpho internal constant MORPHO = IMorpho(MORPHO_ADDRESS);
 
     /// @dev Seconds in a year, for the time-based management fee accrual.
     uint256 internal constant SECONDS_PER_YEAR = 365 days;
@@ -234,15 +236,15 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
     /// @inheritdoc IFCMVault
     /// @notice Harvest surplus yield into collateral. Separate from `rebalance` so the keeper can
     ///         control the maximum yield sold per call.
-    /// @param  maximum_yield Maximum yield tokens to sell in this harvest.
-    function harvest(uint256 maximum_yield) external logsVaultState {
+    /// @param  maximumYield Maximum yield tokens to sell in this harvest.
+    function harvest(uint256 maximumYield) external logsVaultState {
         // After a recovery the position is terminal; revert with an explicit
         // error so the off-chain rebalancer surfaces it and stops, rather than
         // silently no-op'ing and running indefinitely.
         if (recovered) revert EmergencyRecoveryActive();
         _accrueFees();
 
-        _harvest(maximum_yield);
+        _harvest(maximumYield);
     }
 
     /// @inheritdoc IFCMVault
@@ -705,7 +707,7 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
     /// the position instead of growing collateral. That is value-preserving (a debt paydown, NAV ~flat); the vault is
     /// left underlevered until the health factor drifts above the band and the lever leg re-levers. Leg 2's throughput
     /// tracks asset/debt pool depth, which `maxTvl` bounds and which `redeemInKind` sidesteps entirely for exits.
-    function _harvest(uint256 maximum_yield) internal {
+    function _harvest(uint256 maximumYield) internal {
         // Frozen while a recovery is pending or executed: don't reshape the position
         // (yield -> collateral) while it is being wound down.
         if (recoveryValidAt != 0 || recovered) return;
@@ -723,7 +725,7 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
         // back down to yieldForDebt (rho = 1, bare backing).
         if (yieldBalance <= yieldForDebt.mulDiv(YIELD_FACTOR_MAX, MarketLib.WAD)) return;
         uint256 yieldToHarvest = yieldBalance - yieldForDebt;
-        yieldToHarvest = Math.min(yieldToHarvest, maximum_yield);
+        yieldToHarvest = Math.min(yieldToHarvest, maximumYield);
 
         uint256 loanBefore = LOAN_TOKEN.balanceOf(address(this));
 
@@ -760,7 +762,7 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
         // debt is left idle as loan.
         uint256 leftover = LOAN_TOKEN.balanceOf(address(this)) - loanBefore;
         if (leftover > currentDebt) {
-            revert("leftover debt");
+            revert LeftoverDebt();
         }
         // slither-disable-next-line unused-return -> repay amount is known (leftover); Morpho reverts on failure
         if (leftover > 0) market().repay(leftover);

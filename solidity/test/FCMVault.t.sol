@@ -7,7 +7,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
-import {FCMVault, MORPHO} from "../src/FCMVault.sol";
+import {FCMVault, MORPHO_ADDRESS} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
 import {SwapLib} from "../src/libraries/SwapLib.sol";
 import {FCMVaultHarness} from "./FCMVaultHarness.sol";
@@ -20,6 +20,7 @@ import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
 import {MockUniswapV3Pool} from "./mocks/MockUniswapV3Pool.sol";
 import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
 import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
@@ -29,6 +30,8 @@ contract FCMVaultTest is Test {
     using SafeERC20 for IERC4626;
     using VaultHelpers for FCMVault;
     using MarketParamsLib for MarketParams;
+
+    IMorpho internal constant MORPHO = IMorpho(MORPHO_ADDRESS);
     // Token addresses — using the real Flow EVM addresses so mocks are
     // etched where the vault constants would otherwise point.
     IERC20 constant WETH = IERC20(0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590);
@@ -1208,7 +1211,7 @@ contract FCMVaultTest is Test {
     ///         outstanding debt, so there'd be nowhere for the excess to go.
     /// @dev    FIXED: `harvest` used to silently cap the repay at outstanding debt and
     ///         strand the rest as idle loan token -- invisible to `totalAssets()` and
-    ///         effectively lost. It now reverts (`"leftover debt"`) instead, so no value
+    ///         effectively lost. It now reverts (LeftoverDebt) instead, so no value
     ///         is ever silently stranded; the caller (an off-chain harvester) is expected
     ///         to size `maximum_yield` to what the market can currently absorb and retry.
     function test_Rebalance_HarvestRevertsInsteadOfStrandingSurplusWhenCollateralLegMispriced() public {
@@ -1228,7 +1231,7 @@ contract FCMVaultTest is Test {
         // is skipped entirely -- "can't swap anything" on that leg.
         assetPool.setSqrtPriceX96(uint160(_sqrtPriceX96(4, 1)));
 
-        vm.expectRevert(bytes("leftover debt"));
+        vm.expectRevert(IFCMVault.LeftoverDebt.selector);
         _harvestAndRebalance();
 
         // The workaround: a caller who instead picks a smaller manual limit -- one leg 1

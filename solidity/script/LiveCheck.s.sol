@@ -8,8 +8,9 @@ import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.so
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
 
-import {FCMVault, MORPHO} from "../src/FCMVault.sol";
+import {FCMVault, MORPHO_ADDRESS} from "../src/FCMVault.sol";
 import {VaultHelpers} from "../test/utils/FCMVaultHelpers.sol";
+import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 
 /// @title LiveCheck
 /// @notice End-to-end integration check against a LIVE FCMVault deployment:
@@ -107,9 +108,9 @@ contract LiveCheck is Script {
     ///      (immaterial for this report).
     function _debt(FCMVault vault) internal view returns (uint256) {
         MarketParams memory market = vault.getMarket();
-        Position memory pos = MORPHO.position(market.id(), address(vault));
+        Position memory pos = IMorpho(MORPHO_ADDRESS).position(market.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
-        Market memory mkt = MORPHO.market(market.id());
+        Market memory mkt = IMorpho(MORPHO_ADDRESS).market(market.id());
         return uint256(pos.borrowShares).toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
     }
 }

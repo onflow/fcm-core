@@ -8,8 +8,9 @@ import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
 
-import {FCMVault, MORPHO} from "../src/FCMVault.sol";
+import {FCMVault, MORPHO_ADDRESS} from "../src/FCMVault.sol";
 import {VaultHelpers} from "../test/utils/FCMVaultHelpers.sol";
+import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 
 /// @title Rebalance
 /// @notice Drives a LIVE FCMVault's leveraged Morpho position back inside its
@@ -69,7 +70,7 @@ contract Rebalance is Script {
     ///      `type(uint256).max` when there is no debt.
     function _healthFactor(FCMVault vault) internal view returns (uint256) {
         MarketParams memory mp = vault.getMarket();
-        Position memory pos = MORPHO.position(mp.id(), address(vault));
+        Position memory pos = IMorpho(MORPHO_ADDRESS).position(mp.id(), address(vault));
         if (pos.borrowShares == 0) return type(uint256).max;
         uint256 debt = _debtFromPosition(mp, pos);
         uint256 maxBorrow = (uint256(pos.collateral) * ((IOracle(mp.oracle).price() * mp.lltv) / 1e36)) / 1e18;
@@ -79,7 +80,7 @@ contract Rebalance is Script {
     /// @dev The vault's outstanding debt in loan-token units.
     function _debt(FCMVault vault) internal view returns (uint256) {
         MarketParams memory mp = vault.getMarket();
-        Position memory pos = MORPHO.position(mp.id(), address(vault));
+        Position memory pos = IMorpho(MORPHO_ADDRESS).position(mp.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
         return _debtFromPosition(mp, pos);
     }
@@ -88,7 +89,7 @@ contract Rebalance is Script {
     ///      `SharesMathLib.toAssetsUp`, matching how Morpho charges debt (and
     ///      the contract's `MarketLib.debt`).
     function _debtFromPosition(MarketParams memory mp, Position memory pos) internal view returns (uint256) {
-        Market memory mkt = MORPHO.market(mp.id());
+        Market memory mkt = IMorpho(MORPHO_ADDRESS).market(mp.id());
         return uint256(pos.borrowShares).toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
     }
 }

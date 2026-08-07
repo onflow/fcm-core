@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import {FCMVault, MORPHO} from "../src/FCMVault.sol";
+import {FCMVault, MORPHO_ADDRESS} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
 import {SwapLib} from "../src/libraries/SwapLib.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
@@ -59,7 +59,7 @@ contract TvlLimitTest is Test {
         vm.etch(address(WETH), erc20Code);
         vm.etch(address(PYUSD0), erc20Code);
         vm.etch(address(FUSDEV), erc20Code);
-        vm.etch(address(MORPHO), address(new MockMorpho()).code);
+        vm.etch(MORPHO_ADDRESS, address(new MockMorpho()).code);
         vm.etch(address(SwapLib.SWAP_ROUTER), address(new MockSwapRouter()).code);
         vm.etch(MOCK_IRM, address(new MockIrm()).code);
 
