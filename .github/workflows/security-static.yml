@@ -38,7 +38,7 @@ on:
 
 jobs:
   static:
-    name: Slither + Solhint
+    name: Slither + Solhint + Aderyn
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -64,10 +64,10 @@ jobs:
       # Versions pinned to match the local containerized scanner
       # (security/docker/Dockerfile) so CI and `make security-ci` agree exactly.
       - name: Install Slither (pinned)
-        run: pip install "slither-analyzer==0.11.5"
+        run: pip install "slither-analyzer==0.11.6"
 
       - name: Install Solhint (pinned)
-        run: npm install -g "solhint@6.2.1"
+        run: npm install -g "solhint@6.2.3"
 
       # Fails the build on Medium-or-higher-impact findings. Low/Informational
       # findings print for review but do not block. See header for how to
@@ -75,13 +75,11 @@ jobs:
       - name: Slither
         run: slither . --config-file slither.config.json --fail-medium
 
-      # Fails only on `error`-severity rules (see .solhint.json); warnings are
-      # advisory and do not block.
       - name: Solhint
-        run: solhint 'src/**/*.sol' '!src/interfaces/external/**'
+        run: solhint 'src/**/*.sol' '!src/interfaces/external/**' --max-warnings 0
 
-      # requires code changes enabled in next PR
-      # - name: Aderyn
-      #   uses: Cyfrin/aderyn-ci@v0
-      #   with:
-      #     fail-on: high
+      - name: Aderyn
+        uses: Cyfrin/aderyn-ci@v0
+        with:
+          working-directory: solidity
+          fail-on: high

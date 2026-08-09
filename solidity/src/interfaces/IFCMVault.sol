@@ -30,17 +30,6 @@ interface IFCMVault {
         string symbol;
     }
 
-    /// @dev Deposits are frozen while a recovery is pending or after it executes.
-    error EmergencyRecoveryActive();
-    /// @dev `executeEmergencyRecovery` reverts before recovery is scheduled or before its delay elapses.
-    error EmergencyRecoveryNotReady();
-    /// @dev Thrown when a fee rate above its hard cap is set.
-    error InvalidFee();
-    /// @dev Thrown when a slippage tolerance >= 100% (10_000 bps) is set.
-    error InvalidSlippage();
-    /// @dev Deposit blocked while the vault is marked underwater with shares outstanding.
-    error VaultUnderwater();
-
     /// @notice Emitted when a recovery is scheduled.
     /// @param caller Owner that scheduled it.
     /// @param validAt Timestamp the recovery becomes executable (`now + recoveryDelay`).
@@ -124,17 +113,45 @@ interface IFCMVault {
         uint256 collateral, uint256 debt, uint256 yield, uint256 collateralPrice, uint256 debtPrice, uint256 yieldPrice
     );
 
-    /// @notice Members of this role may deposit assets, hold shares, and transfer shares.
-    function EARLY_ACCESS_ROLE() external view returns (bytes32);
+    /// @dev Deposits are frozen while a recovery is pending or after it executes.
+    error EmergencyRecoveryActive();
+    /// @dev `executeEmergencyRecovery` reverts before recovery is scheduled or before its delay elapses.
+    error EmergencyRecoveryNotReady();
+    /// @dev Thrown when a fee rate above its hard cap is set.
+    error InvalidFee();
+    /// @dev Thrown when a slippage tolerance >= 100% (10_000 bps) is set.
+    error InvalidSlippage();
+    /// @dev Deposit blocked while the vault is marked underwater with shares outstanding.
+    error VaultUnderwater();
+    /// @dev Thrown when an unauthorized action is attempted in `onMorphoFlashLoan`.
+    error Unauthorized();
+    /// @dev Thrown when calling ERC4626 functionality that is unsupported in FCMVault.
+    error NotImplemented();
+
+    /// @notice Thrown when an input address is set to address(0).
+    error ZeroAddress();
+
+    /// @notice Thrown when a scalar factor is strictly less than 1e18 (WAD).
+    /// @dev WAD precision is scaled to 10**18.
+    error BelowMinWad(uint256 value);
+
+    /// @notice Thrown when health factor constraints break the required ordering:
+    /// @dev Enforces: min <= minTarget <= maxTarget <= max.
+    /// @param lower The lower bound that violated the inequality.
+    /// @param upper The upper bound that was exceeded.
+    error InvalidHealthFactorBounds(uint256 lower, uint256 upper);
+
     /// @notice Permissionlessly accrue fees up to the current block (mints fee shares to the recipient). Lets a keeper
     /// tick the management fee during idle stretches so it tracks NAV-over-time more closely.
     function accrueFees() external;
-
-    /// @notice FlowSwap V3 asset/debt pool for the harvest loan->collateral leg. Its live `slot0` price is read to
-    /// bound leg 2 to the market oracle, skipping when the pool is already past the slippage bound.
-    function assetDebtPool() external view returns (address);
+    /// @notice Drive the vault's leveraged Morpho position back inside the `[healthFactorMin, healthFactorMax]` band
+    /// and realize surplus yield above the yield-factor band.
+    /// @dev Two legs: `_harvest` (realize surplus) then
+    /// `_adjustLeverage` (restore the band).
+    function rebalance() external;
     /// @notice Cancel a pending recovery during its timelock window.
     function cancelEmergencyRecovery() external;
+
     /// @notice Execute a scheduled recovery once its timelock elapses. The owner funds the full debt in `loanToken`;
     /// the position is fully unwound (no swap, no oracle read) and all assets are swept to the owner. Burns no shares
     /// and permanently blocks deposits. `redeem` stays callable throughout the window so holders may exit first.
@@ -143,90 +160,6 @@ interface IFCMVault {
     /// before `withdrawCollateral`, so Morpho's health check short-circuits on `borrowShares == 0` without reading its
     /// oracle. Recovery stays executable when oracles are bricked.
     function executeEmergencyRecovery() external;
-    /// @notice Pool fee tier for the asset/debt pool, used to reconcile redeem surplus from loan token back to the
-    /// underlying asset.
-    function feeAssetDebt() external view returns (uint24);
-    /// @notice Recipient of minted fee shares. Must hold `EARLY_ACCESS_ROLE` to receive them; if unset or not
-    /// allowlisted, fee accrual is skipped (never reverts) so core flows can't be bricked.
-    function feeRecipient() external view returns (address);
-    /// @notice Pool fee tier for the yield/debt pool used in rebalance swaps.
-    /// @dev Pool fee for swapping yield<->debt.
-    function feeYieldDebt() external view returns (uint24);
-    /// @notice Health factor above which `rebalance` will lever up (borrow more debt and swap to yield). The position
-    /// is under-levered above this bound. WAD-scaled.
-    function healthFactorMax() external view returns (uint256);
-    /// @notice Re-entry target for a lever-up: when `hf > healthFactorMax`, `rebalance` borrows just enough to lower
-    /// the health factor to this value, which sits just below the upper bound. WAD-scaled. The four health factors must
-    /// satisfy `WAD <= healthFactorMin <= healthFactorMinTarget <= healthFactorMaxTarget <= healthFactorMax`.
-    function healthFactorMaxTarget() external view returns (uint256);
-    /// @notice Health factor below which `rebalance` will delever (sell yield to repay debt). The position is
-    /// over-levered below this bound. WAD-scaled.
-    function healthFactorMin() external view returns (uint256);
-    /// @notice Re-entry target for a delever: when `hf < healthFactorMin`, `rebalance` repays just enough debt to raise
-    /// the health factor to this value, which sits just above the lower bound. Landing here rather than exactly on
-    /// `healthFactorMin` leaves a small margin so routine drift does not immediately re-trigger. WAD-scaled.
-    function healthFactorMinTarget() external view returns (uint256);
-    /// @notice Timestamp of the last fee accrual, for the time-based management fee.
-    function lastFeeAccrual() external view returns (uint256);
-    /// @notice Address of the loan token (inner vault asset).
-    /// @dev The loan token is the inner vault's asset and the debt leg of the position.
-    function loanToken() external view returns (IERC20);
-
-    // ── Management & performance fees
-    /// @notice Flat yearly management fee on NAV, in basis points. 0 = off.
-    /// @dev Linear accrual of the annual rate; bounded by the 10% cap.
-    function managementFeeBps() external view returns (uint256);
-
-    /// @notice The Morpho Blue market parameters the vault operates on.
-    /// @return loanToken The market's loan token address.
-    /// @return collateralToken The market's collateral token address.
-    /// @return oracle The market's oracle address.
-    /// @return irm The market's interest rate model address.
-    /// @return lltv The market's loan-to-value ratio, WAD-scaled.
-    function market()
-        external
-        view
-        returns (address loanToken, address collateralToken, address oracle, address irm, uint256 lltv);
-    /// @notice Max price impact (basis points) tolerated on the rebalance swaps (lever and delever). It sets each
-    /// swap's `sqrtPriceLimitX96` to the oracle price discounted by this amount, so the pool fills only while its
-    /// marginal price stays within tolerance and partial-fills (or skips) past it — rather than reverting. Bounds
-    /// price impact, not the pool's fixed LP fee. Applies only to vault-initiated rebalances — deposit/redeem
-    /// slippage is the caller's responsibility, set via the ERC4626 router. Defaults to 1%, admin-adjustable.
-    function maxSlippageBps() external view returns (uint256);
-    /// @notice TVL limit, denominated in the vault's Asset token. Enforced by `super.deposit`, which reverts with
-    /// `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`. Default 0 -> no deposits until admin raises
-    /// it.
-    /// - This constraint prevents all deposits/mints which would cause the vault to exceed the configured TVL limit
-    ///   after the deposit/mint completes.
-    /// - This constraint does not prevent any withdrawals/redeems under any circumstances.
-    /// - This constraint does not prevent the vault from holding more assets than its configured TVL.
-    /// This can happen if:
-    /// - The owner sets maxTvl to a value lower than the current totalAssets
-    /// - The value of vault holdings increases above the TVL limit due to market conditions. This can occur without
-    ///   any direct interactions with the vault.
-    function maxTvl() external view returns (uint256);
-    /// @notice High-water mark for the performance fee, as asset-per-share scaled by WAD (`NAV * WAD / claims`).
-    /// Flow-neutral, strict all-time peak. Vault-wide (one mark for all holders): a depositor entering below it rides
-    /// the recovery back up fee-free — accepted by design in lieu of per-user-HWM accounting.
-    function perfHighWaterMark() external view returns (uint256);
-    /// @notice Performance fee on per-share gains above the high-water mark, in basis points. 0 = off.
-    /// @dev Crystallizes on UNREALIZED, oracle-marked NAV and is triggerable by anyone via `accrueFees`; bounded by the
-    /// all-time HWM and the 50% cap.
-    function performanceFeeBps() external view returns (uint256);
-    /// @notice Drive the vault's leveraged Morpho position back inside the `[healthFactorMin, healthFactorMax]` band
-    /// and realize surplus yield above the yield-factor band.
-    /// @dev Two legs: `_harvest` (realize surplus) then
-    /// `_adjustLeverage` (restore the band).
-    function rebalance() external;
-
-    // ── Timelocked emergency recovery (custodial, in-kind) ──────────────────
-
-    /// @notice Delay (in seconds) between scheduling and executing a recovery.
-    function recoveryDelay() external view returns (uint256);
-    /// @notice Timestamp a scheduled recovery becomes executable; 0 = none pending.
-    function recoveryValidAt() external view returns (uint256);
-    /// @notice Set once a recovery executes; permanently blocks new deposits.
-    function recovered() external view returns (bool);
 
     /// @notice Escape hatch — swap-free, in-kind redemption: the caller repays `owner`'s pro-rata debt slice in
     /// `loanToken` and burns `owner`'s `shares`; `receiver` receives the pro-rata collateral and yield tokens directly.
@@ -268,42 +201,6 @@ interface IFCMVault {
     /// @dev Accrues at the OLD rate first so the change isn't retroactive.
     /// @param newBps New performance fee rate in basis points.
     function setPerformanceFeeBps(uint256 newBps) external;
-    /// @notice The FlowSwap V3 yield/debt pool the rebalance swaps route through. Read for its live `slot0` marginal
-    /// price so a rebalance can derive a `sqrtPriceLimitX96` from the oracle and skip when the pool is already priced
-    /// past the slippage bound.
-    function yieldDebtPool() external view returns (address);
-    /// @notice The yield factor is `yieldValue / debt`, WAD-scaled (WAD = the yield exactly repays the debt). It is NOT
-    /// a yield rate. `yieldFactorMax` is the upper edge of its band: `rebalance`'s harvest leg fires only when the
-    /// yield factor exceeds it, so it does not act on sub-threshold surplus. Must be `>= WAD`. Immutable, like the
-    /// health-factor band bounds.
-    function yieldFactorMax() external view returns (uint256);
-    /// @notice Address of the oracle for the yield token.
-    /// @dev We will deploy an oracle instance, which will provide the best available price information for the given
-    /// token. This may be a 3rd party oracle, onchain price information, or both.
-    function yieldOracle() external view returns (address);
-    /// @notice Address of the yield token (inner vault share).
-    /// @dev The yield token is the inner vault's share token and the yield leg of the position.
-    function yieldToken() external view returns (IERC20);
-
-    /// @notice Returns the vault's net asset value (NAV) denominated in the underlying asset (collateral token).
-    /// @dev NAV = collateral + yield − debt, with both yield and debt converted into asset units using oracle prices:
-    /// - collateral: read directly from the Morpho position.
-    /// - yield: balance of `yieldToken` held by the vault, priced through `yieldOracle` and the market oracle
-    ///   (see `_yieldToAsset`).
-    /// - debt: outstanding loan-token debt on the Morpho market, valued at the market oracle price
-    ///   (see `MarketLib.debt`).
-    /// Returns 0 if debt exceeds gross value (an underwater position). This is a stale read by default — callers that
-    /// need an up-to-the-block NAV must accrue interest on the market in the same tx first (see `deposit`).
-    /// @return totalManagedAssets The vault's net asset value in underlying asset units.
-    function totalAssets() external view returns (uint256 totalManagedAssets);
-
-    /// @notice Remaining headroom under the TVL limit, clamped to 0 when deposits are disabled.
-    /// @param receiver The account that would receive the deposited shares.
-    /// @return maxAssets Maximum depositable asset amount.
-    /// @dev Even if the inner vault has hit its own deposit limit, we may still be able to obtain shares of it on the
-    /// AMM to satisfy the deposit. However, if we implement 'direct deposit' to the inner vault, its own maxDeposit()
-    /// will bind.
-    function maxDeposit(address receiver) external view returns (uint256 maxAssets);
 
     /// @notice Deposit `assets` of the underlying asset into the vault and mint vault shares to `receiver`.
     /// @dev Expansion sequence (see docs/architecture.md §A). Let `navBefore` be the vault NAV before this deposit:
@@ -358,6 +255,128 @@ interface IFCMVault {
     /// @param owner Account whose shares are burned.
     /// @return assets Asset actually delivered to `receiver`.
     function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets);
+
+    /// @notice The FlowSwap V3 yield/debt pool the rebalance swaps route through. Read for its live `slot0` marginal
+    /// price so a rebalance can derive a `sqrtPriceLimitX96` from the oracle and skip when the pool is already priced
+    /// past the slippage bound.
+    function YIELD_DEBT_POOL() external view returns (address);
+    /// @notice The yield factor is `yieldValue / debt`, WAD-scaled (WAD = the yield exactly repays the debt). It is NOT
+    /// a yield rate. `yieldFactorMax` is the upper edge of its band: `rebalance`'s harvest leg fires only when the
+    /// yield factor exceeds it, so it does not act on sub-threshold surplus. Must be `>= WAD`. Immutable, like the
+    /// health-factor band bounds.
+    function YIELD_FACTOR_MAX() external view returns (uint256);
+    /// @notice Address of the oracle for the yield token.
+    /// @dev We will deploy an oracle instance, which will provide the best available price information for the given
+    /// token. This may be a 3rd party oracle, onchain price information, or both.
+    function YIELD_ORACLE() external view returns (address);
+    /// @notice Address of the yield token (inner vault share).
+    /// @dev The yield token is the inner vault's share token and the yield leg of the position.
+    function YIELD_TOKEN() external view returns (IERC20);
+
+    /// @notice Returns the vault's net asset value (NAV) denominated in the underlying asset (collateral token).
+    /// @dev NAV = collateral + yield − debt, with both yield and debt converted into asset units using oracle prices:
+    /// - collateral: read directly from the Morpho position.
+    /// - yield: balance of `yieldToken` held by the vault, priced through `yieldOracle` and the market oracle
+    ///   (see `_yieldToAsset`).
+    /// - debt: outstanding loan-token debt on the Morpho market, valued at the market oracle price
+    ///   (see `MarketLib.debt`).
+    /// Returns 0 if debt exceeds gross value (an underwater position). This is a stale read by default — callers that
+    /// need an up-to-the-block NAV must accrue interest on the market in the same tx first (see `deposit`).
+    /// @return totalManagedAssets The vault's net asset value in underlying asset units.
+    function totalAssets() external view returns (uint256 totalManagedAssets);
+
+    /// @notice Remaining headroom under the TVL limit, clamped to 0 when deposits are disabled.
+    /// @param receiver The account that would receive the deposited shares.
+    /// @return maxAssets Maximum depositable asset amount.
+    /// @dev Even if the inner vault has hit its own deposit limit, we may still be able to obtain shares of it on the
+    /// AMM to satisfy the deposit. However, if we implement 'direct deposit' to the inner vault, its own maxDeposit()
+    /// will bind.
+    function maxDeposit(address receiver) external view returns (uint256 maxAssets);
+
+    /// @notice Members of this role may deposit assets, hold shares, and transfer shares.
+    function EARLY_ACCESS_ROLE() external view returns (bytes32);
+    /// @notice FlowSwap V3 asset/debt pool for the harvest loan->collateral leg. Its live `slot0` price is read to
+    /// bound leg 2 to the market oracle, skipping when the pool is already past the slippage bound.
+    function ASSET_DEBT_POOL() external view returns (address);
+    /// @notice Pool fee tier for the asset/debt pool, used to reconcile redeem surplus from loan token back to the
+    /// underlying asset.
+    function FEE_ASSET_DEBT() external view returns (uint24);
+    /// @notice Recipient of minted fee shares. Must hold `EARLY_ACCESS_ROLE` to receive them; if unset or not
+    /// allowlisted, fee accrual is skipped (never reverts) so core flows can't be bricked.
+    function feeRecipient() external view returns (address);
+    /// @notice Pool fee tier for the yield/debt pool used in rebalance swaps.
+    /// @dev Pool fee for swapping yield<->debt.
+    function FEE_YIELD_DEBT() external view returns (uint24);
+    /// @notice Health factor above which `rebalance` will lever up (borrow more debt and swap to yield). The position
+    /// is under-levered above this bound. WAD-scaled.
+    function HEALTH_FACTOR_MAX() external view returns (uint256);
+    /// @notice Re-entry target for a lever-up: when `hf > healthFactorMax`, `rebalance` borrows just enough to lower
+    /// the health factor to this value, which sits just below the upper bound. WAD-scaled. The four health factors must
+    /// satisfy `WAD <= healthFactorMin <= healthFactorMinTarget <= healthFactorMaxTarget <= healthFactorMax`.
+    function HEALTH_FACTOR_MAX_TARGET() external view returns (uint256);
+    /// @notice Health factor below which `rebalance` will delever (sell yield to repay debt). The position is
+    /// over-levered below this bound. WAD-scaled.
+    function HEALTH_FACTOR_MIN() external view returns (uint256);
+    /// @notice Re-entry target for a delever: when `hf < healthFactorMin`, `rebalance` repays just enough debt to raise
+    /// the health factor to this value, which sits just above the lower bound. Landing here rather than exactly on
+    /// `healthFactorMin` leaves a small margin so routine drift does not immediately re-trigger. WAD-scaled.
+    function HEALTH_FACTOR_MIN_TARGET() external view returns (uint256);
+    /// @notice Timestamp of the last fee accrual, for the time-based management fee.
+    function lastFeeAccrual() external view returns (uint256);
+    /// @notice Address of the loan token (inner vault asset).
+    /// @dev The loan token is the inner vault's asset and the debt leg of the position.
+    function LOAN_TOKEN() external view returns (IERC20);
+
+    // ── Management & performance fees
+    /// @notice Flat yearly management fee on NAV, in basis points. 0 = off.
+    /// @dev Linear accrual of the annual rate; bounded by the 10% cap.
+    function managementFeeBps() external view returns (uint256);
+
+    /// @notice The Morpho Blue market parameters the vault operates on.
+    /// @return loanToken The market's loan token address.
+    /// @return collateralToken The market's collateral token address.
+    /// @return oracle The market's oracle address.
+    /// @return irm The market's interest rate model address.
+    /// @return lltv The market's loan-to-value ratio, WAD-scaled.
+    function market()
+        external
+        view
+        returns (address loanToken, address collateralToken, address oracle, address irm, uint256 lltv);
+    /// @notice Max price impact (basis points) tolerated on the rebalance swaps (lever and delever). It sets each
+    /// swap's `sqrtPriceLimitX96` to the oracle price discounted by this amount, so the pool fills only while its
+    /// marginal price stays within tolerance and partial-fills (or skips) past it — rather than reverting. Bounds
+    /// price impact, not the pool's fixed LP fee. Applies only to vault-initiated rebalances — deposit/redeem
+    /// slippage is the caller's responsibility, set via the ERC4626 router. Defaults to 1%, admin-adjustable.
+    function maxSlippageBps() external view returns (uint256);
+    /// @notice TVL limit, denominated in the vault's Asset token. Enforced by `super.deposit`, which reverts with
+    /// `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`. Default 0 -> no deposits until admin raises
+    /// it.
+    /// - This constraint prevents all deposits/mints which would cause the vault to exceed the configured TVL limit
+    ///   after the deposit/mint completes.
+    /// - This constraint does not prevent any withdrawals/redeems under any circumstances.
+    /// - This constraint does not prevent the vault from holding more assets than its configured TVL.
+    /// This can happen if:
+    /// - The owner sets maxTvl to a value lower than the current totalAssets
+    /// - The value of vault holdings increases above the TVL limit due to market conditions. This can occur without
+    ///   any direct interactions with the vault.
+    function maxTvl() external view returns (uint256);
+    /// @notice High-water mark for the performance fee, as asset-per-share scaled by WAD (`NAV * WAD / claims`).
+    /// Flow-neutral, strict all-time peak. Vault-wide (one mark for all holders): a depositor entering below it rides
+    /// the recovery back up fee-free — accepted by design in lieu of per-user-HWM accounting.
+    function perfHighWaterMark() external view returns (uint256);
+    /// @notice Performance fee on per-share gains above the high-water mark, in basis points. 0 = off.
+    /// @dev Crystallizes on UNREALIZED, oracle-marked NAV and is triggerable by anyone via `accrueFees`; bounded by the
+    /// all-time HWM and the 50% cap.
+    function performanceFeeBps() external view returns (uint256);
+
+    // ── Timelocked emergency recovery (custodial, in-kind) ──────────────────
+
+    /// @notice Delay (in seconds) between scheduling and executing a recovery.
+    function RECOVERY_DELAY() external view returns (uint256);
+    /// @notice Timestamp a scheduled recovery becomes executable; 0 = none pending.
+    function recoveryValidAt() external view returns (uint256);
+    /// @notice Set once a recovery executes; permanently blocks new deposits.
+    function recovered() external view returns (bool);
 
     /// @notice Withdraw is disabled in favor of redeem.
     /// @param owner Account whose shares would be burned.

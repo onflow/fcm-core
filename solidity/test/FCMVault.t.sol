@@ -165,7 +165,7 @@ contract FCMVaultTest is Test {
     ///      asset-denominated deposits, since minting an exact share count would
     ///      require pre-computing the borrow+swap leg with unknown slippage.
     function test_Mint_Reverts() public {
-        vm.expectRevert(bytes("not implemented"));
+        vm.expectRevert(IFCMVault.NotImplemented.selector);
         vault.mint(1e18, user);
     }
 
@@ -1204,31 +1204,43 @@ contract FCMVaultTest is Test {
     function test_Rebalance_ConstructorValidatesBands() public {
         FCMVault.InitParams memory p = _baseParams();
         p.healthFactorMin = 0.9e18;
-        vm.expectRevert(bytes("HF min < WAD"));
+        vm.expectRevert(abi.encodeWithSelector(IFCMVault.BelowMinWad.selector, p.healthFactorMin));
         new FCMVault(p);
 
         // min above the lower re-entry target.
         p = _baseParams();
         p.healthFactorMin = 1.35e18; // > minTarget (1.30)
-        vm.expectRevert(bytes("HF min > minTarget"));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IFCMVault.InvalidHealthFactorBounds.selector, p.healthFactorMin, p.healthFactorMinTarget
+            )
+        );
         new FCMVault(p);
 
         // targets crossed (minTarget above maxTarget).
         p = _baseParams();
         p.healthFactorMinTarget = 1.62e18; // > maxTarget (1.60)
-        vm.expectRevert(bytes("HF minTarget > maxTarget"));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IFCMVault.InvalidHealthFactorBounds.selector, p.healthFactorMinTarget, p.healthFactorMaxTarget
+            )
+        );
         new FCMVault(p);
 
         // upper re-entry target above the upper bound.
         p = _baseParams();
         p.healthFactorMaxTarget = 1.7e18; // > max (1.65)
-        vm.expectRevert(bytes("HF maxTarget > max"));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IFCMVault.InvalidHealthFactorBounds.selector, p.healthFactorMaxTarget, p.healthFactorMax
+            )
+        );
         new FCMVault(p);
 
         // yield-factor band edge below WAD (harvest trigger below bare backing).
         p = _baseParams();
         p.yieldFactorMax = 0.9e18; // < WAD
-        vm.expectRevert(bytes("yieldFactorMax < WAD"));
+        vm.expectRevert(abi.encodeWithSelector(IFCMVault.BelowMinWad.selector, p.yieldFactorMax));
         new FCMVault(p);
     }
 
@@ -1519,7 +1531,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(PYUSD0)).mint(admin, 1_000_000 ether);
         vm.prank(admin);
         vault.scheduleEmergencyRecovery();
-        vm.warp(block.timestamp + vault.recoveryDelay());
+        vm.warp(block.timestamp + vault.RECOVERY_DELAY());
     }
 
     /// @notice Happy path: after the timelock, the owner funds the debt and the
@@ -2001,7 +2013,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(PYUSD0)).mint(admin, 1_000_000 ether);
         vm.prank(admin);
         vault.scheduleEmergencyRecovery();
-        vm.warp(block.timestamp + vault.recoveryDelay());
+        vm.warp(block.timestamp + vault.RECOVERY_DELAY());
         vm.startPrank(admin);
         PYUSD0.approve(address(vault), type(uint256).max);
         vault.executeEmergencyRecovery();

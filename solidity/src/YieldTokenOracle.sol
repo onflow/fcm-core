@@ -16,25 +16,25 @@ contract YieldTokenOracle is IOracle {
     uint256 internal constant PRICE_SCALE = 1e36;
 
     /// @notice The FCMVault being priced.
-    IERC4626 public immutable vault;
+    IERC4626 public immutable VAULT;
 
     /// @notice The asset being priced.
-    address public immutable asset;
+    address public immutable ASSET;
 
     /// @notice One whole vault share, used as the conversion sample so the vault's rounding error stays negligible.
-    uint256 public immutable conversionSample;
+    uint256 public immutable CONVERSION_SAMPLE;
 
     error AssetMismatch();
 
     constructor(IERC4626 vault_, address asset_) {
+        VAULT = vault_;
+        ASSET = asset_;
+        CONVERSION_SAMPLE = 10 ** vault_.decimals();
         if (vault_.asset() != asset_) revert AssetMismatch();
-        vault = vault_;
-        asset = asset_;
-        conversionSample = 10 ** vault_.decimals();
     }
 
     /// @inheritdoc IOracle
     function price() external view returns (uint256) {
-        return Math.mulDiv(vault.convertToAssets(conversionSample), PRICE_SCALE, conversionSample);
+        return Math.mulDiv(VAULT.convertToAssets(CONVERSION_SAMPLE), PRICE_SCALE, CONVERSION_SAMPLE);
     }
 }

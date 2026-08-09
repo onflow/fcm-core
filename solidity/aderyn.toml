@@ -1,0 +1,3 @@
+version = 1
+include = ["src/", "interfaces/"]
+exclude = ["src/interfaces/external/"]

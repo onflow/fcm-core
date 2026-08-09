@@ -53,8 +53,8 @@ contract Rebalance is Script {
 
         console.log("=== rebalance complete ===");
         console.log("vault:      %s", address(vault));
-        console.log("HF min:     %s", vault.healthFactorMin());
-        console.log("HF max:     %s", vault.healthFactorMax());
+        console.log("HF min:     %s", vault.HEALTH_FACTOR_MIN());
+        console.log("HF max:     %s", vault.HEALTH_FACTOR_MAX());
         console.log("HF before:  %s", hfBefore);
         console.log("HF after:   %s", hfAfter);
         console.log("debt before: %s", debtBefore);
