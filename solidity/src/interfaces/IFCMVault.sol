@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {IERC4626} from "openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 
 /// @title IFCMVault
 /// @author Flow Foundation
 /// @notice Interface for the FCMVault
-interface IFCMVault is IERC4626 {
+interface IFCMVault {
     struct InitParams {
         IERC20 collateral;
         IERC20 loanToken;
@@ -114,11 +113,6 @@ interface IFCMVault is IERC4626 {
         uint256 collateral, uint256 debt, uint256 yield, uint256 collateralPrice, uint256 debtPrice, uint256 yieldPrice
     );
 
-    /// @dev Attempted to deposit more assets than the max amount for `receiver`.
-    error ERC4626ExceededMaxDeposit(address receiver, uint256 assets, uint256 max);
-    /// @dev Attempted to withdraw more assets than the max amount for `owner`.
-    // error ERC4626ExceededMaxWithdraw(address owner, uint256 assets, uint256 max);
-
     /// @dev Deposits are frozen while a recovery is pending or after it executes.
     error EmergencyRecoveryActive();
     /// @dev `executeEmergencyRecovery` reverts before recovery is scheduled or before its delay elapses.
@@ -133,8 +127,10 @@ interface IFCMVault is IERC4626 {
     error Unauthorized();
     /// @dev Thrown when calling ERC4626 functionality that is unsupported in FCMVault.
     error NotImplemented();
+
     /// @notice Thrown when an input address is set to address(0).
     error ZeroAddress();
+
     /// @notice Thrown when a scalar factor is strictly less than 1e18 (WAD).
     /// @dev WAD precision is scaled to 10**18.
     error BelowMinWad(uint256 value);
@@ -206,25 +202,92 @@ interface IFCMVault is IERC4626 {
     /// @param newBps New performance fee rate in basis points.
     function setPerformanceFeeBps(uint256 newBps) external;
 
+    /// @notice Deposit `assets` of the underlying asset into the vault and mint vault shares to `receiver`.
+    /// @dev Expansion sequence (see docs/architecture.md §A). Let `navBefore` be the vault NAV before this deposit: 1.
+    /// Accrue market interest so `navBefore` and the post-deposit NAV measurement are both fresh. 2. Pull `assets` from
+    /// the caller and supply them as collateral to the Morpho market. 3. Borrow `toBorrow =
+    /// _targetBorrowAgainst(assets)` loan token and swap it into yield token on FlowSwap V3. The borrow is capped so
+    /// this deposit cannot drag the existing position's health factor down to the target — small deposits never
+    /// rebalance the whole protocol. 4. Mint shares pro-rata to the NAV contribution
+    /// Rounding favors the vault: the share computation rounds down, so any residual NAV accrues to existing
+    /// shareholders rather than the new depositor.
+    /// @param assets Amount of underlying asset to deposit.
+    /// @param receiver Account to credit with newly minted shares.
+    /// @return shares Vault shares minted to `receiver`.
+    function deposit(uint256 assets, address receiver) external returns (uint256 shares);
+
+    /// @notice Not implemented. Use `deposit` instead.
+    /// @dev `mint` would need to invert the borrow-and-swap leg to solve for the asset input that produces an exact
+    /// share output — non-trivial because the yield leg goes through an AMM whose realized price is only known after
+    /// execution.
+    /// @param shares Vault shares to mint (unused — always reverts).
+    /// @param receiver Account that would receive the shares (unused — always reverts).
+    /// @return assets Asset amount (unused — always reverts).
+    function mint(uint256 shares, address receiver) external returns (uint256 assets);
+
+    /// @notice Not implemented. Use `redeem` instead; `maxWithdraw` reports 0.
+    /// @param assets Asset amount to withdraw (unused — always reverts).
+    /// @param receiver Account that would receive the asset (unused — always reverts).
+    /// @param owner Account whose shares would be burned (unused — always reverts).
+    /// @return shares Vault shares burned (unused — always reverts).
+    function withdraw(uint256 assets, address receiver, address owner) external returns (uint256 shares);
+
+    /// @notice Redeem `shares` of this vault for the underlying asset. The owner's shares are burned, a proportional
+    /// slice of the underlying leveraged position is unwound through the AMM, and the resulting asset is delivered to
+    /// `receiver`.
+    /// @dev Unwind sequence (AMM-mediated, see docs/architecture.md §A). Let `p = shares /
+    /// _totalClaims()`, the redeemed fraction of the total claim pool (existing supply + virtual-share offset), and `d*
+    /// = p × debt`, the pro-rata debt slice. The unwind: 1. Sell exactly `p × yieldToken` for loanToken on FlowSwap
+    /// V3. Call the realized loanToken output `loanGot`. 2. If `loanGot ≥ d*` (Case A — fair or favorable AMM
+    /// execution): repay `d*`, withdraw `p × collateral` of the asset, and swap the surplus `loanGot - d*` loanToken
+    /// to the asset. 3. If `loanGot < d*` (Case B — yield underperformed): flash-borrow the shortfall `d* - loanGot`
+    /// in loanToken, repay the full `d*`, withdraw the full `p × collateral`, and sell just enough of that collateral
+    /// to repay the flash. The redeemer takes home their full pro-rata value; the collateral sold covers the debt the
+    /// yield leg could not. 4. Burn shares and transfer the new asset balance to receiver.
+    ///
+    /// Rounding favors the vault: all pro-rata slices round down, so residuals accrue to remaining shareholders rather
+    /// than leaking to the redeemer.
+    /// Reverts if `msg.sender != owner` and allowance is insufficient.
+    /// @param shares Vault shares to burn.
+    /// @param receiver Account to credit with the asset payout.
+    /// @param owner Account whose shares are burned.
+    /// @return assets Asset actually delivered to `receiver`.
+    function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets);
+
     /// @notice The FlowSwap V3 yield/debt pool the rebalance swaps route through. Read for its live `slot0` marginal
     /// price so a rebalance can derive a `sqrtPriceLimitX96` from the oracle and skip when the pool is already priced
     /// past the slippage bound.
-    /// @return poolAddress The yield/debt pool address.
-    function YIELD_DEBT_POOL() external view returns (address poolAddress);
+    function YIELD_DEBT_POOL() external view returns (address);
     /// @notice The yield factor is `yieldValue / debt`, WAD-scaled (WAD = the yield exactly repays the debt). It is NOT
     /// a yield rate. `yieldFactorMax` is the upper edge of its band: `rebalance`'s harvest leg fires only when the
     /// yield factor exceeds it, so it does not act on sub-threshold surplus. Must be `>= WAD`. Immutable, like the
     /// health-factor band bounds.
-    /// @return yieldFactorMax The upper edge of the yield-factor band, WAD-scaled.
-    function YIELD_FACTOR_MAX() external view returns (uint256 yieldFactorMax);
+    function YIELD_FACTOR_MAX() external view returns (uint256);
     /// @notice Address of the oracle for the yield token.
     /// @dev We will deploy an oracle instance, which will provide the best available price information for the given
     /// token. This may be a 3rd party oracle, onchain price information, or both.
-    /// @return oracleAddress The yield oracle address.
-    function YIELD_ORACLE() external view returns (address oracleAddress);
+    function YIELD_ORACLE() external view returns (address);
     /// @notice Address of the yield token (inner vault share).
     /// @dev The yield token is the inner vault's share token and the yield leg of the position.
     function YIELD_TOKEN() external view returns (IERC20);
+
+    /// @notice Returns the vault's net asset value (NAV) denominated in the underlying asset (collateral token).
+    /// @dev NAV = collateral + yield − debt, with both yield and debt converted into asset units using oracle prices:
+    /// - collateral: read directly from the Morpho position. - yield: balance of `yieldToken` held by the vault, priced
+    /// through `yieldOracle` and the market oracle (see `_yieldToAsset`). - debt: outstanding loan-token debt on the
+    /// Morpho market, valued at the market oracle price (see `MarketLib.debt`).
+    /// Returns 0 if debt exceeds gross value (an underwater position). This is a stale read by default — callers that
+    /// need an up-to-the-block NAV must accrue interest on the market in the same tx first (see `deposit`).
+    /// @return totalManagedAssets The vault's net asset value in underlying asset units.
+    function totalAssets() external view returns (uint256 totalManagedAssets);
+
+    /// @notice Remaining headroom under the TVL limit, clamped to 0 when deposits are disabled.
+    /// @param receiver The account that would receive the deposited shares.
+    /// @return maxAssets Maximum depositable asset amount.
+    /// @dev Even if the inner vault has hit its own deposit limit, we may still be able to obtain shares of it on the
+    /// AMM to satisfy the deposit. However, if we implement 'direct deposit' to the inner vault, its own maxDeposit()
+    /// will bind.
+    function maxDeposit(address receiver) external view returns (uint256 maxAssets);
 
     /// @notice Members of this role may deposit assets, hold shares, and transfer shares.
     function EARLY_ACCESS_ROLE() external view returns (bytes32);
@@ -256,15 +319,11 @@ interface IFCMVault is IERC4626 {
     function HEALTH_FACTOR_MIN_TARGET() external view returns (uint256);
     /// @notice Timestamp of the last fee accrual, for the time-based management fee.
     function lastFeeAccrual() external view returns (uint256);
-    /// @notice Address of the collateral token.
-    /// @dev The collateral token is the asset and the collateral leg of the position.
-    function COLLATERAL_TOKEN() external view returns (IERC20);
-
     /// @notice Address of the loan token (inner vault asset).
     /// @dev The loan token is the inner vault's asset and the debt leg of the position.
     function LOAN_TOKEN() external view returns (IERC20);
 
-    // -- Management & performance fees
+    // ── Management & performance fees
     /// @notice Flat yearly management fee on NAV, in basis points. 0 = off.
     /// @dev Linear accrual of the annual rate; bounded by the 10% cap.
     function managementFeeBps() external view returns (uint256);
@@ -287,15 +346,12 @@ interface IFCMVault is IERC4626 {
     function maxSlippageBps() external view returns (uint256);
     /// @notice TVL limit, denominated in the vault's Asset token. Enforced by `super.deposit`, which reverts with
     /// `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`. Default 0 -> no deposits until admin raises
-    /// it.
-    /// - This constraint prevents all deposits/mints which would cause the vault to exceed the configured TVL limit
-    ///   after the deposit/mint completes.
-    /// - This constraint does not prevent any withdrawals/redeems under any circumstances.
-    /// - This constraint does not prevent the vault from holding more assets than its configured TVL.
-    /// This can happen if:
-    /// - The owner sets maxTvl to a value lower than the current totalAssets
-    /// - The value of vault holdings increases above the TVL limit due to market conditions. This can occur without
-    ///   any direct interactions with the vault.
+    /// it. - This constraint prevents all deposits/mints which would cause the vault to exceed the configured TVL limit
+    /// after the deposit/mint completes. - This constraint does not prevent any withdrawals/redeems under any
+    /// circumstances. - This constraint does not prevent the vault from holding more assets than its configured TVL.
+    /// This can happen if: - The owner sets maxTvl to a value lower than the current totalAssets - The value of vault
+    /// holdings increases above the TVL limit due to market conditions. This can occur without any direct interactions
+    /// with the vault.
     function maxTvl() external view returns (uint256);
     /// @notice High-water mark for the performance fee, as asset-per-share scaled by WAD (`NAV * WAD / claims`).
     /// Flow-neutral, strict all-time peak. Vault-wide (one mark for all holders): a depositor entering below it rides
@@ -306,7 +362,7 @@ interface IFCMVault is IERC4626 {
     /// all-time HWM and the 50% cap.
     function performanceFeeBps() external view returns (uint256);
 
-    // -- Timelocked emergency recovery (custodial, in-kind) ------------------
+    // ── Timelocked emergency recovery (custodial, in-kind) ──────────────────
 
     /// @notice Delay (in seconds) between scheduling and executing a recovery.
     function RECOVERY_DELAY() external view returns (uint256);
@@ -315,141 +371,22 @@ interface IFCMVault is IERC4626 {
     /// @notice Set once a recovery executes; permanently blocks new deposits.
     function recovered() external view returns (bool);
 
-    // -- IERC4626 overrides --------------------------------------------------
-    // solhint-disable ordering, grouped by domain
-
-    /// @notice The underlying asset managed by the vault (the collateral token).
-    /// @return assetTokenAddress The collateral token address.
-    function asset() external view override(IERC4626) returns (address assetTokenAddress);
-
-    /// @notice Returns the vault's net asset value (NAV) denominated in the underlying asset (collateral token).
-    /// @dev NAV = collateral + yield − debt, with both yield and debt converted into asset units using oracle prices:
-    /// - collateral: read directly from the Morpho position.
-    /// - yield: balance of `yieldToken` held by the vault, priced through `yieldOracle` and the market oracle
-    ///   (see `_yieldToAsset`).
-    /// - debt: outstanding loan-token debt on the Morpho market, valued at the market oracle price
-    ///   (see `MarketLib.debt`).
-    /// Returns 0 if debt exceeds gross value (an underwater position). This is a stale read by default — callers that
-    /// need an up-to-the-block NAV must accrue interest on the market in the same tx first (see `deposit`).
-    /// @return totalManagedAssets The vault's net asset value in underlying asset units.
-    function totalAssets() external view override(IERC4626) returns (uint256 totalManagedAssets);
-
-    /// @notice Convert an asset amount to the equivalent share amount at the current exchange rate.
-    /// @param assets Amount of the underlying asset to convert.
-    /// @return shares Equivalent vault shares.
-    function convertToShares(uint256 assets) external view override(IERC4626) returns (uint256 shares);
-
-    /// @notice Convert a share amount to the equivalent asset amount at the current exchange rate.
-    /// @param shares Amount of vault shares to convert.
-    /// @return assets Equivalent underlying asset amount.
-    function convertToAssets(uint256 shares) external view override(IERC4626) returns (uint256 assets);
-
-    /// @notice Remaining headroom under the TVL limit, clamped to 0 when deposits are disabled.
-    /// @param receiver The account that would receive the deposited shares.
-    /// @return maxAssets Maximum depositable asset amount.
-    /// @dev Even if the inner vault has hit its own deposit limit, we may still be able to obtain shares of it on the
-    /// AMM to satisfy the deposit. However, if we implement 'direct deposit' to the inner vault, its own maxDeposit()
-    /// will bind.
-    function maxDeposit(address receiver) external view override(IERC4626) returns (uint256 maxAssets);
-
-    /// @notice Deposit `assets` of the underlying asset into the vault and mint vault shares to `receiver`.
-    /// @dev Expansion sequence (see docs/architecture.md §A). Let `navBefore` be the vault NAV before this deposit:
-    /// 1. Accrue market interest so `navBefore` and the post-deposit NAV measurement are both fresh.
-    /// 2. Pull `assets` from the caller and supply them as collateral to the Morpho market.
-    /// 3. Borrow `toBorrow = _targetBorrowAgainst(assets)` loan token and swap it into yield token on FlowSwap V3.
-    ///    The borrow is capped so this deposit cannot drag the existing position's health factor down to the target
-    ///    — small deposits never rebalance the whole protocol.
-    /// 4. Mint shares pro-rata to the NAV contribution Rounding favors the vault: the share computation rounds down,
-    ///    so any residual NAV accrues to existing shareholders rather than the new depositor.
-    /// @param assets Amount of underlying asset to deposit.
-    /// @param receiver Account to credit with newly minted shares.
-    /// @return shares Vault shares minted to `receiver`.
-    function deposit(uint256 assets, address receiver) external override(IERC4626) returns (uint256 shares);
-
-    /// @notice Maximum redeemable shares for `owner` — the full share balance. Redeem is always permitted
-    /// (no lock-up); the realized asset output depends on AMM execution at redeem time.
-    /// @param owner Account whose redeemable shares are reported.
-    /// @return maxShares The owner's full share balance.
-    function maxRedeem(address owner) external view returns (uint256 maxShares);
-
-    /// @notice Redeem `shares` of this vault for the underlying asset. The owner's shares are burned, a proportional
-    /// slice of the underlying leveraged position is unwound through the AMM, and the resulting asset is delivered to
-    /// `receiver`.
-    /// @dev Unwind sequence (AMM-mediated, see docs/architecture.md §A). Let `p = shares / _totalClaims()`, the
-    /// redeemed fraction of the total claim pool (existing supply + virtual-share offset), and `d* = p × debt`, the
-    /// pro-rata debt slice. The unwind:
-    /// 1. Sell exactly `p × yieldToken` for loanToken on FlowSwap V3. Call the realized loanToken output `loanGot`.
-    /// 2. If `loanGot >= d*` (Case A - fair or favorable AMM execution): repay `d*`, withdraw `p * collateral` of the
-    ///    asset, and swap the surplus `loanGot - d*` loanToken to the asset.
-    /// 3. If `loanGot < d*` (Case B - yield underperformed): flash-borrow the shortfall `d* - loanGot` in loanToken,
-    ///    repay the full `d*`, withdraw the full `p * collateral`, and sell just enough of that collateral to repay the
-    ///    flash loan. The redeemer takes home their full pro-rata value; the collateral sold covers the debt the
-    ///    yield leg could not.
-    /// 4. Burn shares and transfer the new asset balance to receiver.
-    ///
-    /// Rounding favors the vault: all pro-rata slices round down, so residuals accrue to remaining shareholders rather
-    /// than leaking to the redeemer.
-    /// Reverts if `msg.sender != owner` and allowance is insufficient.
-    /// @param shares Vault shares to burn.
-    /// @param receiver Account to credit with the asset payout.
-    /// @param owner Account whose shares are burned.
-    /// @return assets Asset actually delivered to `receiver`.
-    function redeem(uint256 shares, address receiver, address owner)
-        external
-        override(IERC4626)
-        returns (uint256 assets);
-
-    // -- IERC4626 not implemented --------------------------------------------
-
-    /// @notice Not implemented — always reverts. The realized share output depends on the borrow-and-swap leg whose
-    /// AMM execution price is only known after the swap runs.
-    /// @param assets Asset amount that would be deposited.
-    /// @return shares Vault shares (unused — always reverts).
-    function previewDeposit(uint256 assets) external pure override(IERC4626) returns (uint256 shares);
+    /// @notice Withdraw is disabled in favor of redeem.
+    /// @param owner Account whose shares would be burned.
+    /// @return maxAssets Always 0.
+    function maxWithdraw(address owner) external view returns (uint256 maxAssets);
 
     /// @notice Mint is disabled in favor of deposit.
     /// @param receiver Account that would receive the shares.
     /// @return maxShares Always 0.
-    function maxMint(address receiver) external pure override(IERC4626) returns (uint256 maxShares);
+    function maxMint(address receiver) external view returns (uint256 maxShares);
 
-    /// @notice Not implemented — always reverts. `mint` is disabled in favor of `deposit`; preview follows.
-    /// @param shares Vault shares that would be minted.
-    /// @return assets Asset amount (unused — always reverts).
-    function previewMint(uint256 shares) external pure override(IERC4626) returns (uint256 assets);
-
-    /// @notice Not implemented. Use `deposit` instead.
-    /// @dev `mint` would need to invert the borrow-and-swap leg to solve for the asset input that produces an exact
-    /// share output — non-trivial because the yield leg goes through an AMM whose realized price is only known after
-    /// execution.
-    /// @param shares Vault shares to mint (unused — always reverts).
-    /// @param receiver Account that would receive the shares (unused — always reverts).
-    /// @return assets Asset amount (unused — always reverts).
-    function mint(uint256 shares, address receiver) external pure override(IERC4626) returns (uint256 assets);
-
-    /// @notice Withdraw is disabled in favor of redeem.
-    /// @param owner Account whose shares would be burned.
-    /// @return maxAssets Always 0.
-    function maxWithdraw(address owner) external pure override(IERC4626) returns (uint256 maxAssets);
-
-    /// @notice Not implemented — always reverts. `withdraw` itself is disabled in favor of `redeem`; preview follows.
-    /// @param assets Asset amount that would be withdrawn.
-    /// @return shares Vault shares (unused — always reverts).
-    function previewWithdraw(uint256 assets) external pure override(IERC4626) returns (uint256 shares);
-
-    /// @notice Not implemented. Use `redeem` instead; `maxWithdraw` reports 0.
-    /// @param assets Asset amount to withdraw (unused — always reverts).
-    /// @param receiver Account that would receive the asset (unused — always reverts).
-    /// @param owner Account whose shares would be burned (unused — always reverts).
-    /// @return shares Vault shares burned (unused — always reverts).
-    function withdraw(uint256 assets, address receiver, address owner)
-        external
-        pure
-        override(IERC4626)
-        returns (uint256 shares);
-
-    /// @notice Not implemented — always reverts. Preview is not supported because the realized redeem output depends
-    /// on AMM execution unknown before the swap runs.
-    /// @param shares Vault shares that would be redeemed.
-    /// @return assets Asset amount (unused — always reverts).
-    function previewRedeem(uint256 shares) external pure override(IERC4626) returns (uint256 assets);
+    // function convertToShares(uint256 assets) external view returns (uint256 shares);
+    // function convertToAssets(uint256 shares) external view returns (uint256 assets);
+    // function asset() external view returns (address assetTokenAddress);
+    // function maxRedeem(address owner) external view returns (uint256 maxShares);
+    // function previewRedeem(uint256 shares) external view returns (uint256 assets);
+    // function previewWithdraw(uint256 assets) external view returns (uint256 shares);
+    // function previewMint(uint256 shares) external view returns (uint256 assets);
+    // function previewDeposit(uint256 assets) external view returns (uint256 shares);
 }
