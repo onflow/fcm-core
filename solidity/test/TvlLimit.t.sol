@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import {Test} from "forge-std/Test.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {FCMVault, MORPHO} from "../src/FCMVault.sol";
-import {ERC4626, IERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
 import {SwapLib} from "../src/libraries/SwapLib.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import {Test} from "forge-std/Test.sol";
 
 import {MockERC20} from "./mocks/MockERC20.sol";
+import {MockIrm} from "./mocks/MockIrm.sol";
 import {MockMorpho} from "./mocks/MockMorpho.sol";
+import {MockOracle} from "./mocks/MockOracle.sol";
 import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
 import {MockUniswapV3Pool} from "./mocks/MockUniswapV3Pool.sol";
-import {MockOracle} from "./mocks/MockOracle.sol";
-import {MockIrm} from "./mocks/MockIrm.sol";
 
 /// @notice Tests for the TVL limit on FCMVault.
 contract TvlLimitTest is Test {
@@ -67,7 +67,7 @@ contract TvlLimitTest is Test {
         yieldOracle = new MockOracle(YIELD_PRICE);
 
         vault = new FCMVault(
-            FCMVault.InitParams({
+            IFCMVault.InitParams({
                 collateral: WETH,
                 loanToken: PYUSD0,
                 yieldToken: FUSDEV,
@@ -155,13 +155,13 @@ contract TvlLimitTest is Test {
     function test_SetMaxTvl_OnlyOwner() public {
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
-        vault.setMaxTvl(1_000);
+        vault.setMaxTvl(1000);
     }
 
     function test_SetMaxTvl_OwnerCanRaiseAndLower() public {
         vm.prank(owner);
-        vault.setMaxTvl(1_000);
-        assertEq(vault.maxTvl(), 1_000);
+        vault.setMaxTvl(1000);
+        assertEq(vault.maxTvl(), 1000);
 
         vm.prank(owner);
         vault.setMaxTvl(500);
@@ -175,12 +175,12 @@ contract TvlLimitTest is Test {
     function test_SetMaxTvl_EmitsEvent() public {
         vm.prank(owner);
         vm.expectEmit(false, false, false, true, address(vault));
-        emit MaxTvlSet(0, 1_000);
-        vault.setMaxTvl(1_000);
+        emit MaxTvlSet(0, 1000);
+        vault.setMaxTvl(1000);
 
         vm.prank(owner);
         vm.expectEmit(false, false, false, true, address(vault));
-        emit MaxTvlSet(1_000, 500);
+        emit MaxTvlSet(1000, 500);
         vault.setMaxTvl(500);
     }
 
@@ -203,12 +203,12 @@ contract TvlLimitTest is Test {
         // Previous owner can no longer adjust the limit.
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, owner));
-        vault.setMaxTvl(1_000);
+        vault.setMaxTvl(1000);
 
         // New owner can.
         vm.prank(alice);
-        vault.setMaxTvl(1_000);
-        assertEq(vault.maxTvl(), 1_000);
+        vault.setMaxTvl(1000);
+        assertEq(vault.maxTvl(), 1000);
     }
 
     function test_TransferOwnership_EmitsEvent() public {
@@ -222,13 +222,13 @@ contract TvlLimitTest is Test {
 
     function test_RenounceOwnership_LocksLimitForever() public {
         vm.startPrank(owner);
-        vault.setMaxTvl(1_000);
+        vault.setMaxTvl(1000);
         vault.renounceOwnership();
         assertEq(vault.owner(), address(0));
 
         // The limit is now frozen — no caller can change it.
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, owner));
-        vault.setMaxTvl(2_000);
+        vault.setMaxTvl(2000);
         vm.stopPrank();
     }
 
@@ -236,7 +236,7 @@ contract TvlLimitTest is Test {
 
     function test_Deposit_BelowLimitSucceeds() public {
         vm.prank(owner);
-        vault.setMaxTvl(1_000);
+        vault.setMaxTvl(1000);
         uint256 shares = vault.deposit(500, owner);
         assertGt(shares, 0);
         assertEq(vault.totalAssets(), 500);
@@ -244,16 +244,16 @@ contract TvlLimitTest is Test {
 
     function test_Deposit_ExactlyAtLimitSucceeds() public {
         vm.prank(owner);
-        vault.setMaxTvl(1_000);
-        vault.deposit(1_000, owner);
-        assertEq(vault.totalAssets(), 1_000);
+        vault.setMaxTvl(1000);
+        vault.deposit(1000, owner);
+        assertEq(vault.totalAssets(), 1000);
     }
 
     function test_Deposit_OneOverLimitReverts() public {
         vm.prank(owner);
-        vault.setMaxTvl(1_000);
-        _expectMaxDepositExceeded(owner, 1_001);
-        vault.deposit(1_001, owner);
+        vault.setMaxTvl(1000);
+        _expectMaxDepositExceeded(owner, 1001);
+        vault.deposit(1001, owner);
     }
 
     /// @notice Limit is global, not user-specific: alice's deposit reduces
@@ -261,7 +261,7 @@ contract TvlLimitTest is Test {
     ///         the limit.
     function test_Deposit_LimitIsGlobalAcrossUsers() public {
         vm.prank(owner);
-        vault.setMaxTvl(1_000);
+        vault.setMaxTvl(1000);
 
         vm.prank(alice);
         vault.deposit(600, alice);
@@ -273,7 +273,7 @@ contract TvlLimitTest is Test {
         // Bob can still deposit up to the remaining 400.
         vm.prank(bob);
         vault.deposit(400, bob);
-        assertEq(vault.totalAssets(), 1_000);
+        assertEq(vault.totalAssets(), 1000);
     }
 
     function testFuzz_Deposit_RespectsLimit(uint96 limit, uint96 amount) public {
@@ -300,9 +300,9 @@ contract TvlLimitTest is Test {
     /// @dev Returned value of `maxDeposit` should reflect the remaining limit.
     function test_MaxDeposit_ReturnsRemainingCapacity() public {
         vm.prank(owner);
-        vault.setMaxTvl(1_000);
-        assertEq(vault.maxDeposit(owner), 1_000);
-        assertEq(vault.maxDeposit(alice), 1_000, "limit is global, not per-receiver");
+        vault.setMaxTvl(1000);
+        assertEq(vault.maxDeposit(owner), 1000);
+        assertEq(vault.maxDeposit(alice), 1000, "limit is global, not per-receiver");
 
         vault.deposit(400, owner);
         assertEq(vault.maxDeposit(owner), 600);
@@ -311,8 +311,8 @@ contract TvlLimitTest is Test {
 
     function test_MaxDeposit_ZeroWhenAtLimit() public {
         vm.prank(owner);
-        vault.setMaxTvl(1_000);
-        vault.deposit(1_000, owner);
+        vault.setMaxTvl(1000);
+        vault.deposit(1000, owner);
         assertEq(vault.maxDeposit(owner), 0);
     }
 
@@ -321,7 +321,7 @@ contract TvlLimitTest is Test {
     ///         revert. Existing TVL stays put — the limit is not retroactive.
     function test_MaxDeposit_ClampsToZeroWhenLimitLoweredBelowTvl() public {
         vm.prank(owner);
-        vault.setMaxTvl(1_000);
+        vault.setMaxTvl(1000);
         vault.deposit(800, owner);
 
         vm.prank(owner);
@@ -336,16 +336,16 @@ contract TvlLimitTest is Test {
     /// @notice Raising the limit unblocks new deposits up to the new room.
     function test_MaxDeposit_TracksLimitChanges() public {
         vm.prank(owner);
-        vault.setMaxTvl(1_000);
-        vault.deposit(1_000, owner);
+        vault.setMaxTvl(1000);
+        vault.deposit(1000, owner);
         assertEq(vault.maxDeposit(owner), 0);
 
         vm.prank(owner);
-        vault.setMaxTvl(2_500);
-        assertEq(vault.maxDeposit(owner), 1_500);
+        vault.setMaxTvl(2500);
+        assertEq(vault.maxDeposit(owner), 1500);
 
-        vault.deposit(1_500, owner);
-        assertEq(vault.totalAssets(), 2_500);
+        vault.deposit(1500, owner);
+        assertEq(vault.totalAssets(), 2500);
         assertEq(vault.maxDeposit(owner), 0);
     }
 

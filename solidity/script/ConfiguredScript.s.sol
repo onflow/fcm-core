@@ -1,17 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import {Script, console} from "forge-std/Script.sol";
-
-import {IMorpho, MarketParams, Id, Market} from "@morpho-blue/interfaces/IMorpho.sol";
-import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
-
 import {MORPHO} from "../src/FCMVault.sol";
-
-/// @dev Minimal factory interface (FlowSwap V3 is a Uniswap V3 fork).
-interface IUniswapV3Factory {
-    function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address);
-}
+import {IUniswapV3Factory} from "./interfaces/IUniswapV3Factory.sol";
+import {Id, Market, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
+import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
+import {Script} from "forge-std/Script.sol";
 
 /// @title ConfiguredScript
 /// @notice Shared base for deployment scripts. Loads the per-network config
@@ -48,9 +42,12 @@ abstract contract ConfiguredScript is Script {
 
     function _loadConfig() internal view returns (Config memory c) {
         string memory network = vm.envOr("DEPLOY_NETWORK", string("mainnet"));
+        // necessary to load config from file
+        // forge-lint: disable-next-item(unsafe-cheatcode)
         string memory toml = vm.readFile(string.concat("deployments/", network, ".toml"));
 
-        c.chainId = vm.parseTomlUint(toml, ".chainId");
+        // c = abi.decode(vm.parseToml(toml), (Config));
+        // c.chainId = vm.parseTomlUint(toml, ".chainId");
         require(
             c.chainId == block.chainid, string.concat("config chainId does not match RPC chain (network=", network, ")")
         );
@@ -112,7 +109,7 @@ abstract contract ConfiguredScript is Script {
 
     /// @dev The account whose key signs broadcast transactions. Must be
     ///      called inside a `vm.startBroadcast()` section.
-    function _broadcaster() internal returns (address sender) {
+    function _broadcaster() internal view returns (address sender) {
         (, sender,) = vm.readCallers();
     }
 }

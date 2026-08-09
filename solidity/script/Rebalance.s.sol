@@ -3,12 +3,13 @@ pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
 
-import {Id, MarketParams, Position, Market} from "@morpho-blue/interfaces/IMorpho.sol";
+import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
 
 import {FCMVault, MORPHO} from "../src/FCMVault.sol";
+import {VaultHelpers} from "../test/utils/FCMVaultHelpers.sol";
 
 /// @title Rebalance
 /// @notice Drives a LIVE FCMVault's leveraged Morpho position back inside its
@@ -35,6 +36,7 @@ import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 contract Rebalance is Script {
     using MarketParamsLib for MarketParams;
     using SharesMathLib for uint256;
+    using VaultHelpers for FCMVault;
 
     function run() public {
         FCMVault vault = FCMVault(vm.envAddress("VAULT"));
@@ -66,7 +68,7 @@ contract Rebalance is Script {
     ///      health factor the same way the contract does (WAD-scaled). Returns
     ///      `type(uint256).max` when there is no debt.
     function _healthFactor(FCMVault vault) internal view returns (uint256) {
-        MarketParams memory mp = _market(vault);
+        MarketParams memory mp = vault.getMarket();
         Position memory pos = MORPHO.position(mp.id(), address(vault));
         if (pos.borrowShares == 0) return type(uint256).max;
         uint256 debt = _debtFromPosition(mp, pos);
@@ -76,7 +78,7 @@ contract Rebalance is Script {
 
     /// @dev The vault's outstanding debt in loan-token units.
     function _debt(FCMVault vault) internal view returns (uint256) {
-        MarketParams memory mp = _market(vault);
+        MarketParams memory mp = vault.getMarket();
         Position memory pos = MORPHO.position(mp.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
         return _debtFromPosition(mp, pos);
@@ -88,10 +90,5 @@ contract Rebalance is Script {
     function _debtFromPosition(MarketParams memory mp, Position memory pos) internal view returns (uint256) {
         Market memory mkt = MORPHO.market(mp.id());
         return uint256(pos.borrowShares).toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
-    }
-
-    function _market(FCMVault vault) internal view returns (MarketParams memory) {
-        (address lt, address ct, address oracle, address irm, uint256 lltv) = vault.market();
-        return MarketParams(lt, ct, oracle, irm, lltv);
     }
 }

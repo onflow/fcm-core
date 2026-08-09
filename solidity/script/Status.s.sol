@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import {console} from "forge-std/Script.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-import {Market, Id} from "@morpho-blue/interfaces/IMorpho.sol";
+import {Id, Market} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {console} from "forge-std/Script.sol";
 
 import {MORPHO} from "../src/FCMVault.sol";
 import {YieldTokenOracle} from "../src/YieldTokenOracle.sol";
-import {IUniswapV3Pool} from "../src/interfaces/IUniswapV3Pool.sol";
+import {IUniswapV3Pool} from "../src/interfaces/external/IUniswapV3Pool.sol";
 import {ConfiguredScript, IUniswapV3Factory} from "./ConfiguredScript.s.sol";
 
 /// @title Status

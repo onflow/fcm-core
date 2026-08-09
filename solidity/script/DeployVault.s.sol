@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import {console} from "forge-std/Script.sol";
+import {Id, Market} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Market, Id} from "@morpho-blue/interfaces/IMorpho.sol";
+import {console} from "forge-std/Script.sol";
 
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {YieldTokenOracle} from "../src/YieldTokenOracle.sol";
+import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
 import {ConfiguredScript} from "./ConfiguredScript.s.sol";
 
 /// @title DeployVault
@@ -56,7 +57,7 @@ contract DeployVault is ConfiguredScript {
         console.log("yield oracle deployed at %s, NAV price %s", yieldOracle, p);
 
         FCMVault vault = new FCMVault(
-            FCMVault.InitParams({
+            IFCMVault.InitParams({
                 collateral: IERC20(c.collateral),
                 loanToken: IERC20(c.loanToken),
                 yieldToken: IERC20(c.yieldToken),

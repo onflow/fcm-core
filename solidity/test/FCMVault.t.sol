@@ -1,27 +1,34 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import {Test} from "forge-std/Test.sol";
-import {Vm} from "forge-std/Vm.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 import {SwapLib} from "../src/libraries/SwapLib.sol";
-import {Id, MarketParams, Position, Market} from "@morpho-blue/interfaces/IMorpho.sol";
+import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 
-import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockMorpho} from "./mocks/MockMorpho.sol";
-import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
+import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
+import {FCMVaultHarness} from "./FCMVaultHarness.sol";
 import {MockCpmmSwapRouter} from "./mocks/MockCpmmSwapRouter.sol";
-import {MockUniswapV3Pool} from "./mocks/MockUniswapV3Pool.sol";
-import {MockOracle} from "./mocks/MockOracle.sol";
+import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockIrm} from "./mocks/MockIrm.sol";
+import {MockMorpho} from "./mocks/MockMorpho.sol";
+import {MockOracle} from "./mocks/MockOracle.sol";
+import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
+import {MockUniswapV3Pool} from "./mocks/MockUniswapV3Pool.sol";
+import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 contract FCMVaultTest is Test {
+    using SafeERC20 for IERC4626;
+    using VaultHelpers for FCMVault;
+    using MarketParamsLib for MarketParams;
     // Token addresses — using the real Flow EVM addresses so mocks are
     // etched where the vault constants would otherwise point.
     IERC20 constant WETH = IERC20(0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590);
@@ -58,7 +65,7 @@ contract FCMVaultTest is Test {
     address internal user = address(0xA11CE);
     address internal bob = address(0xB0B);
     address internal carol = address(0xCA401);
-    address internal stranger = address(0x5_7A);
+    address internal stranger = address(0x57A);
 
     function setUp() public {
         bytes memory erc20Code = address(new MockERC20()).code;
@@ -80,7 +87,7 @@ contract FCMVaultTest is Test {
         assetPool = new MockUniswapV3Pool();
 
         vault = new FCMVault(
-            FCMVault.InitParams({
+            IFCMVault.InitParams({
                 collateral: WETH,
                 loanToken: PYUSD0,
                 yieldToken: FUSDEV,
@@ -235,7 +242,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(WETH)).mint(bob, 1 ether);
         vm.startPrank(bob);
         WETH.approve(address(vault), 1 ether);
-        vm.expectRevert(FCMVault.VaultUnderwater.selector);
+        vm.expectRevert(IFCMVault.VaultUnderwater.selector);
         vault.deposit(1 ether, bob);
         vm.stopPrank();
 
@@ -577,7 +584,7 @@ contract FCMVaultTest is Test {
 
         // Brutal swap fee: if deposit rebalanced to the midpoint HF it would borrow
         // ~474k PYUSD0, lose 99% to fees, and crater the vault NAV.
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(9_900);
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(9900);
 
         uint256 navBefore = vault.totalAssets();
         uint256 healthBefore = _healthFactor();
@@ -720,7 +727,7 @@ contract FCMVaultTest is Test {
         WETH.approve(address(vault), amount);
         uint256 shares = vault.deposit(amount, user);
 
-        vault.transfer(bob, shares);
+        IERC4626(address(vault)).safeTransfer(bob, shares);
         vm.stopPrank();
 
         assertEq(vault.balanceOf(user), 0);
@@ -740,6 +747,8 @@ contract FCMVaultTest is Test {
                 IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
             )
         );
+        // we expect a revert, should never return
+        // forge-lint: disable-next-item(erc20-unchecked-transfer)
         vault.transfer(bob, shares);
         vm.stopPrank();
     }
@@ -764,6 +773,8 @@ contract FCMVaultTest is Test {
             )
         );
         vm.prank(user);
+        // we expect a revert, should never return
+        // forge-lint: disable-next-item(erc20-unchecked-transfer)
         vault.transfer(bob, shares);
     }
 
@@ -1125,7 +1136,7 @@ contract FCMVaultTest is Test {
 
         // >= 100% rejected.
         vm.prank(admin);
-        vm.expectRevert(FCMVault.InvalidSlippage.selector);
+        vm.expectRevert(IFCMVault.InvalidSlippage.selector);
         vault.setMaxSlippageBps(10_000);
     }
 
@@ -1430,9 +1441,8 @@ contract FCMVaultTest is Test {
     }
 
     function _collateral() internal view returns (uint256) {
-        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
-        Id marketId = MarketParamsLib.id(MarketParams(lt, ct, oracle, irm, lltv_));
-        return uint256(MORPHO.position(marketId, address(vault)).collateral);
+        MarketParams memory market = vault.getMarket();
+        return uint256(MORPHO.position(market.id(), address(vault)).collateral);
     }
 
     function _allow(address account) internal {
@@ -1448,11 +1458,10 @@ contract FCMVaultTest is Test {
     }
 
     function _debt() internal view returns (uint256) {
-        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
-        Id marketId = MarketParamsLib.id(MarketParams(lt, ct, oracle, irm, lltv_));
-        Position memory pos = MORPHO.position(marketId, address(vault));
+        MarketParams memory market = vault.getMarket();
+        Position memory pos = MORPHO.position(market.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
-        Market memory mkt = MORPHO.market(marketId);
+        Market memory mkt = MORPHO.market(market.id());
         return
             (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1)) / (uint256(mkt.totalBorrowShares) + 1e6);
     }
@@ -1461,13 +1470,12 @@ contract FCMVaultTest is Test {
     ///      test hook: seize `seizedCollateral` of collateral and repay
     ///      `repaidAssets` of debt.
     function _liquidate(uint256 seizedCollateral, uint256 repaidAssets) internal {
-        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
-        MockMorpho(address(MORPHO))
-            .liquidate(MarketParams(lt, ct, oracle, irm, lltv_), address(vault), seizedCollateral, repaidAssets);
+        MarketParams memory market = vault.getMarket();
+        MockMorpho(address(MORPHO)).liquidate(market, address(vault), seizedCollateral, repaidAssets);
     }
 
     function _baseParams() internal view returns (FCMVault.InitParams memory) {
-        return FCMVault.InitParams({
+        return IFCMVault.InitParams({
             collateral: WETH,
             loanToken: PYUSD0,
             yieldToken: FUSDEV,
@@ -1492,15 +1500,14 @@ contract FCMVaultTest is Test {
     }
 
     function _healthFactor() internal view returns (uint256) {
-        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
-        Id marketId = MarketParamsLib.id(MarketParams(lt, ct, oracle, irm, lltv_));
-        Position memory pos = MORPHO.position(marketId, address(vault));
-        Market memory mkt = MORPHO.market(marketId);
+        MarketParams memory market = vault.getMarket();
+        Position memory pos = MORPHO.position(market.id(), address(vault));
+        Market memory mkt = MORPHO.market(market.id());
         if (pos.borrowShares == 0) return type(uint256).max;
         uint256 debt =
             (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1)) / (uint256(mkt.totalBorrowShares) + 1e6);
         uint256 maxBorrow =
-            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36), 1e18);
+            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), market.lltv, 1e36), 1e18);
         return Math.mulDiv(maxBorrow, 1e18, debt);
     }
 
@@ -1545,7 +1552,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(WETH)).mint(user, 1 ether);
         vm.startPrank(user);
         WETH.approve(address(vault), 1 ether);
-        vm.expectRevert(FCMVault.EmergencyRecoveryActive.selector);
+        vm.expectRevert(IFCMVault.EmergencyRecoveryActive.selector);
         vault.deposit(1 ether, user);
         vm.stopPrank();
         // maxDeposit reflects the halt (ERC-4626: must report 0 when disabled).
@@ -1553,7 +1560,7 @@ contract FCMVaultTest is Test {
 
         // And rebalancing reverts on the recovered vault, so the off-chain
         // rebalancer gets an explicit signal to stop.
-        vm.expectRevert(FCMVault.EmergencyRecoveryActive.selector);
+        vm.expectRevert(IFCMVault.EmergencyRecoveryActive.selector);
         vault.rebalance();
     }
 
@@ -1566,7 +1573,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(WETH)).mint(user, 1 ether);
         vm.startPrank(user);
         WETH.approve(address(vault), 1 ether);
-        vm.expectRevert(FCMVault.EmergencyRecoveryActive.selector);
+        vm.expectRevert(IFCMVault.EmergencyRecoveryActive.selector);
         vault.deposit(1 ether, user);
         vm.stopPrank();
         // maxDeposit reflects the halt (ERC-4626: must report 0 when disabled).
@@ -1589,7 +1596,7 @@ contract FCMVaultTest is Test {
         vm.prank(admin);
         vault.scheduleEmergencyRecovery();
         vm.prank(admin);
-        vm.expectRevert(FCMVault.EmergencyRecoveryNotReady.selector);
+        vm.expectRevert(IFCMVault.EmergencyRecoveryNotReady.selector);
         vault.executeEmergencyRecovery();
     }
 
@@ -1896,15 +1903,15 @@ contract FCMVaultTest is Test {
         vault.setManagementFeeBps(100);
 
         vm.startPrank(admin);
-        vm.expectRevert(FCMVault.InvalidFee.selector);
-        vault.setManagementFeeBps(1_001); // > MAX_MANAGEMENT_FEE_BPS (10%)
-        vm.expectRevert(FCMVault.InvalidFee.selector);
-        vault.setPerformanceFeeBps(5_001); // > MAX_PERFORMANCE_FEE_BPS (50%)
+        vm.expectRevert(IFCMVault.InvalidFee.selector);
+        vault.setManagementFeeBps(1001); // > MAX_MANAGEMENT_FEE_BPS (10%)
+        vm.expectRevert(IFCMVault.InvalidFee.selector);
+        vault.setPerformanceFeeBps(5001); // > MAX_PERFORMANCE_FEE_BPS (50%)
         vault.setManagementFeeBps(200);
-        vault.setPerformanceFeeBps(2_000);
+        vault.setPerformanceFeeBps(2000);
         vm.stopPrank();
         assertEq(vault.managementFeeBps(), 200, "mgmt set");
-        assertEq(vault.performanceFeeBps(), 2_000, "perf set");
+        assertEq(vault.performanceFeeBps(), 2000, "perf set");
     }
 
     /// @notice Management fee accrues ~ rate * NAV * elapsed, minted as shares.
@@ -1925,7 +1932,7 @@ contract FCMVaultTest is Test {
     /// @notice Performance fee ~ rate * gain above HWM; not double-charged.
     function test_Fees_PerformanceAccrualAndHWM() public {
         address feeRcpt = address(0xFEE5);
-        _enableFees(feeRcpt, 0, 2_000); // 20% perf, no mgmt
+        _enableFees(feeRcpt, 0, 2000); // 20% perf, no mgmt
         _depositFor(user, 1 ether);
 
         uint256 navBefore = vault.totalAssets();
@@ -1937,7 +1944,7 @@ contract FCMVaultTest is Test {
         vault.accrueFees();
         uint256 feeShares = vault.balanceOf(feeRcpt);
         assertGt(feeShares, 0, "perf fee minted");
-        assertApproxEqRel(vault.convertToAssets(feeShares), gain * 2_000 / 10_000, 3e16, "perf ~20% gain");
+        assertApproxEqRel(vault.convertToAssets(feeShares), gain * 2000 / 10_000, 3e16, "perf ~20% gain");
 
         // Second accrual with no new gain -> no additional fee (HWM holds).
         uint256 prev = vault.balanceOf(feeRcpt);
@@ -1948,7 +1955,7 @@ contract FCMVaultTest is Test {
     /// @notice No performance fee while below the high-water mark (drawdown).
     function test_Fees_NoPerfInDrawdown() public {
         address feeRcpt = address(0xFEE5);
-        _enableFees(feeRcpt, 0, 2_000);
+        _enableFees(feeRcpt, 0, 2000);
         _depositFor(user, 1 ether);
 
         // First gain sets the HWM and charges.
@@ -1976,7 +1983,7 @@ contract FCMVaultTest is Test {
         vm.startPrank(admin);
         vault.setFeeRecipient(feeRcpt); // deliberately NOT allowlisted
         vault.setManagementFeeBps(200);
-        vault.setPerformanceFeeBps(2_000);
+        vault.setPerformanceFeeBps(2000);
         vm.stopPrank();
 
         _depositFor(user, 1 ether); // must not revert
@@ -2010,7 +2017,7 @@ contract FCMVaultTest is Test {
     ///         the recipient's claim ~= management + performance fee.
     function test_Fees_CombinedAccrual() public {
         address feeRcpt = address(0xFEE5);
-        _enableFees(feeRcpt, 200, 2_000); // 2%/yr mgmt + 20% perf
+        _enableFees(feeRcpt, 200, 2000); // 2%/yr mgmt + 20% perf
         _depositFor(user, 1 ether);
 
         uint256 nav0 = vault.totalAssets();
@@ -2023,7 +2030,7 @@ contract FCMVaultTest is Test {
         uint256 feeShares = vault.balanceOf(feeRcpt);
         assertGt(feeShares, 0, "combined fee minted");
 
-        uint256 expected = (navAccrue * 200 / 10_000) + (gain * 2_000 / 10_000);
+        uint256 expected = (navAccrue * 200 / 10_000) + (gain * 2000 / 10_000);
         assertApproxEqRel(vault.convertToAssets(feeShares), expected, 3e16, "claim ~= mgmt + perf");
     }
 
@@ -2037,7 +2044,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
         vm.warp(block.timestamp + 365 days);
 
-        _enableFees(feeRcpt, 200, 2_000);
+        _enableFees(feeRcpt, 200, 2000);
         vault.accrueFees();
         assertEq(vault.balanceOf(feeRcpt), 0, "no retroactive charge for the pre-enable window");
     }
@@ -2098,7 +2105,7 @@ contract FCMVaultTest is Test {
     ///         after the first deposit mints nothing.
     function test_Fees_NoPerfOnFirstDeposit() public {
         address feeRcpt = address(0xFEE5);
-        _enableFees(feeRcpt, 0, 2_000); // perf only
+        _enableFees(feeRcpt, 0, 2000); // perf only
         _depositFor(user, 1 ether);
 
         vault.accrueFees();
@@ -2110,7 +2117,7 @@ contract FCMVaultTest is Test {
     ///         (not 10/1.1 ≈ 9.09%, which a non-grossed-up mint would give).
     function test_Fees_GrossUpDeliversTrueRate() public {
         address feeRcpt = address(0xFEE5);
-        _enableFees(feeRcpt, 1_000, 0); // 10%/yr, no perf
+        _enableFees(feeRcpt, 1000, 0); // 10%/yr, no perf
         _depositFor(user, 1 ether);
 
         vm.warp(block.timestamp + 365 days);
@@ -2147,15 +2154,5 @@ contract FCMVaultTest is Test {
         vm.stopPrank();
 
         assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the redeemInKind path");
-    }
-}
-
-/// @dev Exposes the vault's internal price-limit math so the security-critical
-///      oracle -> `sqrtPriceLimitX96` conversion can be asserted directly.
-contract FCMVaultHarness is FCMVault {
-    constructor(FCMVault.InitParams memory p) FCMVault(p) {}
-
-    function exposed_yieldDebtSwapLimit(address tokenIn) external view returns (uint160, bool) {
-        return _yieldDebtSwapLimit(tokenIn);
     }
 }

@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import {Script, console} from "forge-std/Script.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Script, console} from "forge-std/Script.sol";
 
-import {Id, MarketParams, Position, Market} from "@morpho-blue/interfaces/IMorpho.sol";
+import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
 
 import {FCMVault, MORPHO} from "../src/FCMVault.sol";
+import {VaultHelpers} from "../test/utils/FCMVaultHelpers.sol";
 
 /// @title LiveCheck
 /// @notice End-to-end integration check against a LIVE FCMVault deployment:
@@ -39,6 +40,7 @@ import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 contract LiveCheck is Script {
     using MarketParamsLib for MarketParams;
     using SharesMathLib for uint256;
+    using VaultHelpers for FCMVault;
 
     function run() public {
         FCMVault vault = FCMVault(vm.envAddress("VAULT"));
@@ -104,11 +106,10 @@ contract LiveCheck is Script {
     ///      read is fresh while the pre-read may lag by unaccrued interest
     ///      (immaterial for this report).
     function _debt(FCMVault vault) internal view returns (uint256) {
-        (address lt, address ct, address oracle, address irm, uint256 lltv) = vault.market();
-        MarketParams memory mp = MarketParams(lt, ct, oracle, irm, lltv);
-        Position memory pos = MORPHO.position(mp.id(), address(vault));
+        MarketParams memory market = vault.getMarket();
+        Position memory pos = MORPHO.position(market.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
-        Market memory mkt = MORPHO.market(mp.id());
+        Market memory mkt = MORPHO.market(market.id());
         return uint256(pos.borrowShares).toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
     }
 }
