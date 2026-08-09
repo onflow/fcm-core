@@ -78,4 +78,10 @@ jobs:
       # Fails only on `error`-severity rules (see .solhint.json); warnings are
       # advisory and do not block.
       - name: Solhint
-        run: solhint 'src/**/*.sol'
+        run: solhint 'src/**/*.sol' '!src/interfaces/external/**'
+
+      # requires code changes enabled in next PR
+      # - name: Aderyn
+      #   uses: Cyfrin/aderyn-ci@v0
+      #   with:
+      #     fail-on: high

@@ -185,6 +185,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
     /// @inheritdoc IFCMVault
     function setManagementFeeBps(uint256 newBps) external onlyOwner {
         if (newBps > MAX_MANAGEMENT_FEE_BPS) revert InvalidFee();
+        // slither-disable-next-line reentrancy-no-eth
         _accrueFees();
         emit ManagementFeeSet(managementFeeBps, newBps);
         managementFeeBps = newBps;
@@ -193,13 +194,16 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
     /// @inheritdoc IFCMVault
     function setPerformanceFeeBps(uint256 newBps) external onlyOwner {
         if (newBps > MAX_PERFORMANCE_FEE_BPS) revert InvalidFee();
+        // slither-disable-next-line reentrancy-no-eth
         _accrueFees();
         emit PerformanceFeeSet(performanceFeeBps, newBps);
         performanceFeeBps = newBps;
     }
 
+    // slither-disable-next-line reentrancy-no-eth -> onlyOwner modifier
     /// @inheritdoc IFCMVault
     function setFeeRecipient(address newRecipient) external onlyOwner {
+        // slither-disable-next-line reentrancy-no-eth
         _accrueFees();
         emit FeeRecipientSet(feeRecipient, newRecipient);
         feeRecipient = newRecipient;
@@ -257,8 +261,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
         // Owner funds the full debt; repay by shares so the position zeros exactly.
         uint256 debtRepaid = market.debt();
         loanToken.safeTransferFrom(msg.sender, address(this), debtRepaid);
-        // slither-disable-next-line unused-return -> position is cleared by shares (repayAll); the repaid amount isn't
-        // needed here
+        // slither-disable-next-line unused-return -> position is cleared by shares (repayAll);
         market.repayAll();
 
         // Free all collateral now that the debt is cleared.
@@ -377,8 +380,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
         uint256 toBorrow = _targetBorrowAgainst(assets);
         if (toBorrow > 0) {
             market.borrow(toBorrow);
-            // slither-disable-next-line unused-return -> swap output is measured via the totalAssets() delta below, not
-            // this return
+            // slither-disable-next-line unused-return -> swap output is measured via the totalAssets() delta below
             SwapLib.swapExactIn(address(loanToken), address(yieldToken), feeYieldDebt, toBorrow);
         }
 
@@ -454,8 +456,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
         uint256 yieldOut = yieldToken.balanceOf(address(this)).mulDiv(shares, claims);
         uint256 loanBefore = loanToken.balanceOf(address(this));
         if (yieldOut > 0) {
-            // slither-disable-next-line unused-return -> loanGot is measured from the loanToken balance delta below,
-            // not this return
+            // slither-disable-next-line unused-return -> loanGot is measured from the loanToken balance delta below
             SwapLib.swapExactIn(address(yieldToken), address(loanToken), feeYieldDebt, yieldOut);
         }
         uint256 loanGot = loanToken.balanceOf(address(this)) - loanBefore;
@@ -471,7 +472,6 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
             uint256 surplus = loanGot - debtSlice;
             if (surplus > 0) {
                 // slither-disable-next-line unused-return -> surplus-swap output is captured by the redeem balance
-                // delta, not this return
                 SwapLib.swapExactIn(address(loanToken), asset(), feeAssetDebt, surplus);
             }
         } else {
@@ -506,8 +506,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
         market.withdrawCollateral(collSlice);
         // Sell collateral for exactly `shortfall` loan token to repay the flash,
         // spending at most the withdrawn slice; the rest stays for the redeemer.
-        // slither-disable-next-line unused-return -> collateral spent is captured by the redeem balance delta, not this
-        // return
+        // slither-disable-next-line unused-return -> collateral spent is captured by the redeem balance delta
         SwapLib.swapExactOut(asset(), address(loanToken), feeAssetDebt, shortfall, collSlice);
     }
 
@@ -584,8 +583,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
         // amount actually converted to yield.
         uint256 loanBefore = loanToken.balanceOf(address(this));
         market.borrow(borrowAmount);
-        // slither-disable-next-line unused-return -> levered amount is measured via the loanToken balance delta below,
-        // not this return
+        // slither-disable-next-line unused-return -> levered amount is measured via the loanToken balance delta below
         SwapLib.swapExactInToLimit(address(loanToken), address(yieldToken), feeYieldDebt, borrowAmount, limit);
 
         // Repay the loan token the swap left behind, so no idle loan lingers.

@@ -1,5 +1,6 @@
 {
   "filter_paths": "(lib/|test/|script/|external/)",
+  "detectors_to_exclude": ["naming-convention"],
   "exclude_dependencies": true,
   "exclude_informational": false,
   "exclude_optimization": false

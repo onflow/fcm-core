@@ -49,8 +49,7 @@ library MarketLib {
     /// @param market Morpho market parameters identifying the position.
     /// @param assets Amount of loan token to borrow, in token units.
     function borrow(MarketParams memory market, uint256 assets) internal {
-        // slither-disable-next-line unused-return -> asset-denominated borrow (shares=0); returned share/asset counts
-        // aren't needed
+        // slither-disable-next-line unused-return -> asset-denominated borrow (shares=0)
         MORPHO.borrow(market, assets, 0, address(this), address(this));
     }
 
@@ -66,8 +65,7 @@ library MarketLib {
         internal
         returns (uint256 assetsRepaid, uint256 sharesRepaid)
     {
-        // slither-disable-next-line unused-return -> return is forwarded but no caller consumes it; repay reverts on
-        // failure
+        // slither-disable-next-line unused-return -> return is forwarded but no caller consumes it
         return MORPHO.repay(market, assets, 0, address(this), "");
     }
 
