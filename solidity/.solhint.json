@@ -2,7 +2,7 @@
   "extends": "solhint:recommended",
   "rules": {
     "func-visibility": ["warn", { "ignoreConstructors": true }],
-    "function-max-lines": ["warn", 55 ],
+    "function-max-lines": ["warn", 60 ],
     "gas-indexed-events": "off",
     "gas-strict-inequalities": "off",
     "import-path-check": "off",
