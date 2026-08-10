@@ -18,7 +18,7 @@ no_match_contract = "ForkTest"
 flow_mainnet = "https://mainnet.evm.nodes.onflow.org"
 
 [profile.ci]
-no_match_contract = ""
+no_match_contract = "^$"
 via_ir = true
 optimizer_runs = 10_000
 verbosity = 3
