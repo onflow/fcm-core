@@ -8,11 +8,8 @@ import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
 import {FCMVault, MORPHO} from "../src/FCMVault.sol";
-import {SwapLib} from "../src/libraries/SwapLib.sol";
-import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
-import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
-
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
+import {SwapLib} from "../src/libraries/SwapLib.sol";
 import {FCMVaultHarness} from "./FCMVaultHarness.sol";
 import {MockCpmmSwapRouter} from "./mocks/MockCpmmSwapRouter.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
@@ -22,6 +19,9 @@ import {MockOracle} from "./mocks/MockOracle.sol";
 import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
 import {MockUniswapV3Pool} from "./mocks/MockUniswapV3Pool.sol";
 import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
+import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
+import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -103,7 +103,7 @@ contract FCMVaultTest is Test {
                 healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
                 healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
                 yieldFactorMax: YIELD_FACTOR_MAX,
-                yieldOracle: address(yieldOracle),
+                yieldOracle: IOracle(address(yieldOracle)),
                 admin: admin,
                 recoveryDelay: 7 days,
                 name: "Flow Credit Markets WETH",
@@ -1503,7 +1503,7 @@ contract FCMVaultTest is Test {
             healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
             healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
             yieldFactorMax: YIELD_FACTOR_MAX,
-            yieldOracle: address(yieldOracle),
+            yieldOracle: IOracle(address(yieldOracle)),
             admin: admin,
             recoveryDelay: 7 days,
             name: "x",

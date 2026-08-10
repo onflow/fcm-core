@@ -4,17 +4,17 @@ pragma solidity ^0.8.13;
 import {FCMVault, MORPHO} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
 import {SwapLib} from "../src/libraries/SwapLib.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
-import {Test} from "forge-std/Test.sol";
-
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockIrm} from "./mocks/MockIrm.sol";
 import {MockMorpho} from "./mocks/MockMorpho.sol";
 import {MockOracle} from "./mocks/MockOracle.sol";
 import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
 import {MockUniswapV3Pool} from "./mocks/MockUniswapV3Pool.sol";
+import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import {Test} from "forge-std/Test.sol";
 
 /// @notice Tests for the TVL limit on FCMVault.
 contract TvlLimitTest is Test {
@@ -83,7 +83,7 @@ contract TvlLimitTest is Test {
                 healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
                 healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
                 yieldFactorMax: YIELD_FACTOR_MAX,
-                yieldOracle: address(yieldOracle),
+                yieldOracle: IOracle(address(yieldOracle)),
                 admin: admin,
                 recoveryDelay: 7 days,
                 name: "Flow Credit Markets WETH",

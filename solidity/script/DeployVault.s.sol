@@ -5,12 +5,12 @@ import {Id, Market} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {console} from "forge-std/Script.sol";
 
-import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-
 import {FCMVault} from "../src/FCMVault.sol";
 import {YieldTokenOracle} from "../src/YieldTokenOracle.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
 import {ConfiguredScript} from "./ConfiguredScript.s.sol";
+import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 /// @title DeployVault
 /// @notice Deploys the FCMVault (and, if the config has no `yieldOracle`
@@ -73,7 +73,7 @@ contract DeployVault is ConfiguredScript {
                 healthFactorMinTarget: c.healthFactorMinTarget,
                 healthFactorMaxTarget: c.healthFactorMaxTarget,
                 yieldFactorMax: c.yieldFactorMax,
-                yieldOracle: yieldOracle,
+                yieldOracle: IOracle(yieldOracle),
                 admin: deployer,
                 recoveryDelay: c.recoveryDelay,
                 name: name,

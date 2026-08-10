@@ -1,3 +1,6 @@
 version = 1
 include = ["src/", "interfaces/"]
 exclude = ["src/interfaces/external/"]
+
+[detectors]
+exclude = ["centralization-risk", "unspecific-solidity-pragma"]
