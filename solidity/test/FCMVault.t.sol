@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
@@ -496,9 +495,8 @@ contract FCMVaultTest is Test {
         uint256 expColl = WETH.balanceOf(address(MORPHO)) * shares / (vault.totalSupply() + 1e6);
         uint256 expYield = FUSDEV.balanceOf(address(vault)) * shares / (vault.totalSupply() + 1e6);
 
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
-        vault.revokeRole(role, user);
+        vault.revokeEarlyAccess(user);
 
         MockERC20(address(PYUSD0)).mint(user, 1_000_000 ether);
         vm.startPrank(user);
@@ -649,34 +647,33 @@ contract FCMVaultTest is Test {
     /// @notice Admin gets DEFAULT_ADMIN_ROLE on construction; bob/carol/stranger
     ///         start non-allowlisted.
     function test_InitialRoles() public view {
-        assertTrue(vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), admin));
-        assertFalse(vault.hasRole(vault.EARLY_ACCESS_ROLE(), bob));
-        assertFalse(vault.hasRole(vault.EARLY_ACCESS_ROLE(), carol));
+        assertTrue(vault.owner() == admin);
+        assertFalse(vault.earlyAccess(bob));
+        assertFalse(vault.earlyAccess(carol));
     }
 
     /// @notice Admin can grant EARLY_ACCESS_ROLE; hasRole reflects the grant.
     function test_AdminCanGrantRole() public {
         _allow(bob);
-        assertTrue(vault.hasRole(vault.EARLY_ACCESS_ROLE(), bob));
+        assertTrue(vault.earlyAccess(bob));
     }
 
     /// @notice Admin can revoke EARLY_ACCESS_ROLE; hasRole reflects the revoke.
     function test_AdminCanRevokeRole() public {
         _allow(bob);
         _disallow(bob);
-        assertFalse(vault.hasRole(vault.EARLY_ACCESS_ROLE(), bob));
+        assertFalse(vault.earlyAccess(bob));
     }
 
     /// @notice Non-admin cannot grant EARLY_ACCESS_ROLE.
     function test_NonAdminCannotGrantRole() public {
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, vault.DEFAULT_ADMIN_ROLE()
+                IFCMVault.Unauthorized.selector, stranger
             )
         );
         vm.prank(stranger);
-        vault.grantRole(role, bob);
+        vault.grantEarlyAccess(bob);
     }
 
     // ---------------------------------------------------------------------
@@ -709,7 +706,7 @@ contract FCMVaultTest is Test {
         WETH.approve(address(vault), amount);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
+                IFCMVault.NoEarlyAccess.selector, bob
             )
         );
         vault.deposit(amount, bob);
@@ -747,7 +744,7 @@ contract FCMVaultTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
+                IFCMVault.NoEarlyAccess.selector, bob
             )
         );
         // we expect a revert, should never return
@@ -772,7 +769,7 @@ contract FCMVaultTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user, vault.EARLY_ACCESS_ROLE()
+                IFCMVault.NoEarlyAccess.selector, user
             )
         );
         vm.prank(user);
@@ -1532,15 +1529,13 @@ contract FCMVaultTest is Test {
     }
 
     function _allow(address account) internal {
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
-        vault.grantRole(role, account);
+        vault.grantEarlyAccess(account);
     }
 
     function _disallow(address account) internal {
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
-        vault.revokeRole(role, account);
+        vault.revokeEarlyAccess(account);
     }
 
     function _debt() internal view returns (uint256) {
@@ -1893,7 +1888,7 @@ contract FCMVaultTest is Test {
         FCMVault dustVault = new FCMVault(p);
         vm.startPrank(admin);
         dustVault.setMaxTvl(1e21);
-        dustVault.grantRole(dustVault.EARLY_ACCESS_ROLE(), user);
+        dustVault.grantEarlyAccess(user);
         vm.stopPrank();
 
         MockERC20(address(WETH)).mint(user, 1 ether);
@@ -2155,9 +2150,8 @@ contract FCMVaultTest is Test {
         vault.redeem(shares / 2, user, user);
         assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the redeem path");
 
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
-        vault.revokeRole(role, feeRcpt);
+        vault.revokeEarlyAccess(feeRcpt);
         vm.warp(block.timestamp + 30 days);
         vm.prank(user);
         vault.redeem(shares / 4, user, user); // must not revert

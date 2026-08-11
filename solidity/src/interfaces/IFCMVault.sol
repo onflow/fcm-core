@@ -114,6 +114,12 @@ interface IFCMVault is IERC4626 {
     event VaultState(
         uint256 collateral, uint256 debt, uint256 yield, uint256 collateralPrice, uint256 debtPrice, uint256 yieldPrice
     );
+    /// @notice Emitted when early access is granted to an account.
+    /// @param account The account that was granted early access.
+    event EarlyAccessGranted(address indexed account);
+    /// @notice Emitted when early access is revoked from an account.
+    /// @param account The account that was revoked early access.
+    event EarlyAccessRevoked(address indexed account);
 
     /// @dev Attempted to deposit more assets than the max amount for `receiver`.
     error ERC4626ExceededMaxDeposit(address receiver, uint256 assets, uint256 max);
@@ -132,6 +138,9 @@ interface IFCMVault is IERC4626 {
     error VaultUnderwater();
     /// @dev Thrown when an unauthorized action is attempted in `onMorphoFlashLoan`.
     error Unauthorized();
+    /// @dev Thrown when an account without early access attempts to perform an action that requires early access.
+    /// @param account The address without early access, can be receiver or sender.
+    error NoEarlyAccess(address account);
     /// @dev Thrown when calling ERC4626 functionality that is unsupported in FCMVault.
     error NotImplemented();
     /// @notice Thrown when an input address is set to address(0).
@@ -209,9 +218,12 @@ interface IFCMVault is IERC4626 {
     /// @dev Accrues at the OLD rate first so the change isn't retroactive.
     /// @param newBps New performance fee rate in basis points.
     function setPerformanceFeeBps(uint256 newBps) external;
-
-    /// @notice Members of this role may deposit assets, hold shares, and transfer shares.
-    function EARLY_ACCESS_ROLE() external view returns (bytes32);
+    /// @notice Grant early access to an account.
+    /// @param account The account to grant early access to.
+    function grantEarlyAccess(address account) external;
+    /// @notice Revoke early access from an account.
+    /// @param account The account to revoke early access from.
+    function revokeEarlyAccess(address account) external;
 
     /// @notice Address of the immutable collateral token.
     /// @dev The collateral token is the asset and the collateral leg of the position.
@@ -329,6 +341,10 @@ interface IFCMVault is IERC4626 {
     /// Flow-neutral, strict all-time peak. Vault-wide (one mark for all holders): a depositor entering below it rides
     /// the recovery back up fee-free — accepted by design in lieu of per-user-HWM accounting.
     function perfHighWaterMark() external view returns (uint256);
+    /// @notice Mapping of addresses to their early access status.
+    /// @param account The address to check.
+    /// @return earlyAccess Whether the address has early access.
+    function earlyAccess(address account) external view returns (bool earlyAccess);
 
     // -- IERC4626 overrides --------------------------------------------------
     // solhint-disable ordering, grouped by domain

@@ -7,8 +7,6 @@ import {SwapLib} from "./libraries/SwapLib.sol";
 import {IMorpho, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IMorphoFlashLoanCallback} from "@morpho-blue/interfaces/IMorphoCallbacks.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -30,13 +28,11 @@ uint256 constant BPS = 10_000;
 /// parameters. - External Rebalancing: Exposes a external rebalance() function to adjust LTV, preserve 100% net asset
 /// exposure, maximize yield spread, and keep the position clear of liquidation thresholds. - ERC-4626 Tokenized Vault:
 /// Yield is auto-compounded directly into share price appreciation.
-contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlashLoanCallback {
+contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     using SafeERC20 for IERC20;
     using Math for uint256;
     using MarketLib for MarketParams;
 
-    /// @inheritdoc IFCMVault
-    bytes32 public constant EARLY_ACCESS_ROLE = keccak256("EARLY_ACCESS_ROLE");
     /// @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more
     /// expensive. See
     /// https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
@@ -114,6 +110,8 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
     uint256 public lastFeeAccrual;
     /// @inheritdoc IFCMVault
     uint256 public perfHighWaterMark;
+    /// @inheritdoc IFCMVault
+    mapping(address => bool) public earlyAccess;
 
     /// @dev Emits a `VaultState` snapshot after the wrapped function body runs. Placed after `_;` so the event reflects
     /// post-call state. Modifying entry points accrue market interest before mutating, so the debt read here is fresh.
@@ -179,8 +177,6 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
         lastFeeAccrual = block.timestamp;
         // Seed the HWM at the starting price-per-share so the first deposit isn't counted as performance.
         perfHighWaterMark = MarketLib.WAD / (10 ** DECIMALS_OFFSET);
-
-        _grantRole(DEFAULT_ADMIN_ROLE, p.admin);
     }
 
     /// @inheritdoc IFCMVault
@@ -215,6 +211,18 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
         _accrueFees();
         emit FeeRecipientSet(feeRecipient, newRecipient);
         feeRecipient = newRecipient;
+    }
+
+    /// @inheritdoc IFCMVault
+    function grantEarlyAccess(address account) external onlyOwner {
+        earlyAccess[account] = true;
+        emit EarlyAccessGranted(account);
+    }
+
+    /// @inheritdoc IFCMVault
+    function revokeEarlyAccess(address account) external onlyOwner {
+        earlyAccess[account] = false;
+        emit EarlyAccessRevoked(account);
     }
 
     /// @inheritdoc IFCMVault
@@ -414,7 +422,7 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
         // maxDeposit mirrors it as 0 because ERC-4626 requires reporting 0 when deposits
         // are disabled.
         if (recoveryValidAt != 0 || recovered) return 0;
-        if (!hasRole(EARLY_ACCESS_ROLE, receiver)) return 0;
+        if (!earlyAccess[receiver]) return 0;
         uint256 cachedTotalAssets = totalAssets();
         // Mirror the deposit() underwater guard: 0 when marked underwater with holders.
         // slither-disable-next-line incorrect-equality -> exact-zero is the intended guard (totalAssets clamps to 0)
@@ -807,11 +815,11 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
     /// always allowed, preserving the exit path for de-allowlisted holders.
     function _update(address from, address to, uint256 value) internal override {
         if (to != address(0)) {
-            if (!hasRole(EARLY_ACCESS_ROLE, to)) {
-                revert IAccessControl.AccessControlUnauthorizedAccount(to, EARLY_ACCESS_ROLE);
+            if (!earlyAccess[to]) {
+                revert NoEarlyAccess(to);
             }
-            if (from != address(0) && !hasRole(EARLY_ACCESS_ROLE, from)) {
-                revert IAccessControl.AccessControlUnauthorizedAccount(from, EARLY_ACCESS_ROLE);
+            if (from != address(0) && !earlyAccess[from]) {
+                revert NoEarlyAccess(from);
             }
         }
         super._update(from, to, value);
@@ -865,7 +873,7 @@ contract FCMVault is IFCMVault, ERC20, AccessControl, Ownable2Step, IMorphoFlash
         uint256 pps = nav.mulDiv(MarketLib.WAD, claims);
 
         address recipient = feeRecipient;
-        if (recipient != address(0) && hasRole(EARLY_ACCESS_ROLE, recipient) && nav > 0) {
+        if (recipient != address(0) && earlyAccess[recipient] && nav > 0) {
             // Bill exactly `rate * Δt` since the last accrual, then advance the clock
             // (accrual is irregular: every interaction + permissionless accrueFees).
             // The billable gap is capped at one year, so the fee is

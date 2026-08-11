@@ -53,7 +53,7 @@ contract LiveCheck is Script {
         (, address caller,) = vm.readCallers();
 
         // Pre-flight: fail with a clear reason before any value moves.
-        require(vault.hasRole(vault.EARLY_ACCESS_ROLE(), caller), "caller lacks EARLY_ACCESS_ROLE on the vault");
+        require(vault.earlyAccess(caller), "caller lacks early access on the vault");
         require(assetToken.balanceOf(caller) >= amount, "caller does not hold CHECK_AMOUNT of the vault asset");
         require(vault.maxDeposit(caller) >= amount, "TVL headroom below CHECK_AMOUNT (is maxTvl set?)");
 

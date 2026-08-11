@@ -111,16 +111,14 @@ contract TvlLimitTest is Test {
 
     /// @dev Grant EARLY_ACCESS_ROLE to `account`.
     function _allow(address account) internal {
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
-        vault.grantRole(role, account);
+        vault.grantEarlyAccess(account);
     }
 
     /// @dev Revoke EARLY_ACCESS_ROLE from `account`.
     function _disallow(address account) internal {
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
-        vault.revokeRole(role, account);
+        vault.revokeEarlyAccess(account);
     }
 
     function _expectMaxDepositExceeded(address receiver, uint256 assets) internal {

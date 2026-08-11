@@ -81,9 +81,9 @@ contract DeployVault is ConfiguredScript {
             })
         );
 
-        vault.grantRole(vault.EARLY_ACCESS_ROLE(), deployer);
+        vault.grantEarlyAccess(deployer);
         for (uint256 i = 0; i < grantees.length; i++) {
-            vault.grantRole(vault.EARLY_ACCESS_ROLE(), grantees[i]);
+            vault.grantEarlyAccess(grantees[i]);
         }
         vault.setMaxTvl(maxTvl);
         vm.stopBroadcast();
