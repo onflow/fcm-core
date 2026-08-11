@@ -132,10 +132,10 @@ library MarketLib {
     /// @dev The returned price has `36 + loanDecimals - collateralDecimals` decimals of precision, so that
     /// `collateralAmount * price / 1e36` yields the collateral's value in raw loan-token units regardless of the two
     /// tokens' decimal configurations.
-    /// Example (WETH collateral / USDC loan, 1 WETH = 2500 USDC): price = 2500 * 10^(36 + 6 - 18) = 2.5e27 1 WETH
-    /// (1e18) collateral → (1e18 * 2.5e27) / 1e36 = 2.5e9 = 2500 USDC
-    /// @param market Morpho market parameters
-    /// identifying the position.
+    /// Example (WETH collateral / USDC loan, 1 WETH = 2500 USDC):
+    /// price = 2500 * 10^(36 + 6 - 18) = 2.5e27
+    /// 1 WETH (1e18) collateral → (1e18 * 2.5e27) / 1e36 = 2.5e9 = 2500 USDC
+    /// @param market Morpho market parameters identifying the position.
     function oraclePrice(MarketParams memory market) internal view returns (uint256) {
         return IOracle(market.oracle).price();
     }
@@ -162,8 +162,7 @@ library MarketLib {
     /// @notice Returns the maximum loan-token amount borrowable against `collateralAmount` at the market's LLTV.
     /// @dev Equal to `collateralToDebt(collateralAmount) * lltv / WAD`. A position at exactly this debt level has a
     /// health factor of WAD (the liquidation threshold).
-    /// @param market Morpho market parameters identifying the
-    /// position.
+    /// @param market Morpho market parameters identifying the position.
     /// @param collateralAmount Amount of collateral to borrow against, in token units.
     function maxBorrowFor(MarketParams memory market, uint256 collateralAmount) internal view returns (uint256) {
         return collateralToDebt(market, collateralAmount).mulDiv(market.lltv, WAD);

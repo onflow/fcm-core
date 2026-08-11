@@ -46,8 +46,7 @@ abstract contract ConfiguredScript is Script {
         // forge-lint: disable-next-item(unsafe-cheatcode)
         string memory toml = vm.readFile(string.concat("deployments/", network, ".toml"));
 
-        // c = abi.decode(vm.parseToml(toml), (Config));
-        // c.chainId = vm.parseTomlUint(toml, ".chainId");
+        c.chainId = vm.parseTomlUint(toml, ".chainId");
         require(
             c.chainId == block.chainid, string.concat("config chainId does not match RPC chain (network=", network, ")")
         );

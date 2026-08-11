@@ -195,12 +195,15 @@ interface IFCMVault {
     function maxSlippageBps() external view returns (uint256);
     /// @notice TVL limit, denominated in the vault's Asset token. Enforced by `super.deposit`, which reverts with
     /// `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`. Default 0 -> no deposits until admin raises
-    /// it. - This constraint prevents all deposits/mints which would cause the vault to exceed the configured TVL limit
-    /// after the deposit/mint completes. - This constraint does not prevent any withdrawals/redeems under any
-    /// circumstances. - This constraint does not prevent the vault from holding more assets than its configured TVL.
-    /// This can happen if: - The owner sets maxTvl to a value lower than the current totalAssets - The value of vault
-    /// holdings increases above the TVL limit due to market conditions. This can occur without any direct interactions
-    /// with the vault.
+    /// it.
+    /// - This constraint prevents all deposits/mints which would cause the vault to exceed the configured TVL limit
+    ///   after the deposit/mint completes.
+    /// - This constraint does not prevent any withdrawals/redeems under any circumstances.
+    /// - This constraint does not prevent the vault from holding more assets than its configured TVL.
+    /// This can happen if:
+    /// - The owner sets maxTvl to a value lower than the current totalAssets
+    /// - The value of vault holdings increases above the TVL limit due to market conditions. This can occur without
+    ///   any direct interactions with the vault.
     function maxTvl() external view returns (uint256);
     /// @notice High-water mark for the performance fee, as asset-per-share scaled by WAD (`NAV * WAD / claims`).
     /// Flow-neutral, strict all-time peak. Vault-wide (one mark for all holders): a depositor entering below it rides
@@ -284,9 +287,11 @@ interface IFCMVault {
 
     /// @notice Returns the vault's net asset value (NAV) denominated in the underlying asset (collateral token).
     /// @dev NAV = collateral + yield − debt, with both yield and debt converted into asset units using oracle prices:
-    /// - collateral: read directly from the Morpho position. - yield: balance of `yieldToken` held by the vault, priced
-    /// through `yieldOracle` and the market oracle (see `_yieldToAsset`). - debt: outstanding loan-token debt on the
-    /// Morpho market, valued at the market oracle price (see `MarketLib.debt`).
+    /// - collateral: read directly from the Morpho position.
+    /// - yield: balance of `yieldToken` held by the vault, priced through `yieldOracle` and the market oracle
+    ///   (see `_yieldToAsset`).
+    /// - debt: outstanding loan-token debt on the Morpho market, valued at the market oracle price
+    ///   (see `MarketLib.debt`).
     /// Returns 0 if debt exceeds gross value (an underwater position). This is a stale read by default — callers that
     /// need an up-to-the-block NAV must accrue interest on the market in the same tx first (see `deposit`).
     /// @return totalManagedAssets The vault's net asset value in underlying asset units.
@@ -301,14 +306,14 @@ interface IFCMVault {
     function maxDeposit(address receiver) external view returns (uint256 maxAssets);
 
     /// @notice Deposit `assets` of the underlying asset into the vault and mint vault shares to `receiver`.
-    /// @dev Expansion sequence (see docs/architecture.md §A). Let `navBefore` be the vault NAV before this deposit: 1.
-    /// Accrue market interest so `navBefore` and the post-deposit NAV measurement are both fresh. 2. Pull `assets` from
-    /// the caller and supply them as collateral to the Morpho market. 3. Borrow `toBorrow =
-    /// _targetBorrowAgainst(assets)` loan token and swap it into yield token on FlowSwap V3. The borrow is capped so
-    /// this deposit cannot drag the existing position's health factor down to the target — small deposits never
-    /// rebalance the whole protocol. 4. Mint shares pro-rata to the NAV contribution
-    /// Rounding favors the vault: the share computation rounds down, so any residual NAV accrues to existing
-    /// shareholders rather than the new depositor.
+    /// @dev Expansion sequence (see docs/architecture.md §A). Let `navBefore` be the vault NAV before this deposit:
+    /// 1. Accrue market interest so `navBefore` and the post-deposit NAV measurement are both fresh.
+    /// 2. Pull `assets` from the caller and supply them as collateral to the Morpho market.
+    /// 3. Borrow `toBorrow = _targetBorrowAgainst(assets)` loan token and swap it into yield token on FlowSwap V3.
+    ///    The borrow is capped so this deposit cannot drag the existing position's health factor down to the target
+    ///    — small deposits never rebalance the whole protocol.
+    /// 4. Mint shares pro-rata to the NAV contribution Rounding favors the vault: the share computation rounds down,
+    ///    so any residual NAV accrues to existing shareholders rather than the new depositor.
     /// @param assets Amount of underlying asset to deposit.
     /// @param receiver Account to credit with newly minted shares.
     /// @return shares Vault shares minted to `receiver`.
@@ -333,15 +338,17 @@ interface IFCMVault {
     /// @notice Redeem `shares` of this vault for the underlying asset. The owner's shares are burned, a proportional
     /// slice of the underlying leveraged position is unwound through the AMM, and the resulting asset is delivered to
     /// `receiver`.
-    /// @dev Unwind sequence (AMM-mediated, see docs/architecture.md §A). Let `p = shares /
-    /// _totalClaims()`, the redeemed fraction of the total claim pool (existing supply + virtual-share offset), and `d*
-    /// = p × debt`, the pro-rata debt slice. The unwind: 1. Sell exactly `p × yieldToken` for loanToken on FlowSwap
-    /// V3. Call the realized loanToken output `loanGot`. 2. If `loanGot ≥ d*` (Case A — fair or favorable AMM
-    /// execution): repay `d*`, withdraw `p × collateral` of the asset, and swap the surplus `loanGot - d*` loanToken
-    /// to the asset. 3. If `loanGot < d*` (Case B — yield underperformed): flash-borrow the shortfall `d* - loanGot`
-    /// in loanToken, repay the full `d*`, withdraw the full `p × collateral`, and sell just enough of that collateral
-    /// to repay the flash. The redeemer takes home their full pro-rata value; the collateral sold covers the debt the
-    /// yield leg could not. 4. Burn shares and transfer the new asset balance to receiver.
+    /// @dev Unwind sequence (AMM-mediated, see docs/architecture.md §A). Let `p = shares / _totalClaims()`, the
+    /// redeemed fraction of the total claim pool (existing supply + virtual-share offset), and `d* = p × debt`, the
+    /// pro-rata debt slice. The unwind:
+    /// 1. Sell exactly `p × yieldToken` for loanToken on FlowSwap V3. Call the realized loanToken output `loanGot`.
+    /// 2. If `loanGot >= d*` (Case A - fair or favorable AMM execution): repay `d*`, withdraw `p * collateral` of the
+    ///    asset, and swap the surplus `loanGot - d*` loanToken to the asset.
+    /// 3. If `loanGot < d*` (Case B - yield underperformed): flash-borrow the shortfall `d* - loanGot` in loanToken,
+    ///    repay the full `d*`, withdraw the full `p * collateral`, and sell just enough of that collateral to repay the
+    ///    flash loan. The redeemer takes home their full pro-rata value; the collateral sold covers the debt the
+    ///    yield leg could not.
+    /// 4. Burn shares and transfer the new asset balance to receiver.
     ///
     /// Rounding favors the vault: all pro-rata slices round down, so residuals accrue to remaining shareholders rather
     /// than leaking to the redeemer.

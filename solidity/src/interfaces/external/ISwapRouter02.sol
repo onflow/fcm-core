@@ -3,6 +3,7 @@ pragma solidity >=0.7.5;
 pragma abicoder v2;
 
 /// @title Router token swapping functionality
+/// @notice Minimal Uniswap-V3-style SwapRouter02 surface used by the vault.
 interface ISwapRouter02 {
     struct ExactInputSingleParams {
         address tokenIn;

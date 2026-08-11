@@ -24,13 +24,15 @@ IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
 /// @title FCMVault
 /// @author Flow Foundation
 /// @notice An ERC-4626 compliant vault that executes and automates an immutable three-leg leveraged carry trade
-/// strategy. Strategy Mechanics (Three-Leg Position): 1. Asset Leg: Collateral token supplied to Morpho to create
-/// borrowing capacity. 2. Debt Leg: Loan token borrowed against the supplied collateral. 3. Yield Leg: Yield-bearing
-/// token bought/minted using the borrowed loan token.
-/// Key Operational Features: - Single Configuration: Each vault instance executes a single carry trade with immutable
-/// parameters. - External Rebalancing: Exposes a external rebalance() function to adjust LTV, preserve 100% net asset
-/// exposure, maximize yield spread, and keep the position clear of liquidation thresholds. - ERC-4626 Tokenized Vault:
-/// Yield is auto-compounded directly into share price appreciation.
+/// strategy. Strategy Mechanics (Three-Leg Position):
+/// 1. Asset Leg: Collateral token supplied to Morpho to create borrowing capacity.
+/// 2. Debt Leg: Loan token borrowed against the supplied collateral.
+/// 3. Yield Leg: Yield-bearing token bought/minted using the borrowed loan token.
+/// Key Operational Features:
+/// - Single Configuration: Each vault instance executes a single carry trade with immutable parameters.
+/// - External Rebalancing: Exposes a external rebalance() function to adjust LTV, preserve 100% net asset exposure,
+///   maximize yield spread, and keep the position clear of liquidation thresholds.
+/// - ERC-4626 Tokenized Vault: Yield is auto-compounded directly into share price appreciation.
 contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFlashLoanCallback {
     using SafeERC20 for IERC20;
     using Math for uint256;
@@ -471,7 +473,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
             if (collSlice > 0) market.withdrawCollateral(collSlice);
             uint256 surplus = loanGot - debtSlice;
             if (surplus > 0) {
-                // slither-disable-next-line unused-return -> surplus-swap output is captured by the redeem balance
+                // surplus-swap output is captured by the redeem balance delta
+                // slither-disable-next-line unused-return ->
                 SwapLib.swapExactIn(address(loanToken), asset(), feeAssetDebt, surplus);
             }
         } else {
@@ -552,10 +555,9 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
 
     /// @notice Lever-up branch of `rebalance`: position is under-levered (`hf > healthFactorMax`). Borrow exactly the
     /// debt slice that lands the position at `healthFactorMaxTarget` and swap it into yield token.
-    /// @dev `targetDebt =
-    /// maxBorrow * WAD / healthFactorMaxTarget` is the debt level that, against the current collateral, produces an HF
-    /// of exactly `healthFactorMaxTarget` (just below the upper bound). Since `hf > max >= maxTarget`, `currentDebt <
-    /// targetDebt`. The borrow leg adds `targetDebt - currentDebt`.
+    /// @dev `targetDebt = maxBorrow * WAD / healthFactorMaxTarget` is the debt level that, against the current
+    /// collateral, produces an HF of exactly `healthFactorMaxTarget` (just below the upper bound). Since
+    /// `hf > max >= maxTarget`, `currentDebt < targetDebt`. The borrow leg adds `targetDebt - currentDebt`.
     ///
     /// Partial: the full `borrowAmount` is borrowed up front, then the loan->yield swap runs under a
     /// `sqrtPriceLimitX96` derived from the oracle and `maxSlippageBps`. If the swap would push the pool past that
@@ -567,8 +569,8 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
     /// @param maxBorrow Current maximum-borrowable amount at LLTV (independent of current debt)
     /// @param currentDebt Current outstanding debt (caller passes the same value used to compute `hfBefore` to avoid a
     /// second `MORPHO.position` SLOAD).
-    /// @return additionalDebt Net new debt taken on in this call (the loan token
-    /// actually swapped into yield; 0 if nothing filled).
+    /// @return additionalDebt Net new debt taken on in this call (the loan token actually swapped into yield; 0 if
+    /// nothing filled).
     function _rebalanceLever(uint256 maxBorrow, uint256 currentDebt) internal returns (uint256 additionalDebt) {
         uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, healthFactorMaxTarget);
         if (targetDebt <= currentDebt) return 0;
@@ -595,9 +597,10 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
 
     /// @notice Delever branch of `rebalance`: position is over-levered (`hf < healthFactorMin`). Sell yield token for
     /// loan token to repay enough debt to land the position back at `healthFactorMinTarget`.
-    /// @dev Sizing: targetDebt
-    /// = maxBorrow * WAD / healthFactorMinTarget repayAmount   = currentDebt - targetDebt yieldToSell   = repayAmount *
-    /// 1e36 / yieldOraclePrice
+    /// @dev Sizing:
+    /// targetDebt = maxBorrow * WAD / healthFactorMinTarget
+    /// repayAmount = currentDebt - targetDebt
+    /// yieldToSell = repayAmount * 1e36 / yieldOraclePrice
     ///
     /// `yieldToSell` is the oracle-implied yield amount whose loan-token value equals `repayAmount`. AMM slippage shows
     /// up as a small under-shoot (post-rebalance HF is slightly below `healthFactorMinTarget` if the swap realized less
@@ -719,10 +722,10 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
     }
 
     /// @dev How much loan token to borrow against `newAssets` while keeping the position at the deposit-target HF
-    /// (`_depositTargetHf`, the band midpoint). Returns the smaller of two caps: - `capFromNewAsset`: the borrow
-    /// `newAssets` of fresh collateral could support on its own at the target HF. - `capFromTargetDebt`: the additional
-    /// borrow that, combined with existing debt and existing collateral, would land the whole position at the target
-    /// HF.
+    /// (`_depositTargetHf`, the band midpoint). Returns the smaller of two caps:
+    /// - `capFromNewAsset`: the borrow `newAssets` of fresh collateral could support on its own at the target HF.
+    /// - `capFromTargetDebt`: the additional borrow that, combined with existing debt and existing collateral, would
+    ///    land the whole position at the target HF.
     /// Taking the min means each deposit borrows at most its own proportional share of headroom: small deposits cannot
     /// rebalance an over-collateralized protocol back to target, and no deposit can push an already-too-leveraged
     /// position past the target HF (`capFromTargetDebt` clamps to 0 in that case).
@@ -743,9 +746,10 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
         return yieldAmount.mulDiv(IOracle(yieldOracle).price(), market.oraclePrice());
     }
 
-    /// @dev Hook fires on every share movement (mint / transfer / burn). - Mint (`from == 0`): the receiver must be
-    /// allowlisted. - Transfer (both non-zero): both sender and receiver must be allowlisted. - Burn (`to == 0`):
-    /// always allowed, preserving the exit path for de-allowlisted holders.
+    /// @dev Hook fires on every share movement (mint / transfer / burn).
+    /// - Mint (`from == 0`): the receiver must be allowlisted.
+    /// - Transfer (both non-zero): both sender and receiver must be allowlisted.
+    /// - Burn (`to == 0`): always allowed, preserving the exit path for de-allowlisted holders.
     function _update(address from, address to, uint256 value) internal override {
         if (to != address(0)) {
             if (!hasRole(EARLY_ACCESS_ROLE, to)) {
@@ -770,8 +774,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
     ///
     /// `ok` is false when the limit is out of tick-math range, or when the pool's live marginal price is already on the
     /// bad side of it (any swap would no-op or revert `SPL`) — the caller then skips.
-    /// @param pool The Uniswap V3 pool
-    /// for the `tokenIn`/`tokenOut` pair.
+    /// @param pool The Uniswap V3 pool for the `tokenIn`/`tokenOut` pair.
     /// @param tokenIn The token the swap sells.
     /// @param tokenOut The token the swap buys.
     /// @param outPerInNum Numerator of the fair `tokenOut`-per-`tokenIn` rate.
@@ -839,6 +842,7 @@ contract FCMVault is ERC4626, AccessControl, Ownable2Step, IFCMVault, IMorphoFla
     /// @dev Accrue management + performance fees and mint the corresponding shares to `feeRecipient` (dilution — no
     /// assets leave the vault). Always accrues market interest first so NAV is fresh. No-ops once `recovered`. Skips
     /// minting (never reverts) when the recipient is unset or not allowlisted, so core flows can't be bricked.
+    /// Only calls the trusted Morpho singleton, which cannot reenter.
     function _accrueFees() internal {
         if (recovered) return;
 
