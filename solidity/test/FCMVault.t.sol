@@ -22,6 +22,7 @@ import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.so
 import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -667,11 +668,7 @@ contract FCMVaultTest is Test {
 
     /// @notice Non-admin cannot grant EARLY_ACCESS_ROLE.
     function test_NonAdminCannotGrantRole() public {
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IFCMVault.Unauthorized.selector, stranger
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
         vm.prank(stranger);
         vault.grantEarlyAccess(bob);
     }
@@ -704,11 +701,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(WETH)).mint(user, amount);
         vm.startPrank(user);
         WETH.approve(address(vault), amount);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IFCMVault.NoEarlyAccess.selector, bob
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(IFCMVault.NoEarlyAccess.selector, bob));
         vault.deposit(amount, bob);
         vm.stopPrank();
     }
@@ -742,11 +735,7 @@ contract FCMVaultTest is Test {
         WETH.approve(address(vault), amount);
         uint256 shares = vault.deposit(amount, user);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IFCMVault.NoEarlyAccess.selector, bob
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(IFCMVault.NoEarlyAccess.selector, bob));
         // we expect a revert, should never return
         // forge-lint: disable-next-item(erc20-unchecked-transfer)
         vault.transfer(bob, shares);
@@ -767,11 +756,7 @@ contract FCMVaultTest is Test {
 
         _disallow(user);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IFCMVault.NoEarlyAccess.selector, user
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(IFCMVault.NoEarlyAccess.selector, user));
         vm.prank(user);
         // we expect a revert, should never return
         // forge-lint: disable-next-item(erc20-unchecked-transfer)

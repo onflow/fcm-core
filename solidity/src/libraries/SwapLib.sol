@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
 import {BPS} from "../FCMVault.sol";
@@ -143,7 +143,7 @@ library SwapLib {
         uint256 outPerInNum,
         uint256 outPerInDen,
         uint256 maxSlippageBps
-    ) internal view returns (uint160 limit, bool ok) {
+    ) external view returns (uint160 limit, bool ok) {
         // Uniswap orders the pair by address: token0 is the lower-address token
         // and the pool price is token1/token0. Selling token0 (`zeroForOne`) pushes
         // the price down; selling token1 pushes it up.

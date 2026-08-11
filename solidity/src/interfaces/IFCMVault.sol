@@ -51,11 +51,10 @@ interface IFCMVault is IERC4626 {
     /// @param newRecipient New fee recipient.
     event FeeRecipientSet(address indexed oldRecipient, address indexed newRecipient);
     /// @notice Emitted when fees are accrued and shares minted to the recipient.
-    /// @param recipient Account that received the minted fee shares.
     /// @param managementFee Management fee accrued this call, in asset terms.
     /// @param performanceFee Performance fee accrued this call, in asset terms.
     /// @param feeShares Shares minted to `recipient` (dilution).
-    event FeesAccrued(address indexed recipient, uint256 managementFee, uint256 performanceFee, uint256 feeShares);
+    event FeesAccrued(uint256 managementFee, uint256 performanceFee, uint256 feeShares);
 
     /// @notice Emitted when the harvest leg of `rebalance` sells surplus yield and redeploys it as collateral.
     /// @param yieldSold Yield token sold (the surplus above debt backing).

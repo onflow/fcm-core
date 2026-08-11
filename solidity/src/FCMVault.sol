@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IFCMVault} from "./interfaces/IFCMVault.sol";
+import {FeesLib} from "./libraries/FeesLib.sol";
 import {MarketLib} from "./libraries/MarketLib.sol";
 import {SwapLib} from "./libraries/SwapLib.sol";
 import {IMorpho, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
@@ -40,8 +41,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     /// @custom:security non-reentrant
     IMorpho internal constant MORPHO = IMorpho(MORPHO_ADDRESS);
 
-    /// @dev Seconds in a year, for the time-based management fee accrual.
-    uint256 internal constant SECONDS_PER_YEAR = 365 days;
     /// @dev Hard cap on the management fee (10%/yr) — admin cannot exceed.
     uint256 internal constant MAX_MANAGEMENT_FEE_BPS = 1000;
     /// @dev Hard cap on the performance fee (50%) — admin cannot exceed.
@@ -870,55 +869,30 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         market().accrueInterest();
         uint256 nav = totalAssets();
         uint256 claims = _totalClaims();
-        uint256 pps = nav.mulDiv(MarketLib.WAD, claims);
+        uint256 pricePerShare = nav.mulDiv(MarketLib.WAD, claims);
 
         address recipient = feeRecipient;
         if (recipient != address(0) && earlyAccess[recipient] && nav > 0) {
-            // Bill exactly `rate * Δt` since the last accrual, then advance the clock
-            // (accrual is irregular: every interaction + permissionless accrueFees).
-            // The billable gap is capped at one year, so the fee is
-            // provably <= the annual rate `r` (= bps/1e4) however long the vault
-            // sits unaccrued - idle time past a year is forgiven, bounding a single
-            // catch-up dilution after long dormancy. Within a year the realized drag
-            // lies in `[1 - e^(-r), r]`: `r` at one accrual/year, `1 - e^(-r)` in the
-            // continuous limit (negligible span <= ~r^2/2: ~0.02% at bps=200,
-            // ~0.48% at the 1000 cap).
-            uint256 elapsed = block.timestamp - lastFeeAccrual;
-            if (elapsed > SECONDS_PER_YEAR) elapsed = SECONDS_PER_YEAR;
-
-            uint256 managementFee = 0;
-            if (managementFeeBps > 0 && elapsed > 0) {
-                managementFee = nav.mulDiv(managementFeeBps * elapsed, BPS * SECONDS_PER_YEAR);
+            uint256 feeShares = FeesLib.feesToMint({
+                nav: nav,
+                claims: claims,
+                pricePerShare: pricePerShare,
+                managementFeeBps: managementFeeBps,
+                performanceFeeBps: performanceFeeBps,
+                perfHighWaterMark: perfHighWaterMark,
+                lastFeeAccrual: lastFeeAccrual
+            });
+            if (feeShares > 0) {
+                _mint(recipient, feeShares);
             }
-
-            uint256 performanceFee = 0;
-            if (performanceFeeBps > 0 && pps > perfHighWaterMark) {
-                // Fee on the gain in pps above the all-time HWM. pps is UNREALIZED and
-                // oracle-marked, so a transient mark move can crystallize a fee on paper
-                // profit that later reverses - kept, not refunded. The mint goes to the
-                // recipient, not the triggerer, so a permissionless accrueFees call can't
-                // pay its caller; the strict HWM charges net all-time highs only.
-                uint256 gain = (pps - perfHighWaterMark).mulDiv(claims, MarketLib.WAD);
-                performanceFee = gain.mulDiv(performanceFeeBps, BPS);
-            }
-
-            uint256 feeAssets = managementFee + performanceFee;
-            if (feeAssets > 0 && feeAssets < nav) {
-                // Mint shares worth `feeAssets` at the post-mint price (dilution).
-                uint256 feeShares = feeAssets.mulDiv(claims, nav + 1 - feeAssets);
-                if (feeShares > 0) {
-                    _mint(recipient, feeShares);
-                    emit FeesAccrued(recipient, managementFee, performanceFee, feeShares);
-                }
-            }
+            // emit FeesAccrued(recipient, managementFee, performanceFee, feeShares);
         }
 
-        // Advance clock + HWM unconditionally (even when the mint was skipped) so
-        // fees meter from when they're enabled, not retroactively — the fee setters
-        // accrue first, pinning these to now. Gating them on the mint would
+        // Advance clock + HWM unconditionally (even when the mint was skipped) so fees meter from when they're enabled,
+        // not retroactively — the fee setters accrue first, pinning these to now. Gating them on the mint would
         // back-charge holders from deploy.
         lastFeeAccrual = block.timestamp;
-        if (pps > perfHighWaterMark) perfHighWaterMark = pps;
+        if (pricePerShare > perfHighWaterMark) perfHighWaterMark = pricePerShare;
     }
 
     // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more
