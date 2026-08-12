@@ -154,6 +154,8 @@ interface IFCMVault is IERC4626 {
     error InvalidHealthFactorBounds(uint256 lower, uint256 upper);
     /// @notice Thrown when there is leftover debt after the harvest.
     error LeftoverDebt();
+    /// @notice Thrown during redeem when the vault is unhealthy.
+    error VaultUnhealthy();
 
     /// @notice Permissionlessly accrue fees up to the current block (mints fee shares to the recipient). Lets a keeper
     /// tick the management fee during idle stretches so it tracks NAV-over-time more closely.
@@ -394,10 +396,10 @@ interface IFCMVault is IERC4626 {
     /// @return shares Vault shares minted to `receiver`.
     function deposit(uint256 assets, address receiver) external override(IERC4626) returns (uint256 shares);
 
-    /// @notice Maximum redeemable shares for `owner` — the full share balance. Redeem is always permitted
-    /// (no lock-up); the realized asset output depends on AMM execution at redeem time.
+    /// @notice Maximum redeemable shares for `owner`. While the vault is healthy, the owner can redeem all their
+    /// shares. When the vault is unhealthy no shares can be redeemed.
     /// @param owner Account whose redeemable shares are reported.
-    /// @return maxShares The owner's full share balance.
+    /// @return maxShares The maximum redeemable shares for the owner.
     function maxRedeem(address owner) external view returns (uint256 maxShares);
 
     /// @notice Redeem `shares` of this vault for the underlying asset. The owner's shares are burned, a proportional

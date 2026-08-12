@@ -342,8 +342,11 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         // 2. Decremement the redeemer's allowance by the amount redeemed.
         if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
 
+        // slither-disable-next-line incorrect-equality -> exact-zero is the intended "no recovery pending" guard
+
         // Accrue fees first so the redeemer bears their share of accrued fees.
         _accrueFees();
+        require(market().healthFactor() >= HEALTH_FACTOR_MIN, VaultUnhealthy());
         uint256 assetBefore = COLLATERAL_TOKEN.balanceOf(address(this));
 
         _unwindSlice(shares);
@@ -422,6 +425,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
     /// @inheritdoc IFCMVault
     function maxRedeem(address owner) external view returns (uint256) {
+        if (market().healthFactor() >= HEALTH_FACTOR_MAX) return 0;
         return balanceOf(owner);
     }
 
