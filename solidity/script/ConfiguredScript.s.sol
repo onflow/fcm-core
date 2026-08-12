@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import {MORPHO_ADDRESS} from "../src/FCMVault.sol";
+import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {IUniswapV3Factory} from "./interfaces/IUniswapV3Factory.sol";
 import {Id, Market, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
-import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {Script} from "forge-std/Script.sol";
 
@@ -93,7 +92,7 @@ abstract contract ConfiguredScript is Script {
     ///      chain (its id is the hash of the exact params, so existence also
     ///      proves the params match).
     function _requireMarketExists(Config memory c) internal view returns (Market memory m) {
-        m = IMorpho(MORPHO_ADDRESS).market(_marketId(c));
+        m = MarketLib.MORPHO.market(_marketId(c));
         require(
             m.lastUpdate != 0, "Morpho market for config params does not exist; check marketOracle/marketIrm/marketLltv"
         );

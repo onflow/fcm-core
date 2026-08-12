@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {BPS} from "../FCMVault.sol";
 import {ISwapRouter02} from "../interfaces/external/ISwapRouter02.sol";
 import {IUniswapV3Pool} from "../interfaces/external/IUniswapV3Pool.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -13,6 +12,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 library SwapLib {
     /// @custom:security non-reentrant
     ISwapRouter02 internal constant SWAP_ROUTER = ISwapRouter02(0xeEDC6Ff75e1b10B903D9013c358e446a73d35341);
+    uint256 internal constant BPS = 10_000;
     /// @dev Uniswap V3 tick-math bounds on a valid `sqrtPriceLimitX96`. A limit outside `(MIN_SQRT_RATIO,
     /// MAX_SQRT_RATIO)` is rejected by the pool; the vault treats such a limit as "no feasible swap" and skips.
     uint160 internal constant MIN_SQRT_RATIO = 4_295_128_739;

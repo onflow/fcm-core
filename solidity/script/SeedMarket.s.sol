@@ -4,9 +4,8 @@ pragma solidity ^0.8.20;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {console} from "forge-std/Script.sol";
 
-import {MORPHO_ADDRESS} from "../src/FCMVault.sol";
+import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {ConfiguredScript} from "./ConfiguredScript.s.sol";
-import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 
 /// @title SeedMarket
 /// @notice Supplies loan-token liquidity to the Morpho market so the vault
@@ -34,8 +33,8 @@ contract SeedMarket is ConfiguredScript {
         address supplier = _broadcaster();
         require(IERC20(c.loanToken).balanceOf(supplier) >= amount, "broadcaster holds less loan token than SEED_AMOUNT");
 
-        IERC20(c.loanToken).approve(MORPHO_ADDRESS, amount);
-        (uint256 supplied,) = IMorpho(MORPHO_ADDRESS).supply(_marketParams(c), amount, 0, supplier, "");
+        IERC20(c.loanToken).approve(address(MarketLib.MORPHO), amount);
+        (uint256 supplied,) = MarketLib.MORPHO.supply(_marketParams(c), amount, 0, supplier, "");
         vm.stopBroadcast();
 
         console.log("supplied %s loan token to market on behalf of %s", supplied, supplier);

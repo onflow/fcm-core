@@ -25,8 +25,10 @@ contract YieldTokenOracle is IOracle {
     uint256 public immutable CONVERSION_SAMPLE;
 
     error AssetMismatch();
+    error ZeroAddress();
 
     constructor(IERC4626 vault_, address asset_) {
+        require(asset_ != address(0), ZeroAddress());
         VAULT = vault_;
         ASSET = asset_;
         CONVERSION_SAMPLE = 10 ** vault_.decimals();

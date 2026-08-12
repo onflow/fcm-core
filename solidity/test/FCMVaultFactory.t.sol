@@ -4,10 +4,10 @@ pragma solidity ^0.8.20;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test} from "forge-std/Test.sol";
 
-import {MORPHO_ADDRESS} from "../src/FCMVault.sol";
 import {FCMVaultFactory} from "../src/FCMVaultFactory.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
 import {IFCMVaultFactory} from "../src/interfaces/IFCMVaultFactory.sol";
+import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {SwapLib} from "../src/libraries/SwapLib.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockIrm} from "./mocks/MockIrm.sol";
@@ -43,7 +43,7 @@ contract FCMVaultFactoryTest is Test {
         vm.etch(WETH, erc20Code);
         vm.etch(PYUSD0, erc20Code);
         vm.etch(FUSDEV, erc20Code);
-        vm.etch(address(MORPHO_ADDRESS), address(new MockMorpho()).code);
+        vm.etch(address(MarketLib.MORPHO), address(new MockMorpho()).code);
         vm.etch(address(SwapLib.SWAP_ROUTER), address(new MockSwapRouter()).code);
         vm.etch(MOCK_IRM, address(new MockIrm()).code);
 

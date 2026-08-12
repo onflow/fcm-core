@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-
-import {BPS} from "../FCMVault.sol";
 import {MarketLib} from "./MarketLib.sol";
 import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title FeesLib
 /// @author Flow Foundation
@@ -16,12 +15,12 @@ library FeesLib {
     using MarketParamsLib for MarketParams;
 
     uint256 private constant SECONDS_PER_YEAR = 365 days;
+    uint256 private constant BPS = 10_000;
 
     /// @notice Calculates the fee shares to mint for the given parameters
-    /// @dev This function already emits the FeesAccrued event if the fees are greater than 0.
+    /// @dev Pure calculation only; the caller is responsible for emitting `FeesAccrued` with the returned components.
     /// @param nav The net asset value of the vault.
     /// @param claims The claims of the vault.
-    /// @param pricePerShare The price per share of the vault.
     /// @param managementFeeBps The management fee in basis points.
     /// @param performanceFeeBps The performance fee in basis points.
     /// @param perfHighWaterMark The performance high water mark.
@@ -32,12 +31,13 @@ library FeesLib {
     function feesToMint(
         uint256 nav,
         uint256 claims,
-        uint256 pricePerShare,
+        // uint256 pricePerShare,
         uint256 managementFeeBps,
         uint256 performanceFeeBps,
         uint256 perfHighWaterMark,
         uint256 lastFeeAccrual
     ) external view returns (uint256 managementFee, uint256 performanceFee, uint256 feeShares) {
+        uint256 pricePerShare = nav.mulDiv(MarketLib.WAD, claims);
         // Bill exactly `rate * Δt` since the last accrual, then advance the clock
         // (accrual is irregular: every interaction + permissionless accrueFees).
         // The billable gap is capped at one year, so the fee is
@@ -65,7 +65,12 @@ library FeesLib {
         }
 
         uint256 feeAssets = managementFee + performanceFee;
-        if (feeAssets > 0 && feeAssets < nav) {
+        if (feeAssets > 0) {
+            if (feeAssets > nav) {
+                // unreachable with MAX_MANAGEMENT_FEE_BPS and MAX_PERFORMANCE_FEE_BPS.
+                // prefer to not take fees over reverting the protocol
+                return (0, 0, 0);
+            }
             uint256 navAfterFee = nav + 1 - feeAssets;
             // Mint shares worth `feeAssets` at the post-mint price (dilution).
             feeShares = feeAssets.mulDiv(claims, navAfterFee);

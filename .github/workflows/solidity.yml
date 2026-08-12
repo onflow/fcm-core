@@ -3,7 +3,6 @@ name: CI
 permissions: {}
 
 on:
-  push:
   pull_request:
   workflow_dispatch:
 

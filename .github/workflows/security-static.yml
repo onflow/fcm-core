@@ -32,7 +32,6 @@ name: Security (static analysis)
 permissions: {}
 
 on:
-  push:
   pull_request:
   workflow_dispatch:
 

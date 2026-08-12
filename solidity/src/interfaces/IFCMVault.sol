@@ -342,8 +342,8 @@ interface IFCMVault is IERC4626 {
     function perfHighWaterMark() external view returns (uint256);
     /// @notice Mapping of addresses to their early access status.
     /// @param account The address to check.
-    /// @return earlyAccess Whether the address has early access.
-    function earlyAccess(address account) external view returns (bool earlyAccess);
+    /// @return hasEarlyAccess Whether the address has early access.
+    function earlyAccess(address account) external view returns (bool hasEarlyAccess);
 
     // -- IERC4626 overrides --------------------------------------------------
     // solhint-disable ordering, grouped by domain

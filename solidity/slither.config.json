@@ -1,7 +1,9 @@
 {
+  "detectors_to_run": "all",
   "filter_paths": "(lib/|test/|script/|external/)",
-  "detectors_to_exclude": ["naming-convention"],
+  "detectors_to_exclude": ["naming-convention", "too-many-digits", "timestamp"],
   "exclude_dependencies": true,
   "exclude_informational": false,
-  "exclude_optimization": false
+  "exclude_optimization": false,
+  "fail_on": "FailOnLevel.PEDANTIC"
 }

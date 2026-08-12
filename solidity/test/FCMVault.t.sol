@@ -6,8 +6,9 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
-import {FCMVault, MORPHO_ADDRESS} from "../src/FCMVault.sol";
+import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
+import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {SwapLib} from "../src/libraries/SwapLib.sol";
 import {FCMVaultHarness} from "./FCMVaultHarness.sol";
 import {MockCpmmSwapRouter} from "./mocks/MockCpmmSwapRouter.sol";
@@ -31,7 +32,6 @@ contract FCMVaultTest is Test {
     using VaultHelpers for FCMVault;
     using MarketParamsLib for MarketParams;
 
-    IMorpho internal constant MORPHO = IMorpho(MORPHO_ADDRESS);
     // Token addresses — using the real Flow EVM addresses so mocks are
     // etched where the vault constants would otherwise point.
     IERC20 constant WETH = IERC20(0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590);
@@ -57,6 +57,7 @@ contract FCMVaultTest is Test {
     uint256 internal constant YIELD_FACTOR_MAX = 1.01e18;
     uint24 internal constant FEE = 100;
     uint24 internal constant FEE_ASSET_DEBT = 3000;
+    IMorpho internal constant MORPHO = MarketLib.MORPHO;
 
     FCMVault internal vault;
     MockOracle internal marketOracle;

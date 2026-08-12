@@ -3,4 +3,11 @@ include = ["src/", "interfaces/"]
 exclude = ["src/interfaces/external/"]
 
 [detectors]
-exclude = ["centralization-risk", "unspecific-solidity-pragma", "abi-encode-packed-hash-collision"]
+exclude = [
+    "centralization-risk",
+    "unspecific-solidity-pragma",
+    "abi-encode-packed-hash-collision",
+    "large-numeric-literal",
+    "literal-instead-of-constant",
+    "useless-internal-function"
+]

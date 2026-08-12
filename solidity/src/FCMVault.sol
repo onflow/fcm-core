@@ -5,7 +5,7 @@ import {IFCMVault} from "./interfaces/IFCMVault.sol";
 import {FeesLib} from "./libraries/FeesLib.sol";
 import {MarketLib} from "./libraries/MarketLib.sol";
 import {SwapLib} from "./libraries/SwapLib.sol";
-import {IMorpho, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
+import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IMorphoFlashLoanCallback} from "@morpho-blue/interfaces/IMorphoCallbacks.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -14,10 +14,6 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-
-// Morpho Blue singleton address for Flow EVM
-address constant MORPHO_ADDRESS = 0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f;
-uint256 constant BPS = 10_000;
 
 /// @title FCMVault
 /// @author Flow Foundation
@@ -38,8 +34,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     /// expensive. See
     /// https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     uint8 internal constant DECIMALS_OFFSET = 6;
-    /// @custom:security non-reentrant
-    IMorpho internal constant MORPHO = IMorpho(MORPHO_ADDRESS);
 
     /// @dev Hard cap on the management fee (10%/yr) — admin cannot exceed.
     uint256 internal constant MAX_MANAGEMENT_FEE_BPS = 1000;
@@ -163,8 +157,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         // });
 
         uint256 maxAllowance = type(uint256).max;
-        p.collateral.forceApprove(address(MORPHO), maxAllowance);
-        p.loanToken.forceApprove(address(MORPHO), maxAllowance);
+        p.collateral.forceApprove(address(MarketLib.MORPHO), maxAllowance);
+        p.loanToken.forceApprove(address(MarketLib.MORPHO), maxAllowance);
         p.loanToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
         p.yieldToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
         // redeem's Case-B flash sells collateral for the debt shortfall.
@@ -180,15 +174,14 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
     /// @inheritdoc IFCMVault
     function setMaxSlippageBps(uint256 newBps) external onlyOwner {
-        if (newBps >= BPS) revert InvalidSlippage();
+        if (newBps >= SwapLib.BPS) revert InvalidSlippage();
         emit MaxSlippageBpsSet(maxSlippageBps, newBps);
         maxSlippageBps = newBps;
     }
 
     /// @inheritdoc IFCMVault
     function setManagementFeeBps(uint256 newBps) external onlyOwner {
-        if (newBps > MAX_MANAGEMENT_FEE_BPS) revert InvalidFee();
-        // slither-disable-next-line reentrancy-no-eth
+        require(newBps <= MAX_MANAGEMENT_FEE_BPS, InvalidFee());
         _accrueFees();
         emit ManagementFeeSet(managementFeeBps, newBps);
         managementFeeBps = newBps;
@@ -196,17 +189,15 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
     /// @inheritdoc IFCMVault
     function setPerformanceFeeBps(uint256 newBps) external onlyOwner {
-        if (newBps > MAX_PERFORMANCE_FEE_BPS) revert InvalidFee();
-        // slither-disable-next-line reentrancy-no-eth
+        require(newBps <= MAX_PERFORMANCE_FEE_BPS, InvalidFee());
         _accrueFees();
         emit PerformanceFeeSet(performanceFeeBps, newBps);
         performanceFeeBps = newBps;
     }
 
-    // slither-disable-next-line reentrancy-no-eth -> onlyOwner modifier
     /// @inheritdoc IFCMVault
     function setFeeRecipient(address newRecipient) external onlyOwner {
-        // slither-disable-next-line reentrancy-no-eth
+        require(newRecipient != address(0), ZeroAddress());
         _accrueFees();
         emit FeeRecipientSet(feeRecipient, newRecipient);
         feeRecipient = newRecipient;
@@ -539,7 +530,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
             // making the withdrawal hf-neutral and permitted at any health factor.
             // The unsold collateral is delivered to the redeemer as the asset
             // balance delta (see `onMorphoFlashLoan`).
-            MORPHO.flashLoan(address(LOAN_TOKEN), debtSlice - loanGot, abi.encode(debtSlice, collSlice));
+            MarketLib.MORPHO.flashLoan(address(LOAN_TOKEN), debtSlice - loanGot, abi.encode(debtSlice, collSlice));
         }
     }
 
@@ -555,7 +546,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     /// @param shortfall Loan-token amount flash-borrowed to cover the debt gap.
     /// @param data ABI-encoded `(debtSlice, collSlice)` from `_unwindSlice`.
     function onMorphoFlashLoan(uint256 shortfall, bytes calldata data) external {
-        require(msg.sender == address(MORPHO), Unauthorized());
+        require(msg.sender == address(MarketLib.MORPHO), Unauthorized());
         (uint256 debtSlice, uint256 collSlice) = abi.decode(data, (uint256, uint256));
 
         // slither-disable-next-line unused-return -> repay amount is known (debtSlice); Morpho reverts on failure
@@ -876,7 +867,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
             (uint256 managementFee, uint256 performanceFee, uint256 feeShares) = FeesLib.feesToMint({
                 nav: nav,
                 claims: claims,
-                pricePerShare: pricePerShare,
+                // pricePerShare: pricePerShare,
                 managementFeeBps: managementFeeBps,
                 performanceFeeBps: performanceFeeBps,
                 perfHighWaterMark: perfHighWaterMark,
