@@ -21,18 +21,27 @@ contract YieldTokenOracle is IOracle {
     /// @notice The asset being priced.
     address public immutable ASSET;
 
-    /// @notice One whole vault share, used as the conversion sample so the vault's rounding error stays negligible.
+    /// @notice The sample amount of vault shares used to derive the share-to-asset price, set at construction.
     uint256 public immutable CONVERSION_SAMPLE;
 
     error AssetMismatch();
     error ZeroAddress();
+    error ZeroConversionSample();
 
-    constructor(IERC4626 vault_, address asset_) {
-        require(asset_ != address(0), ZeroAddress());
-        VAULT = vault_;
-        ASSET = asset_;
-        CONVERSION_SAMPLE = 10 ** vault_.decimals();
-        if (vault_.asset() != asset_) revert AssetMismatch();
+    /// @param vault The ERC4626 vault whose shares are being priced.
+    /// @param asset The vault's underlying asset; must match `vault.asset()`.
+    /// @param conversionSample The sample amount of vault shares used to convert to the underlying asset. Should be
+    /// chosen such that converting `conversionSample` to assets has enough precision. A larger sample spreads the
+    /// vault's `convertToAssets` floor over more shares, reducing the per-share rounding error that accumulates when
+    /// pricing large positions; too small a sample understates the value of large holdings. Must not be so large that
+    /// `vault.convertToAssets(conversionSample)` overflows inside the vault.
+    constructor(IERC4626 vault, address asset, uint256 conversionSample) {
+        require(asset != address(0), ZeroAddress());
+        require(conversionSample != 0, ZeroConversionSample());
+        VAULT = vault;
+        ASSET = asset;
+        CONVERSION_SAMPLE = conversionSample;
+        if (vault.asset() != asset) revert AssetMismatch();
     }
 
     /// @inheritdoc IOracle

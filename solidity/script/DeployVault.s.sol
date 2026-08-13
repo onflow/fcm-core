@@ -50,7 +50,10 @@ contract DeployVault is ConfiguredScript {
 
         address yieldOracle = c.yieldOracle;
         if (yieldOracle == address(0)) {
-            yieldOracle = address(new YieldTokenOracle(IERC4626(c.yieldToken), c.loanToken));
+            // 1e36 spreads the vault's convertToAssets floor over 1e18 whole
+            // shares, so the per-share rounding error is ~1e-18 relative and
+            // stays negligible for any realistic position size.
+            yieldOracle = address(new YieldTokenOracle(IERC4626(c.yieldToken), c.loanToken, 1e36));
         }
         uint256 p = YieldTokenOracle(yieldOracle).price();
         require(p > 0, "yield oracle reports zero price");

@@ -78,7 +78,7 @@ contract Status is ConfiguredScript {
             // Not yet deployed: simulate one to preview the NAV price it
             // would report. This never broadcasts (Status has no broadcast
             // section).
-            uint256 p = new YieldTokenOracle(IERC4626(c.yieldToken), c.loanToken).price();
+            uint256 p = new YieldTokenOracle(IERC4626(c.yieldToken), c.loanToken, 1e36).price();
             console.log("yield oracle not deployed; simulated NAV price: %s", p);
         }
     }
