@@ -280,7 +280,7 @@ contract FCMVaultTest is Test {
         vm.prank(user);
         uint256 assetsOut = vault.redeem(shares, user, user);
 
-        assertApproxEqAbs(assetsOut, amount, 1, "assetsOut approx deposit");
+        assertApproxEqAbs(assetsOut, amount, 2, "assetsOut approx deposit");
         assertEq(WETH.balanceOf(user), assetsOut, "user weth credit");
         assertEq(vault.balanceOf(user), 0, "shares burned");
     }

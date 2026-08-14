@@ -502,7 +502,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         uint256 claims = _totalClaims();
 
         // yieldOut is the quantity of yield tokens we are selling to satisfy the redemption
-        uint256 yieldOut = YIELD_TOKEN.balanceOf(address(this)).mulDiv(shares, claims);
+        uint256 yieldOut = YIELD_TOKEN.balanceOf(address(this)).mulDiv(shares, claims, Math.Rounding.Floor);
         uint256 loanBefore = LOAN_TOKEN.balanceOf(address(this));
         if (yieldOut > 0) {
             // slither-disable-next-line unused-return -> loanGot is measured from the loanToken balance delta below
@@ -510,8 +510,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         }
         uint256 loanGot = LOAN_TOKEN.balanceOf(address(this)) - loanBefore;
 
-        uint256 debtSlice = market().debt().mulDiv(shares, claims);
-        uint256 collSlice = market().collateral().mulDiv(shares, claims);
+        uint256 debtSlice = market().debt().mulDiv(shares, claims, Math.Rounding.Ceil);
+        uint256 collSlice = market().collateral().mulDiv(shares, claims, Math.Rounding.Floor);
 
         if (loanGot >= debtSlice) {
             // Case A: full pro-rata unwind, reconcile surplus to the asset.
