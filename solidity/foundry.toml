@@ -21,7 +21,7 @@ flow_mainnet = "https://mainnet.evm.nodes.onflow.org"
 [profile.ci]
 no_match_contract = "^$"
 via_ir = true
-optimizer_runs = 10_000
+optimizer_runs = 5_000
 verbosity = 3
 fuzz.runs = 10_000
 

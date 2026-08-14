@@ -4,7 +4,6 @@ pragma solidity ^0.8.24;
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {BPS} from "../FCMVault.sol";
-import {IFCMVault} from "../interfaces/IFCMVault.sol";
 import {MarketLib} from "./MarketLib.sol";
 import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
@@ -27,6 +26,8 @@ library FeesLib {
     /// @param performanceFeeBps The performance fee in basis points.
     /// @param perfHighWaterMark The performance high water mark.
     /// @param lastFeeAccrual The last fee accrual.
+    /// @return managementFee The management fee.
+    /// @return performanceFee The performance fee.
     /// @return feeShares The fee shares to mint.
     function feesToMint(
         uint256 nav,
@@ -36,7 +37,7 @@ library FeesLib {
         uint256 performanceFeeBps,
         uint256 perfHighWaterMark,
         uint256 lastFeeAccrual
-    ) external returns (uint256 feeShares) {
+    ) external view returns (uint256 managementFee, uint256 performanceFee, uint256 feeShares) {
         // Bill exactly `rate * Δt` since the last accrual, then advance the clock
         // (accrual is irregular: every interaction + permissionless accrueFees).
         // The billable gap is capped at one year, so the fee is
@@ -49,12 +50,10 @@ library FeesLib {
         uint256 elapsed = block.timestamp - lastFeeAccrual;
         if (elapsed > SECONDS_PER_YEAR) elapsed = SECONDS_PER_YEAR;
 
-        uint256 managementFee = 0;
         if (managementFeeBps > 0 && elapsed > 0) {
             managementFee = nav.mulDiv(managementFeeBps * elapsed, BPS * SECONDS_PER_YEAR);
         }
 
-        uint256 performanceFee = 0;
         if (performanceFeeBps > 0 && pricePerShare > perfHighWaterMark) {
             // Fee on the gain in pps above the all-time HWM. pps is UNREALIZED and
             // oracle-marked, so a transient mark move can crystallize a fee on paper
@@ -70,10 +69,7 @@ library FeesLib {
             uint256 navAfterFee = nav + 1 - feeAssets;
             // Mint shares worth `feeAssets` at the post-mint price (dilution).
             feeShares = feeAssets.mulDiv(claims, navAfterFee);
-            if (feeShares > 0) {
-                emit IFCMVault.FeesAccrued(managementFee, performanceFee, feeShares);
-            }
         }
-        return feeShares;
+        return (managementFee, performanceFee, feeShares);
     }
 }

@@ -873,7 +873,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
         address recipient = feeRecipient;
         if (recipient != address(0) && earlyAccess[recipient] && nav > 0) {
-            uint256 feeShares = FeesLib.feesToMint({
+            (uint256 managementFee, uint256 performanceFee, uint256 feeShares) = FeesLib.feesToMint({
                 nav: nav,
                 claims: claims,
                 pricePerShare: pricePerShare,
@@ -883,9 +883,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
                 lastFeeAccrual: lastFeeAccrual
             });
             if (feeShares > 0) {
+                emit IFCMVault.FeesAccrued(managementFee, performanceFee, feeShares);
                 _mint(recipient, feeShares);
             }
-            // emit FeesAccrued(recipient, managementFee, performanceFee, feeShares);
         }
 
         // Advance clock + HWM unconditionally (even when the mint was skipped) so fees meter from when they're enabled,
