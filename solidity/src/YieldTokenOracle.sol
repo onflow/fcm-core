@@ -28,6 +28,7 @@ contract YieldTokenOracle is IOracle {
     error ZeroAddress();
     error ZeroConversionSample();
 
+    /// @notice Constructs a new YieldTokenOracle.
     /// @param vault The ERC4626 vault whose shares are being priced.
     /// @param asset The vault's underlying asset; must match `vault.asset()`.
     /// @param conversionSample The sample amount of vault shares used to convert to the underlying asset. Should be
