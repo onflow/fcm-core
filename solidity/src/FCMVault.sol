@@ -342,8 +342,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         // 2. Decremement the redeemer's allowance by the amount redeemed.
         if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
 
-        // slither-disable-next-line incorrect-equality -> exact-zero is the intended "no recovery pending" guard
-
         // Accrue fees first so the redeemer bears their share of accrued fees.
         _accrueFees();
         require(market().healthFactor() >= HEALTH_FACTOR_MIN, VaultUnhealthy());
