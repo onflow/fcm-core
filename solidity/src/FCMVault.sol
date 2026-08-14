@@ -148,14 +148,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         MARKET_IRM = p.marketIrm;
         MARKET_LLTV = p.marketLltv;
 
-        // market = MarketParams({
-        //     loanToken: address(p.loanToken),
-        //     collateralToken: address(p.collateral),
-        //     oracle: p.marketOracle,
-        //     irm: p.marketIrm,
-        //     lltv: p.marketLltv
-        // });
-
         uint256 maxAllowance = type(uint256).max;
         p.collateral.forceApprove(address(MarketLib.MORPHO), maxAllowance);
         p.loanToken.forceApprove(address(MarketLib.MORPHO), maxAllowance);
