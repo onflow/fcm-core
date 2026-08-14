@@ -691,7 +691,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
             // This case occurs when the swap pool returns a better price than the oracle, resulting in more loan tokens
             // than needed. We happily accept the favorable outcome, even if that means some loan tokens will get lost
             // as idle loan tokens in the vault.
-            loanGot = currentDebt;
+            return market().repayAll();
         }
         // slither-disable-next-line unused-return -> repay amount is known (repaid); Morpho reverts on failure
         if (loanGot > 0) market().repay(loanGot);
