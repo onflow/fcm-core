@@ -3,7 +3,7 @@ pragma solidity ^0.8.19;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-import {ISwapRouter} from "../../src/interfaces/ISwapRouter.sol";
+import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
 import {MockERC20} from "./MockERC20.sol";
 
 /// @dev Constant-product (x*y=k) swap mock that honors `sqrtPriceLimitX96` the
@@ -31,7 +31,7 @@ contract MockCpmmSwapRouter {
         reserveOf[token] = reserve;
     }
 
-    function exactInputSingle(ISwapRouter.ExactInputSingleParams calldata p)
+    function exactInputSingle(ISwapRouter02.ExactInputSingleParams calldata p)
         external
         payable
         returns (uint256 amountOut)

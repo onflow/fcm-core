@@ -3,14 +3,8 @@ pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
 
-interface IPyth {
-    function getUpdateFee(bytes[] calldata updateData) external view returns (uint256);
-    function updatePriceFeeds(bytes[] calldata updateData) external payable;
-}
-
-interface IOracle {
-    function price() external view returns (uint256);
-}
+import {IOracle} from "./interfaces/IOracle.sol";
+import {IPyth} from "./interfaces/IPyth.sol";
 
 /// @title UpdatePythPrices
 /// @notice Fetches fresh FLOW, ETH, and BTC prices from Hermes and pushes them to Pyth on Flow EVM.
@@ -59,6 +53,8 @@ contract UpdatePythPrices is Script {
         command[3] = "30";
         command[4] = string.concat(HERMES_URL, "&ids[]=", FLOW_ID, "&ids[]=", ETH_ID, "&ids[]=", BTC_ID);
 
+        // necessary to get real price data
+        // forge-lint: disable-next-item(unsafe-cheatcode)
         string memory response = string(vm.ffi(command));
         string memory updateDataHex = vm.parseJsonString(response, ".binary.data[0]");
         require(bytes(updateDataHex).length > 0, "Hermes returned empty update data");
