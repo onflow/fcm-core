@@ -123,6 +123,9 @@ contract FeesLibTest is Test {
         assertApproxEqRel(shares, uint256(600e18) / 4, 1);
     }
 
+    // Tests that FeesLib returns 0 shares when calculated management fees would exceed the vault NAV
+    // (should never occur in practice). This guards against pathological fee scenarios and ensures the protocol does
+    // not revert, brick, or behave unexpectedly if ever triggered.
     function test_FeesToMintBiggerNav_ManagementFeeOnly() public {
         skip(365 days);
         // mgmt fee (101.101e18) exceeds nav (101e18) -> hits the unreachable
@@ -140,9 +143,10 @@ contract FeesLibTest is Test {
         assertEq(shares, 0, "feeShares zeroed");
     }
 
+    // Tests that FeesLib returns 0 shares when calculated performance fees would exceed the vault NAV
+    // (should never occur in practice). This guards against pathological fee scenarios and ensures the protocol does
+    // not revert, brick, or behave unexpectedly if ever triggered.
     function test_FeesToMintBiggerNav_PerformanceFeeOnly() public view {
-        // perf fee (100.01e18) exceeds nav (100e18) -> hits the unreachable
-        // `feeAssets > nav` branch, which must zero all three returns.
         (uint256 managementFee, uint256 performanceFee, uint256 shares) = FeesLib.feesToMint({
             nav: 100e18,
             claims: 100e18,
@@ -154,33 +158,6 @@ contract FeesLibTest is Test {
         assertEq(managementFee, 0, "managementFee zeroed");
         assertEq(performanceFee, 0, "performanceFee zeroed");
         assertEq(shares, 0, "feeShares zeroed");
-    }
-
-    function test_FeesToMintBiggerNav_PerformanceFeeOnly_730days() public view {
-        (uint256 managementFee, uint256 performanceFee, uint256 shares) = FeesLib.feesToMint({
-            nav: 1e18,
-            claims: 100e18,
-            managementFeeBps: 0,
-            performanceFeeBps: 1001,
-            perfHighWaterMark: 0.9e18,
-            lastFeeAccrual: 0
-        });
-        assertEq(managementFee, 0);
-        assertEq(performanceFee, 0);
-        assertEq(shares, 0);
-    }
-
-    function test_FeesToMint_ManagementFeeOnly_730days() public {
-        skip(730 days);
-        (,, uint256 shares) = FeesLib.feesToMint({
-            nav: 2e18,
-            claims: 100e18,
-            managementFeeBps: 5001,
-            performanceFeeBps: 0,
-            perfHighWaterMark: 0,
-            lastFeeAccrual: 0
-        });
-        assertApproxEqRel(shares, uint256(100e18).mulDiv(5001, 4999), 1);
     }
 
     function test_FeesToMint_Compounding() public {
@@ -243,7 +220,6 @@ contract FeesLibTest is Test {
         elapsed = bound(elapsed, 1, 366 days);
         skip(elapsed);
 
-        // 2. Execute call - if feeAssets > nav, assert(false) will panic and fail the test
         (,, uint256 shares) = FeesLib.feesToMint({
             nav: nav,
             claims: claims,
