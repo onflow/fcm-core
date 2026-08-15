@@ -9,7 +9,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 /// @author Flow Foundation
 /// @notice Prices ERC4626 vault shares in terms of the vault's underlying asset, derived from the vault's own exchange
 /// rate, following Morpho's `IOracle` convention: `price()` returns the asset value of 1e36 base units of the share
-/// token, so `assetAmount = shareAmount * price() / 1e36` (in each token's native base units -- the vault's conversion
+/// token, so `assetAmount = shareAmount * price() / 1e36` (in each token's native base units - the vault's conversion
 /// already embeds both tokens' decimals, so no explicit decimal scaling is required).
 contract YieldTokenOracle is IOracle {
     /// @dev Morpho's ORACLE_PRICE_SCALE.

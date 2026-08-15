@@ -32,7 +32,7 @@ contract FCMVaultTest is Test {
     using VaultHelpers for FCMVault;
     using MarketParamsLib for MarketParams;
 
-    // Token addresses — using the real Flow EVM addresses so mocks are
+    // Token addresses - using the real Flow EVM addresses so mocks are
     // etched where the vault constants would otherwise point.
     IERC20 constant WETH = IERC20(0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590);
     IERC20 constant PYUSD0 = IERC20(0x99aF3EeA856556646C98c8B9b2548Fe815240750);
@@ -136,7 +136,7 @@ contract FCMVaultTest is Test {
         uint256 shares = vault.deposit(amount, user);
         vm.stopPrank();
 
-        // _decimalsOffset() == 6 → first depositor gets assets * 1e6.
+        // _decimalsOffset() == 6 -> first depositor gets assets * 1e6.
         assertEq(shares, amount * 1e6, "shares");
         assertEq(vault.balanceOf(user), shares, "balanceOf user");
         assertEq(vault.totalSupply(), shares, "totalSupply");
@@ -159,13 +159,13 @@ contract FCMVaultTest is Test {
         assertEq(WETH.balanceOf(address(MORPHO)), amount, "morpho weth");
         assertEq(WETH.balanceOf(address(vault)), 0, "vault weth");
 
-        // toBorrow = 2000 * 0.86 / 1.45 ≈ 1186.2069 PYUSD0 (1:1 to FUSDEV).
+        // toBorrow = 2000 * 0.86 / 1.45 ~ 1186.2069 PYUSD0 (1:1 to FUSDEV).
         uint256 expectedBorrow = (amount * 2000 * 0.86e18) / 1.45e18;
         assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), expectedBorrow, 1, "vault fusdev");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "vault pyusd0");
     }
 
-    /// @dev `mint` is intentionally not supported — the vault only accepts
+    /// @dev `mint` is intentionally not supported - the vault only accepts
     ///      asset-denominated deposits, since minting an exact share count would
     ///      require pre-computing the borrow+swap leg with unknown slippage.
     function test_Mint_Reverts() public {
@@ -175,7 +175,7 @@ contract FCMVaultTest is Test {
 
     /// @dev After a deposit, NAV in asset terms should equal the original deposit
     ///      amount (modulo rounding): the collateral leg adds `assets` of value, and
-    ///      the borrow→swap leg nets to zero because yield and debt are valued at the
+    ///      the borrow->swap leg nets to zero because yield and debt are valued at the
     ///      same 1:1 mock rate. Verifies no value is leaked by the deposit flow itself.
     function test_Deposit_NavRoundsToOriginalAssets() public {
         uint256 amount = 1 ether;
@@ -253,7 +253,7 @@ contract FCMVaultTest is Test {
         assertEq(vault.maxDeposit(bob), 0, "maxDeposit mirrors the guard");
     }
 
-    // ---- redeem tests ------------------------------------------------------
+    // -- redeem tests ---------------------------
 
     /// @dev    Test helper: mint `amount` of (mock) WETH to `who`, approve
     ///         the vault, and deposit on their behalf. Used by every redeem
@@ -310,7 +310,7 @@ contract FCMVaultTest is Test {
         assertEq(WETH.balanceOf(user), 0, "owner weth untouched");
     }
 
-    /// @notice Partial redeem (half of shares) unwinds proportionally — about
+    /// @notice Partial redeem (half of shares) unwinds proportionally - about
     /// half the collateral, half the debt, and half the FUSDEV position are
     /// removed; the rest of the position remains intact and healthy.
     function test_Redeem_PartialRedeemUnwindsProportionalSlice() public {
@@ -329,7 +329,7 @@ contract FCMVaultTest is Test {
         vm.prank(user);
         uint256 assetsOut = vault.redeem(shares / 2, user, user);
 
-        // ~half of each leg consumed (within 0.1% — virtual-share offset).
+        // ~half of each leg consumed (within 0.1% - virtual-share offset).
         assertApproxEqRel(WETH.balanceOf(address(MORPHO)), collateralBefore / 2, 1e15, "collateral halved");
         assertApproxEqRel(FUSDEV.balanceOf(address(vault)), fusdevBefore / 2, 1e15, "fusdev halved");
         assertApproxEqRel(assetsOut, amount / 2, 1e15, "assetsOut approx half");
@@ -359,7 +359,7 @@ contract FCMVaultTest is Test {
     }
 
     /// @notice An operator who is not the owner and has no allowance cannot
-    /// redeem on the owner's behalf — call reverts via ERC20 allowance check.
+    /// redeem on the owner's behalf - call reverts via ERC20 allowance check.
     function test_Redeem_RevertsIfNotOwnerAndNoAllowance() public {
         uint256 shares = _depositFor(user, 1 ether);
         address operator = address(0xCAFE);
@@ -408,7 +408,7 @@ contract FCMVaultTest is Test {
 
     /// @notice Case B (the yield sale falls short of the pro-rata debt slice):
     /// redeem fills the shortfall by selling a slice of the redeemer's OWN
-    /// collateral, so they receive their full pro-rata value — not the old
+    /// collateral, so they receive their full pro-rata value - not the old
     /// scale-down haircut. We under-back the vault (burn 10% of its yield) to
     /// force a real shortfall; collateral is sold to cover it and the redeemer
     /// gets ~their full NAV share back.
@@ -499,9 +499,9 @@ contract FCMVaultTest is Test {
         assertEq(vault.balanceOf(user), sharesBefore, "shares unchanged");
     }
 
-    // ---- in-kind redeem (escape hatch) ------------------------------------
+    // -- in-kind redeem (escape hatch) ------------------
 
-    /// @notice Escape hatch: a holder exits in kind — repays its pro-rata debt in
+    /// @notice Escape hatch: a holder exits in kind - repays its pro-rata debt in
     ///         loanToken and receives collateral + yield tokens directly, no swap.
     ///         (A swap-based redeem delivers only the asset and zero yield, so
     ///         receiving FUSDEV proves the swap-free path ran.)
@@ -556,7 +556,7 @@ contract FCMVaultTest is Test {
         (uint256 collOut, uint256 yieldOut) = vault.redeemInKind(shares, user, user);
         vm.stopPrank();
 
-        // Same full in-kind slice as a normal exit — de-allowlisting changes nothing.
+        // Same full in-kind slice as a normal exit - de-allowlisting changes nothing.
         assertEq(vault.balanceOf(user), 0, "exited despite de-allowlist");
         assertEq(collOut, expColl, "exact collateral slice");
         assertEq(yieldOut, expYield, "exact yield slice");
@@ -565,7 +565,7 @@ contract FCMVaultTest is Test {
     }
 
     /// @notice Partial in-kind exit alongside a second holder. Confirms the slices
-    ///         are floored pro-rata, the debt slice rounds UP (Ceil — the redeemer
+    ///         are floored pro-rata, the debt slice rounds UP (Ceil - the redeemer
     ///         over-repays by 1 wei), and the remaining holder's value-per-share is
     ///         not diluted.
     function test_RedeemInKind_PartialExitDoesNotDiluteRemainingHolder() public {
@@ -598,19 +598,19 @@ contract FCMVaultTest is Test {
         uint256 debtSpent = loanBefore - PYUSD0.balanceOf(user);
         assertEq(debtSpent, yieldOut + 1, "debt slice rounded up vs floored yield slice");
 
-        // Bob stayed put: shares untouched and value-per-share did not drop — every
+        // Bob stayed put: shares untouched and value-per-share did not drop - every
         // rounding residual stays with the vault, never leaking to the exiter.
         assertEq(vault.balanceOf(bob), bobShares, "bob shares untouched");
         assertGe(vault.convertToAssets(bobShares), bobValueBefore, "bob not diluted");
     }
 
-    // ---- deposit edge-case tests ------------------------------------------
+    // -- deposit edge-case tests ---------------------
 
     /// @dev Verifies that a deposit only borrows against the depositor's own
     ///      collateral, not the entire available headroom in the protocol.
     ///
-    ///      Setup: Alice makes a large deposit, then the collateral price 5×es,
-    ///      leaving the position with a health factor >> midpoint (~7×). A 99%
+    ///      Setup: Alice makes a large deposit, then the collateral price 5*es,
+    ///      leaving the position with a health factor >> midpoint (~7*). A 99%
     ///      swap fee is then set so the rebalancing cost is maximally visible.
     ///
     ///      Bob makes a tiny 0.001 ETH deposit. If deposit were to rebalance
@@ -632,7 +632,7 @@ contract FCMVaultTest is Test {
         vault.deposit(aliceAmount, alice);
         vm.stopPrank();
 
-        // 5× price increase → health factor jumps from 1.45 to ~7.25.
+        // 5* price increase -> health factor jumps from 1.45 to ~7.25.
         marketOracle.setPrice(10_000e36);
 
         // Brutal swap fee: if deposit rebalanced to the midpoint HF it would borrow
@@ -659,7 +659,7 @@ contract FCMVaultTest is Test {
 
     /// @dev When the position health factor is below the target (price has dropped,
     ///      existing debt is already too high), a new deposit must not borrow any
-    ///      additional loan token. It still supplies collateral and mints shares —
+    ///      additional loan token. It still supplies collateral and mints shares -
     ///      it just skips the borrow+swap leg entirely until health recovers.
     function test_Deposit_NoBorrowWhenPositionUnhealthy() public {
         uint256 amount = 1 ether;
@@ -671,7 +671,7 @@ contract FCMVaultTest is Test {
 
         // Drop price so existing debt exceeds the health factor target.
         // At 800e36: maxBorrow = 1e18 * 800 * 0.86 = 688 PYUSD0.
-        // Existing debt ≈ 1186 PYUSD0 → HF ≈ 0.58, well below target of 1.45.
+        // Existing debt ~ 1186 PYUSD0 -> HF ~ 0.58, well below target of 1.45.
         marketOracle.setPrice(800e36);
 
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
@@ -683,18 +683,18 @@ contract FCMVaultTest is Test {
         uint256 bobShares = vault.deposit(amount, bobLocal);
         vm.stopPrank();
 
-        // Bob still gets shares — collateral was supplied.
+        // Bob still gets shares - collateral was supplied.
         assertGt(bobShares, 0, "bob gets shares");
         assertEq(WETH.balanceOf(address(MORPHO)), amount * 2, "both deposits collateral supplied");
 
-        // No new borrowing — FUSDEV balance unchanged.
+        // No new borrowing - FUSDEV balance unchanged.
         assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "no new yield bought");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan token sitting idle");
     }
 
-    // ---------------------------------------------------------------------
+    // -----------------------------------
     // Role administration
-    // ---------------------------------------------------------------------
+    // -----------------------------------
 
     /// @notice Admin gets DEFAULT_ADMIN_ROLE on construction; bob/carol/stranger
     ///         start non-allowlisted.
@@ -724,9 +724,9 @@ contract FCMVaultTest is Test {
         vault.grantEarlyAccess(bob);
     }
 
-    // ---------------------------------------------------------------------
+    // -----------------------------------
     // Deposit gating
-    // ---------------------------------------------------------------------
+    // -----------------------------------
 
     /// @notice maxDeposit returns 0 for a non-allowlisted receiver.
     function test_MaxDepositZeroForNonAllowlisted() public view {
@@ -757,9 +757,9 @@ contract FCMVaultTest is Test {
         vm.stopPrank();
     }
 
-    // ---------------------------------------------------------------------
+    // -----------------------------------
     // Transfer gating
-    // ---------------------------------------------------------------------
+    // -----------------------------------
 
     /// @notice Transfers between allowlisted holders succeed.
     function test_TransferBetweenAllowlistedHoldersSucceeds() public {
@@ -814,9 +814,9 @@ contract FCMVaultTest is Test {
         vault.transfer(bob, shares);
     }
 
-    // ---------------------------------------------------------------------
+    // -----------------------------------
     // Rebalance
-    // ---------------------------------------------------------------------
+    // -----------------------------------
 
     /// @notice After a fresh deposit, HF lands at the band midpoint (1.45),
     ///         which is inside [min=1.25, max=1.65]. A rebalance is a no-op:
@@ -838,7 +838,7 @@ contract FCMVaultTest is Test {
     /// @notice When the collateral price rises enough to push HF above max
     ///         (1.65), `rebalance` borrows additional loan token and swaps
     ///         it into yield token, driving HF down to the re-entry target
-    ///         just below the upper bound (`healthFactorMaxTarget`, 1.60) —
+    ///         just below the upper bound (`healthFactorMaxTarget`, 1.60) -
     ///         not a central target. The vault's collateral and the position's
     ///         borrow shares both move in the expected directions.
     function test_Rebalance_LeversWhenAboveMax() public {
@@ -863,7 +863,7 @@ contract FCMVaultTest is Test {
     /// @notice When the collateral price drops enough to push HF below min
     ///         (1.25), `rebalance` sells yield token for loan token and
     ///         repays just enough debt to land HF at the re-entry target just
-    ///         above the lower bound (`healthFactorMinTarget`, 1.30) — not a
+    ///         above the lower bound (`healthFactorMinTarget`, 1.30) - not a
     ///         central target.
     function test_Rebalance_DeleversWhenBelowMin() public {
         _depositFor(user, 1 ether);
@@ -884,7 +884,7 @@ contract FCMVaultTest is Test {
     }
 
     /// @notice While an emergency recovery is pending, a permissionless `rebalance`
-    ///         must NOT lever up — the position is slated for in-kind wind-down, so
+    ///         must NOT lever up - the position is slated for in-kind wind-down, so
     ///         re-levering (more debt + AMM cost) works against it. HF above max
     ///         would normally trigger a lever-up; here it is suppressed.
     function test_Recovery_NoLeverUpWhilePending() public {
@@ -894,7 +894,7 @@ contract FCMVaultTest is Test {
         vm.prank(admin);
         vault.scheduleEmergencyRecovery();
 
-        // Push HF above max — the lever-up trigger.
+        // Push HF above max - the lever-up trigger.
         marketOracle.setPrice(2300e36);
         assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "above max");
 
@@ -906,7 +906,7 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
-    /// @notice Delever stays LIVE during a pending recovery — it only de-risks the
+    /// @notice Delever stays LIVE during a pending recovery - it only de-risks the
     ///         position, so it should keep firing (matching `_harvest`'s gate, which
     ///         freezes only the position-reshaping legs, not the safety leg).
     function test_Recovery_DeleverStaysLiveWhilePending() public {
@@ -915,7 +915,7 @@ contract FCMVaultTest is Test {
         vm.prank(admin);
         vault.scheduleEmergencyRecovery();
 
-        // Push HF below min — the delever trigger.
+        // Push HF below min - the delever trigger.
         marketOracle.setPrice(1700e36);
         assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
 
@@ -926,7 +926,7 @@ contract FCMVaultTest is Test {
         assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "delever fires while recovery pending");
     }
 
-    // ---- rebalance price-limit guard -------------------------------------
+    // -- rebalance price-limit guard -------------------
 
     /// @notice When the pool's marginal price is already past the oracle-derived
     ///         slippage bound, the delever swap is skipped entirely (a swap-free
@@ -939,7 +939,7 @@ contract FCMVaultTest is Test {
         uint256 hfBefore = _healthFactor();
         assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
 
-        // Pool yield/loan price 2% above oracle — past the 1% bound for selling
+        // Pool yield/loan price 2% above oracle - past the 1% bound for selling
         // yield (a price-raising swap), so the swap is skipped.
         _setPoolPrice(102, 100);
 
@@ -963,7 +963,7 @@ contract FCMVaultTest is Test {
         uint256 hfBefore = _healthFactor();
         assertGt(hfBefore, HEALTH_FACTOR_MAX, "above max");
 
-        // Pool yield/loan price 2% below oracle — past the 1% bound for buying
+        // Pool yield/loan price 2% below oracle - past the 1% bound for buying
         // yield (a price-lowering swap), so the swap is skipped.
         _setPoolPrice(98, 100);
 
@@ -978,7 +978,7 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
-    // ---- partial rebalancing (price-impact pool) -------------------------
+    // -- partial rebalancing (price-impact pool) -------------
 
     /// @dev The price ratio `num/den` in Q64.192 fixed point (`num/den * 2**192`),
     ///      i.e. the square of a `sqrtPriceX96`. `_priceX192(1, 4)` is a 1:4 price.
@@ -1016,8 +1016,8 @@ contract FCMVaultTest is Test {
 
     /// @notice Partial delever: when selling the full delever amount would push
     ///         a shallow pool past the price bound, the pool fills only up to the
-    ///         bound (a partial fill) instead of reverting. HF rises toward — but
-    ///         falls short of — the lower re-entry target, debt and yield both
+    ///         bound (a partial fill) instead of reverting. HF rises toward - but
+    ///         falls short of - the lower re-entry target, debt and yield both
     ///         shrink, and no idle loan token is left behind.
     function test_Rebalance_PartialDeleverMakesProgress() public {
         _depositFor(user, 1 ether);
@@ -1045,7 +1045,7 @@ contract FCMVaultTest is Test {
 
     /// @notice Partial lever: when the full lever swap would push the pool past
     ///         the price bound, the pool fills only up to it and the vault repays
-    ///         the unspent borrow, so HF falls toward — but not all the way to —
+    ///         the unspent borrow, so HF falls toward - but not all the way to -
     ///         the upper re-entry target, with no idle loan token left.
     function test_Rebalance_PartialLeverMakesProgress() public {
         _depositFor(user, 1 ether);
@@ -1094,7 +1094,7 @@ contract FCMVaultTest is Test {
         assertGt(_healthFactor(), hfBefore, "5% bound admits the delever: HF raised");
     }
 
-    // ---- price-limit math (security-critical conversion) -----------------
+    // -- price-limit math (security-critical conversion) ---------
 
     /// @notice The oracle -> `sqrtPriceLimitX96` conversion matches the
     ///         oracle price discounted by `maxSlippageBps`, in both swap
@@ -1180,7 +1180,7 @@ contract FCMVaultTest is Test {
     ///         just at the midpoint. Here we nudge HF off-center (above the
     ///         midpoint but still below max); the call leaves the position
     ///         untouched. There is no longer any way to force a rebalance
-    ///         inside the band — the smallest-swap policy only acts at a bound.
+    ///         inside the band - the smallest-swap policy only acts at a bound.
     function test_Rebalance_NoopWhenOffCenterButInBand() public {
         _depositFor(user, 1 ether);
 
@@ -1216,7 +1216,7 @@ contract FCMVaultTest is Test {
 
         // A pure collateral seizure (no debt repaid) grabs 0.7 of the 1 ether
         // collateral, leaving the position underwater with the full debt intact.
-        // collateral 0.3 ether → maxBorrow 0.3 * 2000 * 0.86 = 516 vs ~1186 debt → HF ≈ 0.43.
+        // collateral 0.3 ether -> maxBorrow 0.3 * 2000 * 0.86 = 516 vs ~1186 debt -> HF ~ 0.43.
         // No debt is repaid, so the yield leg still exactly backs the debt and harvest
         // no-ops: this exercises liquidation-recovery delevering alone.
         _liquidate({seizedCollateral: 0.7 ether, repaidAssets: 0});
@@ -1240,10 +1240,10 @@ contract FCMVaultTest is Test {
     ///         untouched, so it fills in full) and converts almost all of that surplus
     ///         into loan token. Leg 2 (loan->collateral) is priced far off the oracle
     ///         here and is skipped entirely, so leg 1's proceeds can't be redeployed as
-    ///         collateral -- and the realized loan token now exceeds the (now tiny)
+    ///         collateral - and the realized loan token now exceeds the (now tiny)
     ///         outstanding debt, so there'd be nowhere for the excess to go.
     /// @dev    FIXED: `harvest` used to silently cap the repay at outstanding debt and
-    ///         strand the rest as idle loan token -- invisible to `totalAssets()` and
+    ///         strand the rest as idle loan token - invisible to `totalAssets()` and
     ///         effectively lost. It now reverts (LeftoverDebt) instead, so no value
     ///         is ever silently stranded; the caller (an off-chain harvester) is expected
     ///         to size `maximum_yield` to what the market can currently absorb and retry.
@@ -1255,20 +1255,20 @@ contract FCMVaultTest is Test {
         uint256 collBefore = _collateral();
 
         // Heavy liquidation: seize 90% of collateral and repay 90% of debt, leaving
-        // few collateral and little debt -- but yield is untouched by a liquidation,
+        // few collateral and little debt - but yield is untouched by a liquidation,
         // so it now vastly outweighs what's left of the debt it used to back.
         _liquidate({seizedCollateral: collBefore * 90 / 100, repaidAssets: debtBefore * 90 / 100});
 
         // Leg 1 (yield->loan) stays on-oracle (yieldPool untouched) so it fills in full
-        // -- "good price". Leg 2 (loan->collateral) is dragged far off the oracle so it
-        // is skipped entirely -- "can't swap anything" on that leg.
+        // - "good price". Leg 2 (loan->collateral) is dragged far off the oracle so it
+        // is skipped entirely - "can't swap anything" on that leg.
         assetPool.setSqrtPriceX96(uint160(_sqrtPriceX96(4, 1)));
 
         vm.expectRevert(IFCMVault.LeftoverDebt.selector);
         _harvestAndRebalance();
 
-        // The workaround: a caller who instead picks a smaller manual limit -- one leg 1
-        // can convert without exceeding the (now tiny) outstanding debt -- still succeeds.
+        // The workaround: a caller who instead picks a smaller manual limit - one leg 1
+        // can convert without exceeding the (now tiny) outstanding debt - still succeeds.
         uint256 debtAfterLiquidation = _debt();
         vault.harvest(debtAfterLiquidation / 2);
         assertLt(_debt(), debtAfterLiquidation, "smaller manual limit still makes progress, no revert");
@@ -1276,7 +1276,7 @@ contract FCMVaultTest is Test {
 
     /// @notice Counterpart to the revert case above: when leg 2 is skipped but leg 1's
     ///         realized surplus does NOT exceed the outstanding debt, `harvest` does not
-    ///         revert -- it repays exactly that surplus as debt, leaving the remainder of
+    ///         revert - it repays exactly that surplus as debt, leaving the remainder of
     ///         the debt outstanding (a partial repay, not a full clear) and no loan token
     ///         stranded.
     function test_Rebalance_HarvestRepaysPartialDebtWhenLeftoverWithinDebt() public {
@@ -1288,7 +1288,7 @@ contract FCMVaultTest is Test {
 
         // A lighter liquidation: seize/repay only 20% each, so the yield surplus this
         // opens up (~20% of the original debt's worth) stays comfortably below the 80%
-        // of debt that remains -- no revert, just a partial repay.
+        // of debt that remains - no revert, just a partial repay.
         _liquidate({seizedCollateral: collBefore * 20 / 100, repaidAssets: debtBefore * 20 / 100});
         uint256 debtAfterLiquidation = _debt();
         assertGt(debtAfterLiquidation, 0, "meaningful debt remains after the light liquidation");
@@ -1299,7 +1299,7 @@ contract FCMVaultTest is Test {
         _harvestAndRebalance(); // must not revert: leftover <= outstanding debt
 
         assertLt(_debt(), debtAfterLiquidation, "surplus repaid a portion of the debt");
-        assertGt(_debt(), 0, "debt not fully cleared -- only a portion was repaid");
+        assertGt(_debt(), 0, "debt not fully cleared - only a portion was repaid");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "leftover fully absorbed by the partial repay, nothing stranded");
         assertApproxEqAbs(_collateral(), collBefore * 80 / 100, 1, "no collateral bought (leg 2 skipped)");
     }
@@ -1351,9 +1351,9 @@ contract FCMVaultTest is Test {
         new FCMVault(p);
     }
 
-    // ---------------------------------------------------------------------
+    // -----------------------------------
     // Lifecycle (deposit -> rebalance -> redeem)
-    // ---------------------------------------------------------------------
+    // -----------------------------------
 
     /// @notice Full happy-path lifecycle in a single flow: a user deposits,
     ///         the position is rebalanced, then the user redeems all shares.
@@ -1410,7 +1410,7 @@ contract FCMVaultTest is Test {
     }
 
     // VaultState logging
-    // ---------------------------------------------------------------------
+    // -----------------------------------
 
     /// @notice Every state-modifying entry point emits a `VaultState` snapshot
     ///         whose fields match the vault's actual post-call state: the three
@@ -1461,13 +1461,13 @@ contract FCMVaultTest is Test {
     }
 
     /// @notice `rebalance` emits a `VaultState` snapshot even when it is a
-    ///         no-op inside the dead band — the modifier fires after every
+    ///         no-op inside the dead band - the modifier fires after every
     ///         call regardless of whether the body mutated state.
     function test_VaultState_RebalanceNoopStillEmitsSnapshot() public {
         _depositFor(user, 1 ether);
 
         vm.recordLogs();
-        _harvestAndRebalance(); // HF in band → no-op body, but modifier emits
+        _harvestAndRebalance(); // HF in band -> no-op body, but modifier emits
 
         _assertVaultStateMatchesCurrentState();
     }
@@ -1508,7 +1508,7 @@ contract FCMVaultTest is Test {
         assertEq(yieldPrice, 5e35, "yield price from yield oracle");
     }
 
-    // ---- helpers -------------------------------------------------------
+    // -- helpers ----------------------------
 
     /// @dev Decode the most recent `VaultState` event emitted by the vault from
     ///      the recorded logs. Reverts if none was emitted. Caller must have
@@ -1555,7 +1555,7 @@ contract FCMVaultTest is Test {
     {
         (collateral, debt, yield, collateralPrice, debtPrice, yieldPrice) = _lastVaultState();
         assertEq(collateral, _collateral(), "collateral leg");
-        // contract's market.debt() rounds up; the test helper floors → ±1 wei.
+        // contract's market.debt() rounds up; the test helper floors -> +/-1 wei.
         assertApproxEqAbs(debt, _debt(), 1, "debt leg");
         assertEq(yield, FUSDEV.balanceOf(address(vault)), "yield leg");
         assertEq(collateralPrice, marketOracle.price(), "collateral price");
@@ -1632,7 +1632,7 @@ contract FCMVaultTest is Test {
         return Math.mulDiv(maxBorrow, 1e18, debt);
     }
 
-    // ---- timelocked emergency recovery -----------------------------------
+    // -- timelocked emergency recovery ------------------
 
     /// @dev Fund the owner with loanToken to repay the debt, then schedule and
     ///      warp past the timelock so a recovery is executable.
@@ -1729,7 +1729,7 @@ contract FCMVaultTest is Test {
         vault.executeEmergencyRecovery();
     }
 
-    /// @notice A holder can still redeem while a recovery is pending — the
+    /// @notice A holder can still redeem while a recovery is pending - the
     ///         timelock window is a real exit opportunity, not a lockup.
     function test_Recovery_RedeemStaysOpenWhilePending() public {
         // Fund the singleton's collateral balance so the Case-B flash (triggered by
@@ -1745,7 +1745,7 @@ contract FCMVaultTest is Test {
     }
 
     /// @notice The escape hatch (`redeemInKind`) also stays open while a
-    ///         recovery is pending — a holder can self-exit in kind throughout
+    ///         recovery is pending - a holder can self-exit in kind throughout
     ///         the timelock window.
     function test_Recovery_RedeemInKindStaysOpenWhilePending() public {
         uint256 shares = _depositFor(user, 1 ether);
@@ -1777,7 +1777,7 @@ contract FCMVaultTest is Test {
         vault.cancelEmergencyRecovery();
     }
 
-    // ---- harvest (rebalance's harvest leg) -------------------------------
+    // -- harvest (rebalance's harvest leg) ----------------
 
     /// @notice The harvest fires only when the yield factor (yield value / debt) exceeds
     ///         `yieldFactorMax`, then sells the FUSDEV above the debt backing down to bare
@@ -1837,11 +1837,11 @@ contract FCMVaultTest is Test {
     /// @notice Harvest's loan->collateral leg partial-fills like the rebalance swaps: when
     ///         the asset/debt pool can only absorb part of the realized surplus within the
     ///         slippage bound, the vault buys what it can at tolerance, repays the remainder
-    ///         as debt, and leaves no loan token idle — the split-path accounting.
+    ///         as debt, and leaves no loan token idle - the split-path accounting.
     function test_Rebalance_HarvestPartialCollateralLegRepaysRemainder() public {
         // Fair loan-per-collateral sits 0.7% below the CPMM's 1:1 spot, so leg 2's
         // price-raising limit leaves only ~0.15% of pool depth of room while leg 1
-        // (yield oracle at spot) keeps its full 1% — leg 1 fills, leg 2 can't.
+        // (yield oracle at spot) keeps its full 1% - leg 1 fills, leg 2 can't.
         marketOracle.setPrice(0.993e36);
         _depositFor(user, 1 ether);
         MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 20);
@@ -1865,7 +1865,7 @@ contract FCMVaultTest is Test {
 
     /// @notice A surplus large enough to push hf past `healthFactorMax` triggers the
     ///         leverage leg in the same call: harvest adds collateral (hf rises above max),
-    ///         then `_adjustLeverage` levers back to `maxTarget`. So debt grows here — unlike
+    ///         then `_adjustLeverage` levers back to `maxTarget`. So debt grows here - unlike
     ///         the small-surplus case above, where harvest leaves debt unchanged.
     function test_Rebalance_HarvestThenLeversWhenSurplusLarge() public {
         marketOracle.setPrice(1e36);
@@ -1955,7 +1955,7 @@ contract FCMVaultTest is Test {
     }
 
     /// @notice The harvest no-ops when the yield token has depegged below the debt it
-    ///         backs — a raw-unit surplus is not real carry.
+    ///         backs - a raw-unit surplus is not real carry.
     function test_Rebalance_HarvestNoopOnDepeg() public {
         marketOracle.setPrice(1e36);
         _depositFor(user, 1 ether);
@@ -2009,7 +2009,7 @@ contract FCMVaultTest is Test {
         assertGt(_healthFactor(), hfBefore, "position deleveraged (harvest didn't block it)");
     }
 
-    // ---- management & performance fees ------------------------------------
+    // -- management & performance fees ------------------
 
     function _enableFees(address recipient, uint256 mgmtBps, uint256 perfBps) internal {
         _allow(recipient);
@@ -2101,7 +2101,7 @@ contract FCMVaultTest is Test {
         vault.accrueFees();
         assertEq(vault.balanceOf(feeRcpt), afterFirst, "no fee in drawdown");
 
-        // Partial recovery: price rises off the low but pps stays below the HWM —
+        // Partial recovery: price rises off the low but pps stays below the HWM -
         // rebuilding toward the prior peak still incurs no fee.
         yieldOracle.setPrice((YIELD_PRICE * 3) / 4);
         vault.accrueFees();
@@ -2235,7 +2235,7 @@ contract FCMVaultTest is Test {
     }
 
     /// @notice The HWM is seeded at the initial price-per-share, so the first
-    ///         deposit is not counted as performance — an immediate accrual
+    ///         deposit is not counted as performance - an immediate accrual
     ///         after the first deposit mints nothing.
     function test_Fees_NoPerfOnFirstDeposit() public {
         address feeRcpt = address(0xFEE5);
@@ -2248,7 +2248,7 @@ contract FCMVaultTest is Test {
 
     /// @notice The dilution gross-up delivers the true rate: a 10%/yr management
     ///         fee over one year leaves the recipient holding exactly 10% of NAV
-    ///         (not 10/1.1 ≈ 9.09%, which a non-grossed-up mint would give).
+    ///         (not 10/1.1 ~ 9.09%, which a non-grossed-up mint would give).
     function test_Fees_GrossUpDeliversTrueRate() public {
         address feeRcpt = address(0xFEE5);
         _enableFees(feeRcpt, 1000, 0); // 10%/yr, no perf
@@ -2262,7 +2262,7 @@ contract FCMVaultTest is Test {
         assertApproxEqRel(recipientValue, vault.totalAssets() / 10, 1e15, "recipient holds true 10%");
     }
 
-    /// @notice Fees accrue on the `rebalance` path — the hook runs before the
+    /// @notice Fees accrue on the `rebalance` path - the hook runs before the
     ///         dead-band no-op check, so even a no-op rebalance meters the fee.
     function test_Fees_AccruesOnRebalance() public {
         address feeRcpt = address(0xFEE5);

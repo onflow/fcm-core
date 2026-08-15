@@ -8,7 +8,7 @@ import {MockERC20} from "./MockERC20.sol";
 
 /// @dev Constant-product (x*y=k) swap mock that honors `sqrtPriceLimitX96` the
 ///      way a real Uniswap V3 pool does: it fills only up to the point where the
-///      marginal price reaches the limit, then stops — a *partial fill* — and
+///      marginal price reaches the limit, then stops - a *partial fill* - and
 ///      consumes only the input it actually used, leaving the remainder with the
 ///      caller. This is what exercises the vault's price-limit-based partial
 ///      rebalancing; the flat `MockSwapRouter` cannot, since it has no price.

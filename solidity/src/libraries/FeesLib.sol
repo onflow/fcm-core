@@ -37,7 +37,7 @@ library FeesLib {
         uint256 lastFeeAccrual
     ) external view returns (uint256 managementFee, uint256 performanceFee, uint256 feeShares) {
         uint256 pricePerShare = nav.mulDiv(MarketLib.WAD, claims);
-        // Bill exactly `rate * Δt` since the last accrual, then advance the clock
+        // Bill exactly `rate * elapsed` since the last accrual, then advance the clock
         // (accrual is irregular: every interaction + permissionless accrueFees).
         // The billable gap is capped at one year, so the fee is
         // provably <= the annual rate `r` (= bps/1e4) however long the vault
