@@ -2229,4 +2229,18 @@ contract FCMVaultTest is Test {
 
         assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the redeemInKind path");
     }
+
+    // Flooring a loan amount into yield can leave the yield worth less than the debt
+    // it backs; the delever and harvest legs round this up so the backing always
+    // covers. Surfaces the rounding edge case that motivates the ceil direction.
+    function test_YieldBacking_FloorUnderBacksButCeilCovers() public pure {
+        uint256 debt = 100;
+        uint256 price = 6e35; // 0.6 * 1e36; fractional, so the division has a remainder
+
+        uint256 floorAmt = Math.mulDiv(debt, 1e36, price);
+        assertLt(Math.mulDiv(floorAmt, price, 1e36), debt, "floor under-backs");
+
+        uint256 ceilAmt = Math.mulDiv(debt, 1e36, price, Math.Rounding.Ceil);
+        assertGe(Math.mulDiv(ceilAmt, price, 1e36), debt, "ceil covers the debt");
+    }
 }
