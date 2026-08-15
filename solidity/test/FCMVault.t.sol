@@ -280,7 +280,7 @@ contract FCMVaultTest is Test {
         vm.prank(user);
         uint256 assetsOut = vault.redeem(shares, user, user);
 
-        assertApproxEqAbs(assetsOut, amount, 1, "assetsOut approx deposit");
+        assertApproxEqAbs(assetsOut, amount, 2, "assetsOut approx deposit");
         assertEq(WETH.balanceOf(user), assetsOut, "user weth credit");
         assertEq(vault.balanceOf(user), 0, "shares burned");
     }
@@ -2242,5 +2242,25 @@ contract FCMVaultTest is Test {
 
         uint256 ceilAmt = Math.mulDiv(debt, 1e36, price, Math.Rounding.Ceil);
         assertGe(Math.mulDiv(ceilAmt, price, 1e36), debt, "ceil covers the debt");
+    }
+
+    /// @notice Redeem may fail with donation of debt. Check that fully works after a rebalance.
+    function test_Fuzz_Redeem_WithDebtDust(uint256 depositAmount) public {
+        depositAmount = bound(depositAmount, 1, 1e18);
+
+        uint256 shares = _depositFor(user, depositAmount);
+
+        uint256 borrowShares = uint256(MORPHO.position(vault.getMarket().id(), address(vault)).borrowShares);
+        MockERC20(address(PYUSD0)).mint(address(this), 1e30);
+        PYUSD0.approve(address(MORPHO), type(uint256).max);
+        MORPHO.repay(vault.getMarket(), 0, borrowShares - 1, address(vault), "");
+
+        vm.startPrank(user);
+        try vault.redeem(shares, user, user) {
+            return;
+        } catch {
+            vault.rebalance();
+            vault.redeem(shares, user, user);
+        }
     }
 }

@@ -148,14 +148,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         MARKET_IRM = p.marketIrm;
         MARKET_LLTV = p.marketLltv;
 
-        // market = MarketParams({
-        //     loanToken: address(p.loanToken),
-        //     collateralToken: address(p.collateral),
-        //     oracle: p.marketOracle,
-        //     irm: p.marketIrm,
-        //     lltv: p.marketLltv
-        // });
-
         uint256 maxAllowance = type(uint256).max;
         p.collateral.forceApprove(address(MarketLib.MORPHO), maxAllowance);
         p.loanToken.forceApprove(address(MarketLib.MORPHO), maxAllowance);
@@ -502,7 +494,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         uint256 claims = _totalClaims();
 
         // yieldOut is the quantity of yield tokens we are selling to satisfy the redemption
-        uint256 yieldOut = YIELD_TOKEN.balanceOf(address(this)).mulDiv(shares, claims);
+        uint256 yieldOut = YIELD_TOKEN.balanceOf(address(this)).mulDiv(shares, claims, Math.Rounding.Floor);
         uint256 loanBefore = LOAN_TOKEN.balanceOf(address(this));
         if (yieldOut > 0) {
             // slither-disable-next-line unused-return -> loanGot is measured from the loanToken balance delta below
@@ -510,8 +502,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         }
         uint256 loanGot = LOAN_TOKEN.balanceOf(address(this)) - loanBefore;
 
-        uint256 debtSlice = market().debt().mulDiv(shares, claims);
-        uint256 collSlice = market().collateral().mulDiv(shares, claims);
+        uint256 debtSlice = market().debt().mulDiv(shares, claims, Math.Rounding.Ceil);
+        uint256 collSlice = market().collateral().mulDiv(shares, claims, Math.Rounding.Floor);
 
         if (loanGot >= debtSlice) {
             // Case A: full pro-rata unwind, reconcile surplus to the asset.
@@ -661,7 +653,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     /// @param maxBorrow Current maximum-borrowable amount at LLTV (may be 0 after a liquidation that wiped collateral).
     /// @param currentDebt Current outstanding debt.
     /// @return repaid Amount of loan token repaid to Morpho in this call.
-    function _rebalanceDelever(uint256 maxBorrow, uint256 currentDebt) internal returns (uint256 repaid) {
+    function _rebalanceDelever(uint256 maxBorrow, uint256 currentDebt) internal returns (uint256) {
         // conceptually, target debt is maxBorrow / HEALTH_FACTOR_MIN_TARGET
         uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, HEALTH_FACTOR_MIN_TARGET);
         if (targetDebt >= currentDebt) return 0;
@@ -687,9 +679,15 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
             SwapLib.swapExactInToLimit(address(YIELD_TOKEN), address(LOAN_TOKEN), FEE_YIELD_DEBT, yieldToSell, limit);
 
         // Cap repayment at outstanding debt
-        repaid = loanGot > currentDebt ? currentDebt : loanGot;
+        if (loanGot > currentDebt) {
+            // This case occurs when the swap pool returns a better price than the oracle, resulting in more loan tokens
+            // than needed. We happily accept the favorable outcome, even if that means some loan tokens will get lost
+            // as idle loan tokens in the vault.
+            return market().repayAll();
+        }
         // slither-disable-next-line unused-return -> repay amount is known (repaid); Morpho reverts on failure
-        if (repaid > 0) market().repay(repaid);
+        if (loanGot > 0) market().repay(loanGot);
+        return loanGot;
     }
 
     /// @dev Harvest leg of `rebalance` (internal; runs first). Realize surplus yield: sell the yield held above what
