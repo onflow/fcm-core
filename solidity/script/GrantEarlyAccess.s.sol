@@ -27,21 +27,18 @@ contract GrantEarlyAccess is ConfiguredScript {
         address[] memory grantees = vm.envAddress("EARLY_ACCESS_GRANTEES", ",");
         require(grantees.length > 0, "no grantees in EARLY_ACCESS_GRANTEES");
 
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
-        bytes32 adminRole = vault.DEFAULT_ADMIN_ROLE();
-
         vm.startBroadcast();
         address sender = _broadcaster();
-        require(vault.hasRole(adminRole, sender), "broadcaster lacks DEFAULT_ADMIN_ROLE");
+        require(vault.owner() == sender, "broadcaster is not the owner");
 
         uint256 granted;
         for (uint256 i = 0; i < grantees.length; i++) {
             address grantee = grantees[i];
-            if (vault.hasRole(role, grantee)) {
+            if (vault.earlyAccess(grantee)) {
                 console.log("already allow-listed, skipping: %s", grantee);
                 continue;
             }
-            vault.grantRole(role, grantee);
+            vault.grantEarlyAccess(grantee);
             granted++;
             console.log("allow-listed: %s", grantee);
         }
