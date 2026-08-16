@@ -69,7 +69,7 @@ contract Rebalance is Script {
     ///      health factor the same way the contract does (WAD-scaled). Returns
     ///      `type(uint256).max` when there is no debt.
     function _healthFactor(FCMVault vault) internal view returns (uint256) {
-        MarketParams memory mp = vault.getMarket();
+        MarketParams memory mp = vault.market();
         Position memory pos = MarketLib.MORPHO.position(mp.id(), address(vault));
         if (pos.borrowShares == 0) return type(uint256).max;
         uint256 debt = _debtFromPosition(mp, pos);
@@ -79,7 +79,7 @@ contract Rebalance is Script {
 
     /// @dev The vault's outstanding debt in loan-token units.
     function _debt(FCMVault vault) internal view returns (uint256) {
-        MarketParams memory mp = vault.getMarket();
+        MarketParams memory mp = vault.market();
         Position memory pos = MarketLib.MORPHO.position(mp.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
         return _debtFromPosition(mp, pos);

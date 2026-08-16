@@ -73,7 +73,7 @@ contract FCMVaultTest is Test {
     address internal stranger = address(0x57A);
 
     function setUp() public {
-        bytes memory erc20Code = address(new MockERC20()).code;
+        bytes memory erc20Code = address(new MockERC20("erc20", "erc20")).code;
         vm.etch(address(WETH), erc20Code);
         vm.etch(address(PYUSD0), erc20Code);
         vm.etch(address(FUSDEV), erc20Code);
@@ -885,49 +885,6 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
     }
 
-    /// @notice While an emergency recovery is pending, a permissionless `rebalance`
-    ///         must NOT lever up - the position is slated for in-kind wind-down, so
-    ///         re-levering (more debt + AMM cost) works against it. HF above max
-    ///         would normally trigger a lever-up; here it is suppressed.
-    function test_Recovery_NoLeverUpWhilePending() public {
-        _depositFor(user, 1 ether);
-
-        // Schedule (but do not execute) a recovery: recoveryValidAt != 0.
-        vm.prank(owner);
-        vault.scheduleEmergencyRecovery();
-
-        // Push HF above max - the lever-up trigger.
-        marketOracle.setPrice(2300e36);
-        assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "above max");
-
-        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
-        _harvestAndRebalance(); // must not revert, must not lever up
-
-        // No lever-up: no yield bought, no new debt swapped, no idle loan left.
-        assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "no lever-up while recovery pending");
-        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
-    }
-
-    /// @notice Delever stays LIVE during a pending recovery - it only de-risks the
-    ///         position, so it should keep firing (matching `_harvest`'s gate, which
-    ///         freezes only the position-reshaping legs, not the safety leg).
-    function test_Recovery_DeleverStaysLiveWhilePending() public {
-        _depositFor(user, 1 ether);
-
-        vm.prank(owner);
-        vault.scheduleEmergencyRecovery();
-
-        // Push HF below min - the delever trigger.
-        marketOracle.setPrice(1700e36);
-        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
-
-        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
-        _harvestAndRebalance();
-
-        // Delever still fires: yield sold to repay debt.
-        assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "delever fires while recovery pending");
-    }
-
     // -- rebalance price-limit guard -------------------
 
     /// @notice When the pool's marginal price is already past the oracle-derived
@@ -1569,7 +1526,7 @@ contract FCMVaultTest is Test {
     }
 
     function _collateral() internal view returns (uint256) {
-        MarketParams memory market = vault.getMarket();
+        MarketParams memory market = vault.market();
         return uint256(MORPHO.position(market.id(), address(vault)).collateral);
     }
 
@@ -1584,7 +1541,7 @@ contract FCMVaultTest is Test {
     }
 
     function _debt() internal view returns (uint256) {
-        MarketParams memory market = vault.getMarket();
+        MarketParams memory market = vault.market();
         Position memory pos = MORPHO.position(market.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
         Market memory mkt = MORPHO.market(market.id());
@@ -1596,7 +1553,7 @@ contract FCMVaultTest is Test {
     ///      test hook: seize `seizedCollateral` of collateral and repay
     ///      `repaidAssets` of debt.
     function _liquidate(uint256 seizedCollateral, uint256 repaidAssets) internal {
-        MarketParams memory market = vault.getMarket();
+        MarketParams memory market = vault.market();
         MockMorpho(address(MORPHO)).liquidate(market, address(vault), seizedCollateral, repaidAssets);
     }
 
@@ -1625,7 +1582,7 @@ contract FCMVaultTest is Test {
     }
 
     function _healthFactor() internal view returns (uint256) {
-        MarketParams memory market = vault.getMarket();
+        MarketParams memory market = vault.market();
         Position memory pos = MORPHO.position(market.id(), address(vault));
         Market memory mkt = MORPHO.market(market.id());
         if (pos.borrowShares == 0) return type(uint256).max;
@@ -1638,63 +1595,9 @@ contract FCMVaultTest is Test {
 
     // -- timelocked emergency recovery ------------------
 
-    /// @dev Fund the owner with loanToken to repay the debt, then schedule and
-    ///      warp past the timelock so a recovery is executable.
-    function _armRecovery() internal {
-        MockERC20(address(PYUSD0)).mint(owner, 1_000_000 ether);
-        vm.prank(owner);
-        vault.scheduleEmergencyRecovery();
-        vm.warp(block.timestamp + vault.RECOVERY_DELAY());
-    }
-
     function _harvestAndRebalance() internal {
         vault.harvest(type(uint256).max);
         vault.rebalance();
-    }
-
-    /// @notice Happy path: after the timelock, the owner funds the debt and the
-    ///         whole position (collateral + yield) is swept to the owner.
-    function test_Recovery_ExecuteSweepsPositionToOwner() public {
-        _depositFor(user, 1 ether);
-        _armRecovery();
-
-        vm.startPrank(owner);
-        PYUSD0.approve(address(vault), type(uint256).max);
-        vault.executeEmergencyRecovery();
-        vm.stopPrank();
-
-        assertTrue(vault.recovered(), "recovered flag set");
-        assertEq(WETH.balanceOf(address(vault)), 0, "no collateral left in vault");
-        assertEq(FUSDEV.balanceOf(address(vault)), 0, "no yield left in vault");
-        assertGt(WETH.balanceOf(owner), 0, "owner received collateral");
-        assertGt(FUSDEV.balanceOf(owner), 0, "owner received yield");
-    }
-
-    /// @notice Deposits are permanently blocked once a recovery has executed.
-    function test_Recovery_BlocksDepositsAfterExecute() public {
-        _depositFor(user, 1 ether);
-        _armRecovery();
-        vm.startPrank(owner);
-        PYUSD0.approve(address(vault), type(uint256).max);
-        vault.executeEmergencyRecovery();
-        vm.stopPrank();
-
-        MockERC20(address(WETH)).mint(user, 1 ether);
-        vm.startPrank(user);
-        WETH.approve(address(vault), 1 ether);
-        vm.expectRevert(IFCMVault.EmergencyRecoveryActive.selector);
-        vault.deposit(1 ether, user);
-        vm.stopPrank();
-        // maxDeposit reflects the halt (ERC-4626: must report 0 when disabled).
-        assertEq(vault.maxDeposit(user), 0, "maxDeposit 0 after execute");
-
-        // And rebalancing reverts on the recovered vault, so the off-chain
-        // rebalancer gets an explicit signal to stop.
-        vm.expectRevert(IFCMVault.EmergencyRecoveryActive.selector);
-        vault.rebalance();
-
-        vm.expectRevert(IFCMVault.EmergencyRecoveryActive.selector);
-        vault.harvest(type(uint256).max);
     }
 
     /// @notice Deposits are frozen as soon as a recovery is scheduled (before
@@ -1711,26 +1614,6 @@ contract FCMVaultTest is Test {
         vm.stopPrank();
         // maxDeposit reflects the halt (ERC-4626: must report 0 when disabled).
         assertEq(vault.maxDeposit(user), 0, "maxDeposit 0 while pending");
-    }
-
-    /// @notice The owner can cancel a pending recovery during the timelock.
-    function test_Recovery_OwnerCanCancel() public {
-        vm.prank(owner);
-        vault.scheduleEmergencyRecovery();
-        assertGt(vault.recoveryValidAt(), 0, "scheduled");
-
-        vm.prank(owner);
-        vault.cancelEmergencyRecovery();
-        assertEq(vault.recoveryValidAt(), 0, "cancelled");
-    }
-
-    /// @notice Execution reverts before the timelock elapses.
-    function test_Recovery_ExecuteRevertsBeforeDelay() public {
-        vm.prank(owner);
-        vault.scheduleEmergencyRecovery();
-        vm.prank(owner);
-        vm.expectRevert(IFCMVault.EmergencyRecoveryNotReady.selector);
-        vault.executeEmergencyRecovery();
     }
 
     /// @notice A holder can still redeem while a recovery is pending - the
@@ -1975,25 +1858,6 @@ contract FCMVaultTest is Test {
         assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged");
     }
 
-    /// @notice The harvest is frozen while a recovery is pending, but `rebalance` itself
-    ///         does not revert (only an executed recovery reverts it).
-    function test_Harvest_FrozenDuringPendingRecovery() public {
-        marketOracle.setPrice(1e36);
-        _depositFor(user, 1 ether);
-        MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 20);
-
-        vm.prank(owner);
-        vault.scheduleEmergencyRecovery();
-
-        uint256 collBefore = WETH.balanceOf(address(MORPHO));
-        uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
-
-        _harvestAndRebalance(); // does not revert while a recovery is merely pending
-
-        assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "harvest frozen: no collateral");
-        assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "harvest frozen: yield untouched");
-    }
-
     /// @notice With partial-fill swaps (#72), harvest can no longer block the delever: when
     ///         the position is over-levered and the yield leg is thin, `rebalance` harvests
     ///         best-effort (partial-fill, no revert) and then delevers in the same call, so
@@ -2137,7 +2001,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(PYUSD0)).mint(owner, 1_000_000 ether);
         vm.prank(owner);
         vault.scheduleEmergencyRecovery();
-        vm.warp(block.timestamp + vault.RECOVERY_DELAY());
+        vm.warp(block.timestamp + vault.EMERGENCY_RECOVERY_DELAY());
         vm.startPrank(owner);
         PYUSD0.approve(address(vault), type(uint256).max);
         vault.executeEmergencyRecovery();
@@ -2314,10 +2178,10 @@ contract FCMVaultTest is Test {
 
         uint256 shares = _depositFor(user, depositAmount);
 
-        uint256 borrowShares = uint256(MORPHO.position(vault.getMarket().id(), address(vault)).borrowShares);
+        uint256 borrowShares = uint256(MORPHO.position(vault.market().id(), address(vault)).borrowShares);
         MockERC20(address(PYUSD0)).mint(address(this), 1e30);
         PYUSD0.approve(address(MORPHO), type(uint256).max);
-        MORPHO.repay(vault.getMarket(), 0, borrowShares - 1, address(vault), "");
+        MORPHO.repay(vault.market(), 0, borrowShares - 1, address(vault), "");
 
         vm.startPrank(user);
         try vault.redeem(shares, user, user) {

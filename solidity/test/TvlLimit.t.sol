@@ -56,7 +56,7 @@ contract TvlLimitTest is Test {
 
     function setUp() public {
         owner = admin = address(this);
-        bytes memory erc20Code = address(new MockERC20()).code;
+        bytes memory erc20Code = address(new MockERC20("WETH", "WETH")).code;
         vm.etch(address(WETH), erc20Code);
         vm.etch(address(PYUSD0), erc20Code);
         vm.etch(address(FUSDEV), erc20Code);
