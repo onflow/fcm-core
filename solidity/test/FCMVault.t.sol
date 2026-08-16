@@ -274,6 +274,9 @@ contract FCMVaultTest is Test {
     /// unwind (FUSDEV->PYUSD0->repay->withdrawCollateral) should return the
     /// original WETH within rounding tolerance.
     function test_Redeem_RoundTripReturnsApproximatelyDeposited() public {
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         uint256 amount = 1 ether;
         uint256 shares = _depositFor(user, amount);
 
@@ -289,6 +292,9 @@ contract FCMVaultTest is Test {
     /// owner, WETH is delivered to the receiver, and the owner's WETH
     /// balance is untouched.
     function test_Redeem_BurnsSharesAndTransfersToReceiver() public {
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         uint256 amount = 1 ether;
         uint256 shares = _depositFor(user, amount);
         address receiver = address(0xBEEF);
@@ -313,6 +319,12 @@ contract FCMVaultTest is Test {
 
         uint256 collateralBefore = WETH.balanceOf(address(MORPHO));
         uint256 fusdevBefore = FUSDEV.balanceOf(address(vault));
+
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        // Singleton starts with 2e18 (deposit); flash + withdraw draw ~2e18 total,
+        // so mint 1e18 to leave the expected ~1e18 after both.
+        MockERC20(address(WETH)).mint(address(MORPHO), 1 ether);
 
         vm.prank(user);
         uint256 assetsOut = vault.redeem(shares / 2, user, user);
@@ -360,6 +372,9 @@ contract FCMVaultTest is Test {
     /// @notice When the owner pre-approves an operator for `shares`, the
     /// operator can redeem and the allowance is consumed exactly.
     function test_Redeem_SpendsAllowanceWhenOperatorRedeems() public {
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         uint256 shares = _depositFor(user, 1 ether);
         address operator = address(0xCAFE);
 
@@ -1362,6 +1377,10 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token after deposit");
         assertApproxEqRel(_healthFactor(), DEPOSIT_TARGET_HF, 1e15, "deposit lands at midpoint HF");
 
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
+
         // Rebalance: price rise lifts HF above max, forcing a real lever-up.
         marketOracle.setPrice(2300e36);
         assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "price rise pushed HF above max");
@@ -1711,6 +1730,9 @@ contract FCMVaultTest is Test {
     /// @notice A holder can still redeem while a recovery is pending — the
     ///         timelock window is a real exit opportunity, not a lockup.
     function test_Recovery_RedeemStaysOpenWhilePending() public {
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         uint256 shares = _depositFor(user, 1 ether);
         vm.prank(admin);
         vault.scheduleEmergencyRecovery();
@@ -2160,6 +2182,9 @@ contract FCMVaultTest is Test {
     /// @notice Fees accrue on the redeem path, and a de-allowlisted recipient
     ///         skips minting without bricking the redeem.
     function test_Fees_AccruesOnRedeemAndDeAllowlistDoesNotBrick() public {
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         address feeRcpt = address(0xFEE5);
         _enableFees(feeRcpt, 200, 0); // mgmt only
         uint256 shares = _depositFor(user, 1 ether);

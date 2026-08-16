@@ -384,6 +384,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         emit Withdraw(msg.sender, receiver, owner, assets, shares);
     }
 
+    /// @notice Unwind a slice of the vault's position, anchored on `p = shares / _totalClaims()` and the realized AMM
     /// @dev Unwind a slice of the vault's position,
     ///      anchored on `p = shares / _totalClaims()` and the realized AMM
     ///      execution price on the yield leg.
@@ -432,17 +433,16 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         uint256 claims = _totalClaims();
 
         // yieldOut is the quantity of yield tokens we are selling to satisfy the redemption
-        uint256 yieldOut = YIELD_TOKEN.balanceOf(address(this)).mulDiv(shares, claims);
+        uint256 yieldOut = YIELD_TOKEN.balanceOf(address(this)).mulDiv(shares, claims, Math.Rounding.Floor);
         uint256 loanBefore = LOAN_TOKEN.balanceOf(address(this));
         if (yieldOut > 0) {
-            // slither-disable-next-line unused-return -> loanGot is measured from the loanToken balance delta below,
-            // not this return
+            // slither-disable-next-line unused-return -> loanGot is measured from the loanToken balance delta below
             SwapLib.swapExactIn(address(YIELD_TOKEN), address(LOAN_TOKEN), FEE_YIELD_DEBT, yieldOut);
         }
         uint256 loanGot = LOAN_TOKEN.balanceOf(address(this)) - loanBefore;
 
-        uint256 debtSlice = market().debt().mulDiv(shares, claims);
-        uint256 collSlice = market().collateral().mulDiv(shares, claims);
+        uint256 debtSlice = market().debt().mulDiv(shares, claims, Math.Rounding.Ceil);
+        uint256 collSlice = market().collateral().mulDiv(shares, claims, Math.Rounding.Floor);
 
         if (loanGot >= debtSlice) {
             // Case A: full pro-rata unwind, reconcile surplus to the asset.
@@ -451,8 +451,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
             if (collSlice > 0) market().withdrawCollateral(collSlice);
             uint256 surplus = loanGot - debtSlice;
             if (surplus > 0) {
-                // slither-disable-next-line unused-return -> surplus-swap output is captured by the redeem balance
-                // delta, not this return
+                // surplus-swap output is captured by the redeem balance delta
+                // slither-disable-next-line unused-return
                 SwapLib.swapExactIn(address(LOAN_TOKEN), address(COLLATERAL_TOKEN), FEE_ASSET_DEBT, surplus);
             }
         } else {
@@ -462,6 +462,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
             MarketLib.MORPHO.flashLoan(address(COLLATERAL_TOKEN), collSlice, abi.encode(debtSlice, debtSlice - loanGot));
         }
     }
+
+    // solhint-disable ordering, morpho-flash-loan essentially internal
 
     /// @notice Morpho flash-loan callback for redeem's Case-B path. Only callable
     ///         by Morpho, which only invokes it when the vault itself initiated the
@@ -474,6 +476,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     ///         flashed `collSlice`; the withdrawn slice covers it and the unsold
     ///         remainder is delivered to the redeemer by `redeem`. Reverts if the
     ///         redeemer's own collateral slice cannot cover the shortfall (underwater).
+    /// @param collSlice The amount of collateral to flash-borrow.
+    /// @param data ABI-encoded `(debtSlice, shortfall)` from `_unwindSlice`.
     function onMorphoFlashLoan(uint256 collSlice, bytes calldata data) external {
         require(msg.sender == address(MarketLib.MORPHO), Unauthorized());
         (uint256 debtSlice, uint256 shortfall) = abi.decode(data, (uint256, uint256));
@@ -481,8 +485,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         // Sell just enough of the flashed collateral for exactly `shortfall` loan
         // token, spending at most the slice; with `loanGot` already held that makes
         // the full `debtSlice`.
-        // slither-disable-next-line unused-return -> collateral spent is captured by the redeem balance delta, not this
-        // return
+        // slither-disable-next-line unused-return -> collateral spent is captured by the redeem balance delta
         SwapLib.swapExactOut(address(COLLATERAL_TOKEN), address(LOAN_TOKEN), FEE_ASSET_DEBT, shortfall, collSlice);
         // Repay the slice, THEN withdraw the redeemer's collateral (hf-neutral). Morpho
         // reclaims the flashed `collSlice`; the withdrawn slice covers it, unsold rest stays.
@@ -543,6 +546,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
         emit RedeemInKind(msg.sender, receiver, owner, shares, debtRepaid, collateralOut, yieldOut);
     }
+
+    // solhint-enable ordering
 
     /// @inheritdoc IFCMVault
     function asset() external view returns (address) {
