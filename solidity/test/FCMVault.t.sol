@@ -429,6 +429,7 @@ contract FCMVaultTest is Test {
         uint256 assetsOut = vault.redeem(shares, user, user);
 
         assertApproxEqRel(assetsOut, fairValue, 0.02e18, "full pro-rata value, not a haircut");
+        assertLe(assetsOut, fairValue, "assetsOut < fairValue");
         assertLt(WETH.balanceOf(address(MORPHO)), mkCollBefore, "collateral sold to cover shortfall");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan-token dust");
         assertEq(vault.balanceOf(user), 0, "shares burned");
@@ -454,6 +455,7 @@ contract FCMVaultTest is Test {
         uint256 assetsOut = vault.redeem(shares, user, user);
 
         assertApproxEqRel(assetsOut, fairValue, 0.02e18, "full pro-rata value, not a haircut");
+        assertLe(assetsOut, fairValue, "assetsOut < fairValue");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan-token dust");
         assertEq(vault.balanceOf(user), 0, "shares burned");
     }

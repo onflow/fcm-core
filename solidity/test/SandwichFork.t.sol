@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import {Test} from "forge-std/Test.sol";
-import {console} from "forge-std/console.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {Test} from "forge-std/Test.sol";
+import {console} from "forge-std/console.sol";
 
-import {FCMVault, MORPHO} from "../src/FCMVault.sol";
+import {FCMVault} from "../src/FCMVault.sol";
+import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
+import {ISwapRouter02} from "../src/interfaces/external/ISwapRouter02.sol";
+import {IUniswapV3Pool} from "../src/interfaces/external/IUniswapV3Pool.sol";
+import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {SwapLib} from "../src/libraries/SwapLib.sol";
-import {IUniswapV3Pool} from "../src/interfaces/IUniswapV3Pool.sol";
-import {ISwapRouter} from "../src/interfaces/ISwapRouter.sol";
+import {Id, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
-import {IMorpho, MarketParams, Position, Market, Id} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @notice Sandwich-attack / DOS-cost fork test using the REAL Flow mainnet
 ///         infrastructure, at a REALISTIC scale: a ~$1M-TVL FCMVault (built
@@ -63,16 +66,16 @@ contract SandwichForkTest is Test {
     IERC20 constant FUSDEV = IERC20(0xd069d989e2F44B70c65347d1853C0c67e10a9F8D);
     address constant MARKET_ORACLE = 0x5B3e0BA14443B444D557C0C2F85592d88B88f5c8;
     address constant MARKET_IRM = 0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546;
-    address constant YIELD_ORACLE = 0x144F613490DD55C9844Ef139CFB9B63433dD349F;
+    IOracle constant YIELD_ORACLE = IOracle(0x144F613490DD55C9844Ef139CFB9B63433dD349F);
     address constant SWAP_FACTORY = 0xca6d7Bb03334bBf135902e1d919a5feccb461632;
     // Shallow (~$20k liquidity) yield/debt pool every lever/delever swap uses.
     address constant REAL_POOL = 0x9196e243b7562B0866309013f2F9EB63F83A690f;
 
     // Real production band.
-    uint256 constant HF_MIN = 1228571428571428571;
-    uint256 constant HF_MAX = 1433333333333333333;
-    uint256 constant HF_MIN_TARGET = 1230329041487839771;
-    uint256 constant HF_MAX_TARGET = 1430948419301164725;
+    uint256 constant HF_MIN = 1_228_571_428_571_428_571;
+    uint256 constant HF_MAX = 1_433_333_333_333_333_333;
+    uint256 constant HF_MIN_TARGET = 1_230_329_041_487_839_771;
+    uint256 constant HF_MAX_TARGET = 1_430_948_419_301_164_725;
 
     uint256 constant LLTV = 0.86e18;
     uint256 constant YIELD_FACTOR_MAX = 1.01e18;
@@ -111,7 +114,8 @@ contract SandwichForkTest is Test {
     function setUp() public {
         vm.createSelectFork("https://mainnet.evm.nodes.onflow.org");
 
-        // ── Read real oracle price ──────────────────────────────────────────
+        // ── Read real oracle price
+        // ──────────────────────────────────────────
         try IOracle(MARKET_ORACLE).price() returns (uint256 p) {
             realPrice = p;
         } catch {
@@ -119,7 +123,8 @@ contract SandwichForkTest is Test {
         }
         vm.mockCall(MARKET_ORACLE, abi.encodeWithSelector(IOracle.price.selector), abi.encode(realPrice));
 
-        // ── Market params ──────────────────────────────────────────────────
+        // ── Market params
+        // ──────────────────────────────────────────────────
         mp = MarketParams({
             loanToken: address(PYUSD0),
             collateralToken: address(WBTC),
@@ -129,29 +134,32 @@ contract SandwichForkTest is Test {
         });
         marketId = MarketParamsLib.id(mp);
 
-        // ── Asset/debt pool from factory ───────────────────────────────────
+        // ── Asset/debt pool from factory
+        // ───────────────────────────────────
         assetDebtPool = _getPool(SWAP_FACTORY, address(WBTC), address(PYUSD0), FEE_ASSET_DEBT);
         require(assetDebtPool != address(0), "WBTC/PYUSD0 pool missing");
 
         // ── Supply PYUSD0 to the real Morpho market (needs liquidity) ──────
         // $1M TVL levers roughly $650k of debt at the deposit-target HF, plus
         // headroom for lever-up rebalances during the attacks below.
-        Market memory mkt = MORPHO.market(marketId);
+        Market memory mkt = MarketLib.MORPHO.market(marketId);
         if (mkt.totalSupplyAssets < 5_000_000e6) {
             address supplier = makeAddr("supplier");
             deal(address(PYUSD0), supplier, 10_000_000e6);
             vm.startPrank(supplier);
-            PYUSD0.approve(address(MORPHO), type(uint256).max);
-            MORPHO.supply(mp, 10_000_000e6, 0, supplier, "");
+            PYUSD0.approve(address(MarketLib.MORPHO), type(uint256).max);
+            MarketLib.MORPHO.supply(mp, 10_000_000e6, 0, supplier, "");
             vm.stopPrank();
         }
 
-        // ── Read real pool spot ───────────────────────────────────────────
+        // ── Read real pool spot
+        // ───────────────────────────────────────────
         (cleanSpot,,,,,,) = IUniswapV3Pool(REAL_POOL).slot0();
 
-        // ── Deploy FCMVault with real production config ────────────────────
+        // ── Deploy FCMVault with real production config
+        // ────────────────────
         vault = new FCMVault(
-            FCMVault.InitParams({
+            IFCMVault.InitParams({
                 collateral: WBTC,
                 loanToken: PYUSD0,
                 yieldToken: FUSDEV,
@@ -186,12 +194,13 @@ contract SandwichForkTest is Test {
 
         // ── Build ~$1M TVL from 100 individual deposits through the REAL
         //    pool, arbing back to clean spot after each (a real market would
-        //    re-equilibrate between deposits) ───────────────────────────────
+        //    re-equilibrate between deposits)
+        // ───────────────────────────────
         users = new address[](N_USERS);
         for (uint256 i = 0; i < N_USERS; i++) {
             address u = makeAddr(string.concat("user", vm.toString(i)));
             users[i] = u;
-            vault.grantRole(vault.EARLY_ACCESS_ROLE(), u);
+            vault.grantEarlyAccess(u);
             deal(address(WBTC), u, DEPOSIT_AMOUNT_PER_USER);
 
             vm.startPrank(u);
@@ -207,7 +216,8 @@ contract SandwichForkTest is Test {
         vm.mockCall(MARKET_ORACLE, abi.encodeWithSelector(IOracle.price.selector), abi.encode(raisedPrice));
         assertGt(_hf(), HF_MAX, "HF above max after 10% rise -> lever path");
 
-        // ── Fund attacker with real tokens via deal ────────────────────────
+        // ── Fund attacker with real tokens via deal
+        // ────────────────────────
         deal(address(PYUSD0), attacker, 100_000_000e6);
         deal(address(FUSDEV), attacker, 100_000_000e18);
         vm.startPrank(attacker);
@@ -215,7 +225,8 @@ contract SandwichForkTest is Test {
         FUSDEV.approve(address(SwapLib.SWAP_ROUTER), type(uint256).max);
         vm.stopPrank();
 
-        // ── Snapshot ───────────────────────────────────────────────────────
+        // ── Snapshot
+        // ───────────────────────────────────────────────────────
         snap = vm.snapshotState();
 
         console.log("=== Sandwich fork test setup ($1M TVL vs ~$20k pool) ===");
@@ -248,8 +259,8 @@ contract SandwichForkTest is Test {
             SandwichResult memory r = _singleSandwich(pushBps);
 
             // Vault overpayment: debt (PYUSD0, 6 dec) vs yield valued at oracle.
-            uint256 yieldInPYUSD = Math.mulDiv(r.yieldBought, IOracle(YIELD_ORACLE).price(), 1e36);
-            uint256 overpay = r.debtAdded > yieldInPYUSD ? r.debtAdded - yieldInPYUSD : 0;
+            uint256 yieldInPyUsd = Math.mulDiv(r.yieldBought, IOracle(YIELD_ORACLE).price(), 1e36);
+            uint256 overpay = r.debtAdded > yieldInPyUsd ? r.debtAdded - yieldInPyUsd : 0;
             uint256 overpayBps = r.debtAdded > 0 ? overpay * 10_000 / r.debtAdded : 0;
             if (overpayBps > maxOverpayBps) maxOverpayBps = overpayBps;
             if (r.attackerProfit > maxAttackerProfit) maxAttackerProfit = r.attackerProfit;
@@ -285,7 +296,7 @@ contract SandwichForkTest is Test {
         // Vault overpayment per rebalance call is bounded by maxSlippageBps
         // (1%) regardless of TVL -- the AMM's price-impact bound, not the
         // vault's size, caps the damage from a single sandwiched rebalance.
-        assertLe(maxOverpayBps, 150, "vault overpayment <= 1.5% even at $1M TVL");
+        assertLe(maxOverpayBps, 100, "vault overpayment <= 1% even at $1M TVL");
     }
 
     // =====================================================================
@@ -326,8 +337,8 @@ contract SandwichForkTest is Test {
             }
 
             string memory netStr = totalProfit >= 0
-                ? string.concat("+$", vm.toString(uint256(totalProfit) / 1e6))
-                : string.concat("-$", vm.toString(uint256(-totalProfit) / 1e6));
+                ? string.concat("+$", vm.toString(SafeCast.toUint256(totalProfit) / 1e6))
+                : string.concat("-$", vm.toString(SafeCast.toUint256(-totalProfit) / 1e6));
             console.log(
                 string.concat(
                     "push=",
@@ -342,6 +353,7 @@ contract SandwichForkTest is Test {
                     vm.toString(tvlFinal / 1e6)
                 )
             );
+            assertLt(totalProfit, 100e6, "total profit > $100");
         }
     }
 
@@ -367,7 +379,7 @@ contract SandwichForkTest is Test {
             _arbPoolToSpot();
         }
 
-        uint256 attackerCost = totalProfit < 0 ? uint256(-totalProfit) : 0;
+        uint256 attackerCost = totalProfit < 0 ? SafeCast.toUint256(-totalProfit) : 0;
         console.log("Hard DOS (100x push 1%, REAL pool, $1M TVL): attacker cost = $", attackerCost / 1e6);
         console.log("Vault debt added:", debtAdded / 1e6, "PYUSD");
         console.log("Vault HF final:", hfFinal / 1e15);
@@ -385,7 +397,8 @@ contract SandwichForkTest is Test {
 
         // Compute target pushed spot: currentSpot * sqrt(1 - pushBps/10000).
         uint256 sqrtFactor = Math.sqrt((10_000 - pushBps) * 1e36 / 10_000);
-        uint160 targetSpot = uint160(uint256(currentSpot) * sqrtFactor / 1e18);
+        uint160 targetSpot = uint160(Math.mulDiv(currentSpot, sqrtFactor, 1e18));
+        // uint160 targetSpot = uint160(uint256(currentSpot) * sqrtFactor / 1e18);
 
         uint256 loanBefore = PYUSD0.balanceOf(attacker);
 
@@ -393,9 +406,9 @@ contract SandwichForkTest is Test {
         uint256 yieldGotFront = 0;
         if (pushBps > 0) {
             vm.prank(attacker);
-            yieldGotFront = ISwapRouter(address(SwapLib.SWAP_ROUTER))
+            yieldGotFront = ISwapRouter02(address(SwapLib.SWAP_ROUTER))
                 .exactInputSingle(
-                    ISwapRouter.ExactInputSingleParams({
+                    ISwapRouter02.ExactInputSingleParams({
                     tokenIn: address(PYUSD0),
                     tokenOut: address(FUSDEV),
                     fee: FEE_YIELD_DEBT,
@@ -417,9 +430,9 @@ contract SandwichForkTest is Test {
         // 3) BACK-RUN: sell FUSDEV → PYUSD0 through real pool.
         if (yieldGotFront > 0) {
             vm.prank(attacker);
-            ISwapRouter(address(SwapLib.SWAP_ROUTER))
+            ISwapRouter02(address(SwapLib.SWAP_ROUTER))
                 .exactInputSingle(
-                    ISwapRouter.ExactInputSingleParams({
+                    ISwapRouter02.ExactInputSingleParams({
                     tokenIn: address(FUSDEV),
                     tokenOut: address(PYUSD0),
                     fee: FEE_YIELD_DEBT,
@@ -431,7 +444,7 @@ contract SandwichForkTest is Test {
                 );
         }
 
-        r.attackerProfit = int256(int256(PYUSD0.balanceOf(attacker)) - int256(loanBefore));
+        r.attackerProfit = int256(int256(PYUSD0.balanceOf(attacker)) - SafeCast.toInt256(loanBefore));
     }
 
     // =====================================================================
@@ -442,9 +455,9 @@ contract SandwichForkTest is Test {
         (uint160 currentSpot,,,,,,) = IUniswapV3Pool(REAL_POOL).slot0();
         if (currentSpot < cleanSpot) {
             vm.prank(arb);
-            ISwapRouter(address(SwapLib.SWAP_ROUTER))
+            ISwapRouter02(address(SwapLib.SWAP_ROUTER))
                 .exactInputSingle(
-                    ISwapRouter.ExactInputSingleParams({
+                    ISwapRouter02.ExactInputSingleParams({
                     tokenIn: address(FUSDEV),
                     tokenOut: address(PYUSD0),
                     fee: FEE_YIELD_DEBT,
@@ -456,9 +469,9 @@ contract SandwichForkTest is Test {
                 );
         } else if (currentSpot > cleanSpot) {
             vm.prank(arb);
-            ISwapRouter(address(SwapLib.SWAP_ROUTER))
+            ISwapRouter02(address(SwapLib.SWAP_ROUTER))
                 .exactInputSingle(
-                    ISwapRouter.ExactInputSingleParams({
+                    ISwapRouter02.ExactInputSingleParams({
                     tokenIn: address(PYUSD0),
                     tokenOut: address(FUSDEV),
                     fee: FEE_YIELD_DEBT,
@@ -480,9 +493,9 @@ contract SandwichForkTest is Test {
     }
 
     function _hf() internal view returns (uint256) {
-        Position memory pos = MORPHO.position(marketId, address(vault));
+        Position memory pos = MarketLib.MORPHO.position(marketId, address(vault));
         if (pos.borrowShares == 0) return type(uint256).max;
-        Market memory mkt = MORPHO.market(marketId);
+        Market memory mkt = MarketLib.MORPHO.market(marketId);
         uint256 debt = Math.mulDiv(
             uint256(pos.borrowShares),
             uint256(mkt.totalBorrowAssets) + 1,
@@ -495,9 +508,9 @@ contract SandwichForkTest is Test {
     }
 
     function _debt() internal view returns (uint256) {
-        Position memory pos = MORPHO.position(marketId, address(vault));
+        Position memory pos = MarketLib.MORPHO.position(marketId, address(vault));
         if (pos.borrowShares == 0) return 0;
-        Market memory mkt = MORPHO.market(marketId);
+        Market memory mkt = MarketLib.MORPHO.market(marketId);
         return Math.mulDiv(
             uint256(pos.borrowShares),
             uint256(mkt.totalBorrowAssets) + 1,
