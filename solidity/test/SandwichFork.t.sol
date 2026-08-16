@@ -185,6 +185,9 @@ contract SandwichForkTest is Test {
             })
         );
         vault.setMaxTvl(type(uint256).max);
+        // maxSlippageBps defaults to 0 (not in InitParams); set the 1% production
+        // default here so rebalance swaps don't no-op against an off-oracle pool.
+        vault.setMaxSlippageBps(100);
 
         // ── Fund the arb bot up front (needed during the deposit build-up) ──
         deal(address(PYUSD0), arb, 100_000_000e6);
@@ -239,6 +242,8 @@ contract SandwichForkTest is Test {
         console.log("HF after 10% rise:", _hf() / 1e15);
         console.log("TVL ($):", _tvlUsd() / 1e6);
         console.log("---");
+
+        _arbPoolToSpot();
     }
 
     // =====================================================================

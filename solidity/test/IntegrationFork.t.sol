@@ -161,6 +161,9 @@ contract IntegrationForkTest is Test {
             })
         );
         vault.setMaxTvl(type(uint256).max);
+        // maxSlippageBps defaults to 0 (not in InitParams); set the 1% production
+        // default here so rebalance swaps don't no-op against an off-oracle pool.
+        vault.setMaxSlippageBps(100);
 
         // ── Create + fund 100 depositors
         // ────────────────────────────────────
@@ -186,6 +189,7 @@ contract IntegrationForkTest is Test {
         console.log("Pool spot (clean):", uint256(cleanSpot));
         console.log("Pool liquidity:", uint256(IUniswapV3Pool(YIELD_LOAN_POOL).liquidity()));
         console.log("---");
+        _arbPoolToSpot();
     }
 
     // =====================================================================

@@ -88,6 +88,9 @@ contract DeployVault is ConfiguredScript {
             vault.grantEarlyAccess(grantees[i]);
         }
         vault.setMaxTvl(maxTvl);
+        // maxSlippageBps defaults to 0 (not in InitParams); set the 1% production
+        // default here so rebalance swaps don't no-op against an off-oracle pool.
+        vault.setMaxSlippageBps(100);
         vm.stopBroadcast();
 
         console.log("=== deployment complete ===");
