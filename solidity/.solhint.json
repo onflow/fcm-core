@@ -1,11 +1,12 @@
 {
   "extends": "solhint:recommended",
   "rules": {
-    "compiler-version": ["error", "^0.8.0"],
     "func-visibility": ["warn", { "ignoreConstructors": true }],
-    "not-rely-on-time": "off",
+    "function-max-lines": ["warn", 60 ],
+    "gas-indexed-events": "off",
+    "gas-strict-inequalities": "off",
+    "import-path-check": "off",
     "no-global-import": "warn",
-    "gas-custom-errors": "off",
-    "import-path-check": "off"
+    "ordering": "warn"
   }
 }

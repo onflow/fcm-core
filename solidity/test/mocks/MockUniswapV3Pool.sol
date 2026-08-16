@@ -7,7 +7,7 @@ pragma solidity ^0.8.19;
 ///      so tests can place the pool spot on either side of the oracle-derived
 ///      bound. `Q96` (2**96) is the 1:1 price for equal-decimal tokens.
 contract MockUniswapV3Pool {
-    uint160 public constant Q96 = 79228162514264337593543950336; // 2**96
+    uint160 public constant Q96 = 79_228_162_514_264_337_593_543_950_336; // 2**96
 
     uint160 internal sqrtPriceX96 = Q96; // default 1:1
 

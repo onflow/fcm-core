@@ -1,27 +1,37 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import {Test} from "forge-std/Test.sol";
-import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 
-import {FCMVault, MORPHO} from "../src/FCMVault.sol";
+import {FCMVault} from "../src/FCMVault.sol";
+import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
+import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {SwapLib} from "../src/libraries/SwapLib.sol";
-import {Id, MarketParams, Position, Market} from "@morpho-blue/interfaces/IMorpho.sol";
-import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
-
-import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockMorpho} from "./mocks/MockMorpho.sol";
-import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
+import {FCMVaultHarness} from "./FCMVaultHarness.sol";
 import {MockCpmmSwapRouter} from "./mocks/MockCpmmSwapRouter.sol";
-import {MockUniswapV3Pool} from "./mocks/MockUniswapV3Pool.sol";
-import {MockOracle} from "./mocks/MockOracle.sol";
+import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockIrm} from "./mocks/MockIrm.sol";
+import {MockMorpho} from "./mocks/MockMorpho.sol";
+import {MockOracle} from "./mocks/MockOracle.sol";
+import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
+import {MockUniswapV3Pool} from "./mocks/MockUniswapV3Pool.sol";
+import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
+import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
+import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 contract FCMVaultTest is Test {
+    using SafeERC20 for IERC4626;
+    using VaultHelpers for FCMVault;
+    using MarketParamsLib for MarketParams;
+
     // Token addresses — using the real Flow EVM addresses so mocks are
     // etched where the vault constants would otherwise point.
     IERC20 constant WETH = IERC20(0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590);
@@ -47,6 +57,7 @@ contract FCMVaultTest is Test {
     uint256 internal constant YIELD_FACTOR_MAX = 1.01e18;
     uint24 internal constant FEE = 100;
     uint24 internal constant FEE_ASSET_DEBT = 3000;
+    IMorpho internal constant MORPHO = MarketLib.MORPHO;
 
     FCMVault internal vault;
     MockOracle internal marketOracle;
@@ -58,7 +69,7 @@ contract FCMVaultTest is Test {
     address internal user = address(0xA11CE);
     address internal bob = address(0xB0B);
     address internal carol = address(0xCA401);
-    address internal stranger = address(0x5_7A);
+    address internal stranger = address(0x57A);
 
     function setUp() public {
         bytes memory erc20Code = address(new MockERC20()).code;
@@ -80,7 +91,7 @@ contract FCMVaultTest is Test {
         assetPool = new MockUniswapV3Pool();
 
         vault = new FCMVault(
-            FCMVault.InitParams({
+            IFCMVault.InitParams({
                 collateral: WETH,
                 loanToken: PYUSD0,
                 yieldToken: FUSDEV,
@@ -96,7 +107,7 @@ contract FCMVaultTest is Test {
                 healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
                 healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
                 yieldFactorMax: YIELD_FACTOR_MAX,
-                yieldOracle: address(yieldOracle),
+                yieldOracle: IOracle(address(yieldOracle)),
                 admin: admin,
                 recoveryDelay: 7 days,
                 name: "Flow Credit Markets WETH",
@@ -158,7 +169,7 @@ contract FCMVaultTest is Test {
     ///      asset-denominated deposits, since minting an exact share count would
     ///      require pre-computing the borrow+swap leg with unknown slippage.
     function test_Mint_Reverts() public {
-        vm.expectRevert(bytes("not implemented"));
+        vm.expectRevert(IFCMVault.NotImplemented.selector);
         vault.mint(1e18, user);
     }
 
@@ -235,7 +246,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(WETH)).mint(bob, 1 ether);
         vm.startPrank(bob);
         WETH.approve(address(vault), 1 ether);
-        vm.expectRevert(FCMVault.VaultUnderwater.selector);
+        vm.expectRevert(IFCMVault.VaultUnderwater.selector);
         vault.deposit(1 ether, bob);
         vm.stopPrank();
 
@@ -263,13 +274,16 @@ contract FCMVaultTest is Test {
     /// unwind (FUSDEV->PYUSD0->repay->withdrawCollateral) should return the
     /// original WETH within rounding tolerance.
     function test_Redeem_RoundTripReturnsApproximatelyDeposited() public {
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         uint256 amount = 1 ether;
         uint256 shares = _depositFor(user, amount);
 
         vm.prank(user);
         uint256 assetsOut = vault.redeem(shares, user, user);
 
-        assertApproxEqAbs(assetsOut, amount, 1, "assetsOut approx deposit");
+        assertApproxEqAbs(assetsOut, amount, 2, "assetsOut approx deposit");
         assertEq(WETH.balanceOf(user), assetsOut, "user weth credit");
         assertEq(vault.balanceOf(user), 0, "shares burned");
     }
@@ -278,6 +292,9 @@ contract FCMVaultTest is Test {
     /// owner, WETH is delivered to the receiver, and the owner's WETH
     /// balance is untouched.
     function test_Redeem_BurnsSharesAndTransfersToReceiver() public {
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         uint256 amount = 1 ether;
         uint256 shares = _depositFor(user, amount);
         address receiver = address(0xBEEF);
@@ -302,6 +319,12 @@ contract FCMVaultTest is Test {
 
         uint256 collateralBefore = WETH.balanceOf(address(MORPHO));
         uint256 fusdevBefore = FUSDEV.balanceOf(address(vault));
+
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        // Singleton starts with 2e18 (deposit); flash + withdraw draw ~2e18 total,
+        // so mint 1e18 to leave the expected ~1e18 after both.
+        MockERC20(address(WETH)).mint(address(MORPHO), 1 ether);
 
         vm.prank(user);
         uint256 assetsOut = vault.redeem(shares / 2, user, user);
@@ -349,6 +372,9 @@ contract FCMVaultTest is Test {
     /// @notice When the owner pre-approves an operator for `shares`, the
     /// operator can redeem and the allowance is consumed exactly.
     function test_Redeem_SpendsAllowanceWhenOperatorRedeems() public {
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         uint256 shares = _depositFor(user, 1 ether);
         address operator = address(0xCAFE);
 
@@ -392,6 +418,10 @@ contract FCMVaultTest is Test {
         // Under-back: burn 10% of the vault's yield so the yield sale can't cover
         // the debt slice (Case B) with a meaningful shortfall.
         MockERC20(address(FUSDEV)).burn(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
+        // Morpho's singleton custodies collateral across every market, so it can
+        // always lend the flashed slice AND fund the in-callback withdraw. The mock
+        // singleton holds only this vault's collateral, so give it that buffer.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         uint256 fairValue = vault.convertToAssets(shares);
         uint256 mkCollBefore = WETH.balanceOf(address(MORPHO));
 
@@ -406,14 +436,18 @@ contract FCMVaultTest is Test {
 
     /// @notice Deep impairment: the shortfall exceeds the health-factor headroom,
     ///         so the collateral can only be withdrawn after the debt slice is
-    ///         repaid. The flash loan supplies the shortfall up front, so redeem
-    ///         still delivers full pro-rata value at any health factor.
+    ///         repaid. The flash borrows the collateral slice and repays the debt
+    ///         before withdrawing, so redeem still delivers full pro-rata value at
+    ///         any health factor.
     function test_Redeem_CaseB_DeepImpairmentFlashCoversAnyHF() public {
         marketOracle.setPrice(1e36); // 1:1 so debtToCollateral matches the mock swap
         uint256 shares = _depositFor(user, 1 ether);
         // Burn 60% of the vault's yield: the shortfall now dwarfs the hf headroom,
-        // which the pre-flash path could not have covered without breaching hf.
+        // which a repay-after-withdraw path could not have covered without breaching hf.
         MockERC20(address(FUSDEV)).burn(address(vault), FUSDEV.balanceOf(address(vault)) * 6 / 10);
+        // Cross-market collateral buffer (see Case-B FillsShortfall) so the mock
+        // singleton can lend the flashed slice and fund the in-callback withdraw.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         uint256 fairValue = vault.convertToAssets(shares);
 
         vm.prank(user);
@@ -421,6 +455,31 @@ contract FCMVaultTest is Test {
 
         assertApproxEqRel(assetsOut, fairValue, 0.02e18, "full pro-rata value, not a haircut");
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan-token dust");
+        assertEq(vault.balanceOf(user), 0, "shares burned");
+    }
+
+    /// @notice The Case-B flash is SELF-COLLATERALIZED: it borrows the redeemer's
+    ///         own collateral (asset), never the loan token. The vault is a net
+    ///         borrower of loan token, so on-chain the Morpho singleton holds none
+    ///         idle to flash; the redeem must not depend on that liquidity. Here the
+    ///         singleton is funded with collateral (as it always is) but ZERO loan
+    ///         token, and the flash lends from real balance — so a loan-token flash
+    ///         would revert. This redeem completing full-value proves the shortfall
+    ///         is covered entirely from supplied collateral, with no idle loan.
+    function test_Redeem_CaseB_SelfCollateralizedNoIdleLoanLiquidity() public {
+        marketOracle.setPrice(1e36); // 1:1 so debtToCollateral matches the mock swap
+        uint256 shares = _depositFor(user, 1 ether);
+        MockERC20(address(FUSDEV)).burn(address(vault), FUSDEV.balanceOf(address(vault)) * 6 / 10); // deep Case B
+        // Buffer only COLLATERAL in the singleton (its cross-market custody); loan
+        // token stays at zero. A flash of the loan token could not be served here.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
+        assertEq(PYUSD0.balanceOf(address(MORPHO)), 0, "singleton holds no idle loan token to flash");
+        uint256 fairValue = vault.convertToAssets(shares);
+
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(shares, user, user);
+
+        assertApproxEqRel(assetsOut, fairValue, 0.02e18, "full value with zero idle loan liquidity");
         assertEq(vault.balanceOf(user), 0, "shares burned");
     }
 
@@ -486,9 +545,8 @@ contract FCMVaultTest is Test {
         uint256 expColl = WETH.balanceOf(address(MORPHO)) * shares / (vault.totalSupply() + 1e6);
         uint256 expYield = FUSDEV.balanceOf(address(vault)) * shares / (vault.totalSupply() + 1e6);
 
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
-        vault.revokeRole(role, user);
+        vault.revokeEarlyAccess(user);
 
         MockERC20(address(PYUSD0)).mint(user, 1_000_000 ether);
         vm.startPrank(user);
@@ -577,7 +635,7 @@ contract FCMVaultTest is Test {
 
         // Brutal swap fee: if deposit rebalanced to the midpoint HF it would borrow
         // ~474k PYUSD0, lose 99% to fees, and crater the vault NAV.
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(9_900);
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBps(9900);
 
         uint256 navBefore = vault.totalAssets();
         uint256 healthBefore = _healthFactor();
@@ -639,34 +697,29 @@ contract FCMVaultTest is Test {
     /// @notice Admin gets DEFAULT_ADMIN_ROLE on construction; bob/carol/stranger
     ///         start non-allowlisted.
     function test_InitialRoles() public view {
-        assertTrue(vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), admin));
-        assertFalse(vault.hasRole(vault.EARLY_ACCESS_ROLE(), bob));
-        assertFalse(vault.hasRole(vault.EARLY_ACCESS_ROLE(), carol));
+        assertTrue(vault.owner() == admin);
+        assertFalse(vault.earlyAccess(bob));
+        assertFalse(vault.earlyAccess(carol));
     }
 
     /// @notice Admin can grant EARLY_ACCESS_ROLE; hasRole reflects the grant.
     function test_AdminCanGrantRole() public {
         _allow(bob);
-        assertTrue(vault.hasRole(vault.EARLY_ACCESS_ROLE(), bob));
+        assertTrue(vault.earlyAccess(bob));
     }
 
     /// @notice Admin can revoke EARLY_ACCESS_ROLE; hasRole reflects the revoke.
     function test_AdminCanRevokeRole() public {
         _allow(bob);
         _disallow(bob);
-        assertFalse(vault.hasRole(vault.EARLY_ACCESS_ROLE(), bob));
+        assertFalse(vault.earlyAccess(bob));
     }
 
     /// @notice Non-admin cannot grant EARLY_ACCESS_ROLE.
     function test_NonAdminCannotGrantRole() public {
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, vault.DEFAULT_ADMIN_ROLE()
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
         vm.prank(stranger);
-        vault.grantRole(role, bob);
+        vault.grantEarlyAccess(bob);
     }
 
     // ---------------------------------------------------------------------
@@ -697,11 +750,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(WETH)).mint(user, amount);
         vm.startPrank(user);
         WETH.approve(address(vault), amount);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(IFCMVault.NoEarlyAccess.selector, bob));
         vault.deposit(amount, bob);
         vm.stopPrank();
     }
@@ -720,7 +769,7 @@ contract FCMVaultTest is Test {
         WETH.approve(address(vault), amount);
         uint256 shares = vault.deposit(amount, user);
 
-        vault.transfer(bob, shares);
+        IERC4626(address(vault)).safeTransfer(bob, shares);
         vm.stopPrank();
 
         assertEq(vault.balanceOf(user), 0);
@@ -735,11 +784,9 @@ contract FCMVaultTest is Test {
         WETH.approve(address(vault), amount);
         uint256 shares = vault.deposit(amount, user);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, vault.EARLY_ACCESS_ROLE()
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(IFCMVault.NoEarlyAccess.selector, bob));
+        // we expect a revert, should never return
+        // forge-lint: disable-next-item(erc20-unchecked-transfer)
         vault.transfer(bob, shares);
         vm.stopPrank();
     }
@@ -758,12 +805,10 @@ contract FCMVaultTest is Test {
 
         _disallow(user);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user, vault.EARLY_ACCESS_ROLE()
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(IFCMVault.NoEarlyAccess.selector, user));
         vm.prank(user);
+        // we expect a revert, should never return
+        // forge-lint: disable-next-item(erc20-unchecked-transfer)
         vault.transfer(bob, shares);
     }
 
@@ -781,7 +826,7 @@ contract FCMVaultTest is Test {
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
         uint256 hfBefore = _healthFactor();
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertEq(WETH.balanceOf(address(MORPHO)), collBefore, "coll unchanged");
         assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev unchanged");
@@ -803,7 +848,7 @@ contract FCMVaultTest is Test {
 
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         // HF returns to the upper re-entry target (within rounding from share math).
         assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_MAX_TARGET, 1e15, "hf at maxTarget");
@@ -827,13 +872,56 @@ contract FCMVaultTest is Test {
 
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertApproxEqRel(_healthFactor(), HEALTH_FACTOR_MIN_TARGET, 1e15, "hf at minTarget");
         // Delever path: yield token shrunk.
         assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev shrank");
         // Repay leg consumed all realized loan token.
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
+    }
+
+    /// @notice While an emergency recovery is pending, a permissionless `rebalance`
+    ///         must NOT lever up — the position is slated for in-kind wind-down, so
+    ///         re-levering (more debt + AMM cost) works against it. HF above max
+    ///         would normally trigger a lever-up; here it is suppressed.
+    function test_Recovery_NoLeverUpWhilePending() public {
+        _depositFor(user, 1 ether);
+
+        // Schedule (but do not execute) a recovery: recoveryValidAt != 0.
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+
+        // Push HF above max — the lever-up trigger.
+        marketOracle.setPrice(2300e36);
+        assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "above max");
+
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+        _harvestAndRebalance(); // must not revert, must not lever up
+
+        // No lever-up: no yield bought, no new debt swapped, no idle loan left.
+        assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "no lever-up while recovery pending");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "no loan idle");
+    }
+
+    /// @notice Delever stays LIVE during a pending recovery — it only de-risks the
+    ///         position, so it should keep firing (matching `_harvest`'s gate, which
+    ///         freezes only the position-reshaping legs, not the safety leg).
+    function test_Recovery_DeleverStaysLiveWhilePending() public {
+        _depositFor(user, 1 ether);
+
+        vm.prank(admin);
+        vault.scheduleEmergencyRecovery();
+
+        // Push HF below min — the delever trigger.
+        marketOracle.setPrice(1700e36);
+        assertLt(_healthFactor(), HEALTH_FACTOR_MIN, "below min");
+
+        uint256 fusBefore = FUSDEV.balanceOf(address(vault));
+        _harvestAndRebalance();
+
+        // Delever still fires: yield sold to repay debt.
+        assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "delever fires while recovery pending");
     }
 
     // ---- rebalance price-limit guard -------------------------------------
@@ -856,7 +944,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance(); // no revert; spot past bound, so no swap
+        _harvestAndRebalance(); // no revert; spot past bound, so no swap
 
         assertEq(_healthFactor(), hfBefore, "hf unchanged");
         assertEq(_debt(), debtBefore, "debt unchanged");
@@ -880,7 +968,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance(); // no revert; spot past bound, so no swap
+        _harvestAndRebalance(); // no revert; spot past bound, so no swap
 
         assertEq(_healthFactor(), hfBefore, "hf unchanged");
         assertEq(_debt(), debtBefore, "debt unchanged");
@@ -943,7 +1031,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         uint256 hfAfter = _healthFactor();
         assertGt(hfAfter, hfBefore, "delever raised HF");
@@ -969,7 +1057,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         uint256 hfAfter = _healthFactor();
         assertLt(hfAfter, hfBefore, "lever lowered HF");
@@ -993,14 +1081,14 @@ contract FCMVaultTest is Test {
         _setPoolPrice(102, 100);
 
         // Default 1% bound: spot is past it, so the delever is a no-op.
-        vault.rebalance();
+        _harvestAndRebalance();
         assertEq(_healthFactor(), hfBefore, "1% bound skips: HF unchanged");
 
         // Loosen to 5%: the bound now sits past spot, so the delever proceeds.
         vm.prank(admin);
         vault.setMaxSlippageBps(500);
 
-        vault.rebalance();
+        _harvestAndRebalance();
         assertGt(_healthFactor(), hfBefore, "5% bound admits the delever: HF raised");
     }
 
@@ -1082,7 +1170,7 @@ contract FCMVaultTest is Test {
 
         // >= 100% rejected.
         vm.prank(admin);
-        vm.expectRevert(FCMVault.InvalidSlippage.selector);
+        vm.expectRevert(IFCMVault.InvalidSlippage.selector);
         vault.setMaxSlippageBps(10_000);
     }
 
@@ -1103,7 +1191,7 @@ contract FCMVaultTest is Test {
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
         uint256 collBefore = WETH.balanceOf(address(MORPHO));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertEq(_healthFactor(), hfBefore, "hf unchanged");
         assertEq(FUSDEV.balanceOf(address(vault)), fusBefore, "fusdev unchanged");
@@ -1136,11 +1224,82 @@ contract FCMVaultTest is Test {
         uint256 fusBefore = FUSDEV.balanceOf(address(vault));
 
         // Best-effort: should succeed even though target is unreachable.
-        vault.rebalance();
+        _harvestAndRebalance();
 
         // rebalance made progress: debt repaid and yield consumed.
         assertLt(_debt(), debtBefore, "debt reduced");
         assertLt(FUSDEV.balanceOf(address(vault)), fusBefore, "yield consumed");
+    }
+
+    /// @notice After a heavy liquidation (most collateral seized, most debt repaid,
+    ///         yield untouched), the position is left with few collateral, little
+    ///         debt, and a large yield surplus relative to that debt. Harvest's leg 1
+    ///         (yield->loan) still executes at a good price (the yield/debt pool is
+    ///         untouched, so it fills in full) and converts almost all of that surplus
+    ///         into loan token. Leg 2 (loan->collateral) is priced far off the oracle
+    ///         here and is skipped entirely, so leg 1's proceeds can't be redeployed as
+    ///         collateral -- and the realized loan token now exceeds the (now tiny)
+    ///         outstanding debt, so there'd be nowhere for the excess to go.
+    /// @dev    FIXED: `harvest` used to silently cap the repay at outstanding debt and
+    ///         strand the rest as idle loan token -- invisible to `totalAssets()` and
+    ///         effectively lost. It now reverts (LeftoverDebt) instead, so no value
+    ///         is ever silently stranded; the caller (an off-chain harvester) is expected
+    ///         to size `maximum_yield` to what the market can currently absorb and retry.
+    function test_Rebalance_HarvestRevertsInsteadOfStrandingSurplusWhenCollateralLegMispriced() public {
+        marketOracle.setPrice(1e36);
+        _depositFor(user, 10 ether);
+
+        uint256 debtBefore = _debt();
+        uint256 collBefore = _collateral();
+
+        // Heavy liquidation: seize 90% of collateral and repay 90% of debt, leaving
+        // few collateral and little debt -- but yield is untouched by a liquidation,
+        // so it now vastly outweighs what's left of the debt it used to back.
+        _liquidate({seizedCollateral: collBefore * 90 / 100, repaidAssets: debtBefore * 90 / 100});
+
+        // Leg 1 (yield->loan) stays on-oracle (yieldPool untouched) so it fills in full
+        // -- "good price". Leg 2 (loan->collateral) is dragged far off the oracle so it
+        // is skipped entirely -- "can't swap anything" on that leg.
+        assetPool.setSqrtPriceX96(uint160(_sqrtPriceX96(4, 1)));
+
+        vm.expectRevert(IFCMVault.LeftoverDebt.selector);
+        _harvestAndRebalance();
+
+        // The workaround: a caller who instead picks a smaller manual limit -- one leg 1
+        // can convert without exceeding the (now tiny) outstanding debt -- still succeeds.
+        uint256 debtAfterLiquidation = _debt();
+        vault.harvest(debtAfterLiquidation / 2);
+        assertLt(_debt(), debtAfterLiquidation, "smaller manual limit still makes progress, no revert");
+    }
+
+    /// @notice Counterpart to the revert case above: when leg 2 is skipped but leg 1's
+    ///         realized surplus does NOT exceed the outstanding debt, `harvest` does not
+    ///         revert -- it repays exactly that surplus as debt, leaving the remainder of
+    ///         the debt outstanding (a partial repay, not a full clear) and no loan token
+    ///         stranded.
+    function test_Rebalance_HarvestRepaysPartialDebtWhenLeftoverWithinDebt() public {
+        marketOracle.setPrice(1e36);
+        _depositFor(user, 10 ether);
+
+        uint256 debtBefore = _debt();
+        uint256 collBefore = _collateral();
+
+        // A lighter liquidation: seize/repay only 20% each, so the yield surplus this
+        // opens up (~20% of the original debt's worth) stays comfortably below the 80%
+        // of debt that remains -- no revert, just a partial repay.
+        _liquidate({seizedCollateral: collBefore * 20 / 100, repaidAssets: debtBefore * 20 / 100});
+        uint256 debtAfterLiquidation = _debt();
+        assertGt(debtAfterLiquidation, 0, "meaningful debt remains after the light liquidation");
+
+        // Leg 2 (loan->collateral) skipped, same as the revert case above.
+        assetPool.setSqrtPriceX96(uint160(_sqrtPriceX96(4, 1)));
+
+        _harvestAndRebalance(); // must not revert: leftover <= outstanding debt
+
+        assertLt(_debt(), debtAfterLiquidation, "surplus repaid a portion of the debt");
+        assertGt(_debt(), 0, "debt not fully cleared -- only a portion was repaid");
+        assertEq(PYUSD0.balanceOf(address(vault)), 0, "leftover fully absorbed by the partial repay, nothing stranded");
+        assertApproxEqAbs(_collateral(), collBefore * 80 / 100, 1, "no collateral bought (leg 2 skipped)");
     }
 
     /// @notice Constructor rejects malformed band configs: the HF band/targets
@@ -1150,31 +1309,43 @@ contract FCMVaultTest is Test {
     function test_Rebalance_ConstructorValidatesBands() public {
         FCMVault.InitParams memory p = _baseParams();
         p.healthFactorMin = 0.9e18;
-        vm.expectRevert(bytes("HF min < WAD"));
+        vm.expectRevert(abi.encodeWithSelector(IFCMVault.BelowMinWad.selector, p.healthFactorMin));
         new FCMVault(p);
 
         // min above the lower re-entry target.
         p = _baseParams();
         p.healthFactorMin = 1.35e18; // > minTarget (1.30)
-        vm.expectRevert(bytes("HF min > minTarget"));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IFCMVault.InvalidHealthFactorBounds.selector, p.healthFactorMin, p.healthFactorMinTarget
+            )
+        );
         new FCMVault(p);
 
         // targets crossed (minTarget above maxTarget).
         p = _baseParams();
         p.healthFactorMinTarget = 1.62e18; // > maxTarget (1.60)
-        vm.expectRevert(bytes("HF minTarget > maxTarget"));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IFCMVault.InvalidHealthFactorBounds.selector, p.healthFactorMinTarget, p.healthFactorMaxTarget
+            )
+        );
         new FCMVault(p);
 
         // upper re-entry target above the upper bound.
         p = _baseParams();
         p.healthFactorMaxTarget = 1.7e18; // > max (1.65)
-        vm.expectRevert(bytes("HF maxTarget > max"));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IFCMVault.InvalidHealthFactorBounds.selector, p.healthFactorMaxTarget, p.healthFactorMax
+            )
+        );
         new FCMVault(p);
 
         // yield-factor band edge below WAD (harvest trigger below bare backing).
         p = _baseParams();
         p.yieldFactorMax = 0.9e18; // < WAD
-        vm.expectRevert(bytes("yieldFactorMax < WAD"));
+        vm.expectRevert(abi.encodeWithSelector(IFCMVault.BelowMinWad.selector, p.yieldFactorMax));
         new FCMVault(p);
     }
 
@@ -1206,6 +1377,10 @@ contract FCMVaultTest is Test {
         assertEq(PYUSD0.balanceOf(address(vault)), 0, "no idle loan token after deposit");
         assertApproxEqRel(_healthFactor(), DEPOSIT_TARGET_HF, 1e15, "deposit lands at midpoint HF");
 
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
+
         // Rebalance: price rise lifts HF above max, forcing a real lever-up.
         marketOracle.setPrice(2300e36);
         assertGt(_healthFactor(), HEALTH_FACTOR_MAX, "price rise pushed HF above max");
@@ -1213,7 +1388,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertGt(_debt(), debtBefore, "rebalance borrowed more debt");
         assertGt(FUSDEV.balanceOf(address(vault)), yieldBefore, "rebalance bought more yield");
@@ -1290,7 +1465,7 @@ contract FCMVaultTest is Test {
         _depositFor(user, 1 ether);
 
         vm.recordLogs();
-        vault.rebalance(); // HF in band → no-op body, but modifier emits
+        _harvestAndRebalance(); // HF in band → no-op body, but modifier emits
 
         _assertVaultStateMatchesCurrentState();
     }
@@ -1302,7 +1477,7 @@ contract FCMVaultTest is Test {
         marketOracle.setPrice(2300e36); // push HF above max so rebalance levers
 
         vm.recordLogs();
-        vault.rebalance();
+        _harvestAndRebalance();
 
         (,, uint256 yield, uint256 collPrice,, uint256 yieldPrice) = _assertVaultStateMatchesCurrentState();
         assertEq(collPrice, 2300e36, "snapshot collateral price is the new oracle price");
@@ -1387,29 +1562,25 @@ contract FCMVaultTest is Test {
     }
 
     function _collateral() internal view returns (uint256) {
-        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
-        Id marketId = MarketParamsLib.id(MarketParams(lt, ct, oracle, irm, lltv_));
-        return uint256(MORPHO.position(marketId, address(vault)).collateral);
+        MarketParams memory market = vault.getMarket();
+        return uint256(MORPHO.position(market.id(), address(vault)).collateral);
     }
 
     function _allow(address account) internal {
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
-        vault.grantRole(role, account);
+        vault.grantEarlyAccess(account);
     }
 
     function _disallow(address account) internal {
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
-        vault.revokeRole(role, account);
+        vault.revokeEarlyAccess(account);
     }
 
     function _debt() internal view returns (uint256) {
-        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
-        Id marketId = MarketParamsLib.id(MarketParams(lt, ct, oracle, irm, lltv_));
-        Position memory pos = MORPHO.position(marketId, address(vault));
+        MarketParams memory market = vault.getMarket();
+        Position memory pos = MORPHO.position(market.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
-        Market memory mkt = MORPHO.market(marketId);
+        Market memory mkt = MORPHO.market(market.id());
         return
             (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1)) / (uint256(mkt.totalBorrowShares) + 1e6);
     }
@@ -1418,13 +1589,12 @@ contract FCMVaultTest is Test {
     ///      test hook: seize `seizedCollateral` of collateral and repay
     ///      `repaidAssets` of debt.
     function _liquidate(uint256 seizedCollateral, uint256 repaidAssets) internal {
-        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
-        MockMorpho(address(MORPHO))
-            .liquidate(MarketParams(lt, ct, oracle, irm, lltv_), address(vault), seizedCollateral, repaidAssets);
+        MarketParams memory market = vault.getMarket();
+        MockMorpho(address(MORPHO)).liquidate(market, address(vault), seizedCollateral, repaidAssets);
     }
 
     function _baseParams() internal view returns (FCMVault.InitParams memory) {
-        return FCMVault.InitParams({
+        return IFCMVault.InitParams({
             collateral: WETH,
             loanToken: PYUSD0,
             yieldToken: FUSDEV,
@@ -1440,7 +1610,7 @@ contract FCMVaultTest is Test {
             healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
             healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
             yieldFactorMax: YIELD_FACTOR_MAX,
-            yieldOracle: address(yieldOracle),
+            yieldOracle: IOracle(address(yieldOracle)),
             admin: admin,
             recoveryDelay: 7 days,
             name: "x",
@@ -1449,15 +1619,14 @@ contract FCMVaultTest is Test {
     }
 
     function _healthFactor() internal view returns (uint256) {
-        (address lt, address ct, address oracle, address irm, uint256 lltv_) = vault.market();
-        Id marketId = MarketParamsLib.id(MarketParams(lt, ct, oracle, irm, lltv_));
-        Position memory pos = MORPHO.position(marketId, address(vault));
-        Market memory mkt = MORPHO.market(marketId);
+        MarketParams memory market = vault.getMarket();
+        Position memory pos = MORPHO.position(market.id(), address(vault));
+        Market memory mkt = MORPHO.market(market.id());
         if (pos.borrowShares == 0) return type(uint256).max;
         uint256 debt =
             (uint256(pos.borrowShares) * (uint256(mkt.totalBorrowAssets) + 1)) / (uint256(mkt.totalBorrowShares) + 1e6);
         uint256 maxBorrow =
-            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), lltv_, 1e36), 1e18);
+            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(marketOracle.priceValue(), market.lltv, 1e36), 1e18);
         return Math.mulDiv(maxBorrow, 1e18, debt);
     }
 
@@ -1469,7 +1638,12 @@ contract FCMVaultTest is Test {
         MockERC20(address(PYUSD0)).mint(admin, 1_000_000 ether);
         vm.prank(admin);
         vault.scheduleEmergencyRecovery();
-        vm.warp(block.timestamp + vault.recoveryDelay());
+        vm.warp(block.timestamp + vault.RECOVERY_DELAY());
+    }
+
+    function _harvestAndRebalance() internal {
+        vault.harvest(type(uint256).max);
+        vault.rebalance();
     }
 
     /// @notice Happy path: after the timelock, the owner funds the debt and the
@@ -1502,7 +1676,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(WETH)).mint(user, 1 ether);
         vm.startPrank(user);
         WETH.approve(address(vault), 1 ether);
-        vm.expectRevert(FCMVault.EmergencyRecoveryActive.selector);
+        vm.expectRevert(IFCMVault.EmergencyRecoveryActive.selector);
         vault.deposit(1 ether, user);
         vm.stopPrank();
         // maxDeposit reflects the halt (ERC-4626: must report 0 when disabled).
@@ -1510,8 +1684,11 @@ contract FCMVaultTest is Test {
 
         // And rebalancing reverts on the recovered vault, so the off-chain
         // rebalancer gets an explicit signal to stop.
-        vm.expectRevert(FCMVault.EmergencyRecoveryActive.selector);
+        vm.expectRevert(IFCMVault.EmergencyRecoveryActive.selector);
         vault.rebalance();
+
+        vm.expectRevert(IFCMVault.EmergencyRecoveryActive.selector);
+        vault.harvest(type(uint256).max);
     }
 
     /// @notice Deposits are frozen as soon as a recovery is scheduled (before
@@ -1523,7 +1700,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(WETH)).mint(user, 1 ether);
         vm.startPrank(user);
         WETH.approve(address(vault), 1 ether);
-        vm.expectRevert(FCMVault.EmergencyRecoveryActive.selector);
+        vm.expectRevert(IFCMVault.EmergencyRecoveryActive.selector);
         vault.deposit(1 ether, user);
         vm.stopPrank();
         // maxDeposit reflects the halt (ERC-4626: must report 0 when disabled).
@@ -1546,13 +1723,16 @@ contract FCMVaultTest is Test {
         vm.prank(admin);
         vault.scheduleEmergencyRecovery();
         vm.prank(admin);
-        vm.expectRevert(FCMVault.EmergencyRecoveryNotReady.selector);
+        vm.expectRevert(IFCMVault.EmergencyRecoveryNotReady.selector);
         vault.executeEmergencyRecovery();
     }
 
     /// @notice A holder can still redeem while a recovery is pending — the
     ///         timelock window is a real exit opportunity, not a lockup.
     function test_Recovery_RedeemStaysOpenWhilePending() public {
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         uint256 shares = _depositFor(user, 1 ether);
         vm.prank(admin);
         vault.scheduleEmergencyRecovery();
@@ -1616,7 +1796,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 hfBefore = _healthFactor();
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertGt(WETH.balanceOf(address(MORPHO)), collBefore, "collateral grew");
         assertLt(FUSDEV.balanceOf(address(vault)), yieldBefore, "surplus yield sold");
@@ -1644,7 +1824,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertLt(FUSDEV.balanceOf(address(vault)), yieldBefore, "surplus yield sold (first leg)");
         assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "no collateral bought off-oracle");
@@ -1673,7 +1853,7 @@ contract FCMVaultTest is Test {
         uint256 debtBefore = _debt();
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertLt(FUSDEV.balanceOf(address(vault)), yieldBefore, "surplus yield sold (leg 1)");
         assertGt(WETH.balanceOf(address(MORPHO)), collBefore, "some collateral bought within tolerance");
@@ -1695,7 +1875,7 @@ contract FCMVaultTest is Test {
         uint256 collBefore = WETH.balanceOf(address(MORPHO));
         uint256 debtBefore = _debt();
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertGt(WETH.balanceOf(address(MORPHO)), collBefore, "harvest added collateral");
         assertGt(_debt(), debtBefore, "leverage leg fired (debt grew)");
@@ -1710,7 +1890,7 @@ contract FCMVaultTest is Test {
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
         uint256 debtBefore = _debt();
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "collateral unchanged");
         assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged");
@@ -1729,7 +1909,7 @@ contract FCMVaultTest is Test {
         uint256 collBefore = WETH.balanceOf(address(MORPHO));
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "collateral unchanged (below band)");
         assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged (below band)");
@@ -1749,7 +1929,7 @@ contract FCMVaultTest is Test {
         FCMVault dustVault = new FCMVault(p);
         vm.startPrank(admin);
         dustVault.setMaxTvl(1e21);
-        dustVault.grantRole(dustVault.EARLY_ACCESS_ROLE(), user);
+        dustVault.grantEarlyAccess(user);
         vm.stopPrank();
 
         MockERC20(address(WETH)).mint(user, 1 ether);
@@ -1783,7 +1963,7 @@ contract FCMVaultTest is Test {
 
         uint256 collBefore = WETH.balanceOf(address(MORPHO));
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
-        vault.rebalance();
+        _harvestAndRebalance();
 
         assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "no harvest on depeg");
         assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "yield unchanged");
@@ -1802,7 +1982,7 @@ contract FCMVaultTest is Test {
         uint256 collBefore = WETH.balanceOf(address(MORPHO));
         uint256 yieldBefore = FUSDEV.balanceOf(address(vault));
 
-        vault.rebalance(); // does not revert while a recovery is merely pending
+        _harvestAndRebalance(); // does not revert while a recovery is merely pending
 
         assertApproxEqAbs(WETH.balanceOf(address(MORPHO)), collBefore, 1, "harvest frozen: no collateral");
         assertApproxEqAbs(FUSDEV.balanceOf(address(vault)), yieldBefore, 1, "harvest frozen: yield untouched");
@@ -1822,7 +2002,7 @@ contract FCMVaultTest is Test {
         uint256 hfBefore = _healthFactor();
         assertLt(hfBefore, HEALTH_FACTOR_MIN, "below min");
 
-        vault.rebalance(); // no revert: harvest is best-effort, then the delever fires
+        _harvestAndRebalance(); // no revert: harvest is best-effort, then the delever fires
 
         assertGt(_healthFactor(), hfBefore, "position deleveraged (harvest didn't block it)");
     }
@@ -1853,15 +2033,15 @@ contract FCMVaultTest is Test {
         vault.setManagementFeeBps(100);
 
         vm.startPrank(admin);
-        vm.expectRevert(FCMVault.InvalidFee.selector);
-        vault.setManagementFeeBps(1_001); // > MAX_MANAGEMENT_FEE_BPS (10%)
-        vm.expectRevert(FCMVault.InvalidFee.selector);
-        vault.setPerformanceFeeBps(5_001); // > MAX_PERFORMANCE_FEE_BPS (50%)
+        vm.expectRevert(IFCMVault.InvalidFee.selector);
+        vault.setManagementFeeBps(1001); // > MAX_MANAGEMENT_FEE_BPS (10%)
+        vm.expectRevert(IFCMVault.InvalidFee.selector);
+        vault.setPerformanceFeeBps(5001); // > MAX_PERFORMANCE_FEE_BPS (50%)
         vault.setManagementFeeBps(200);
-        vault.setPerformanceFeeBps(2_000);
+        vault.setPerformanceFeeBps(2000);
         vm.stopPrank();
         assertEq(vault.managementFeeBps(), 200, "mgmt set");
-        assertEq(vault.performanceFeeBps(), 2_000, "perf set");
+        assertEq(vault.performanceFeeBps(), 2000, "perf set");
     }
 
     /// @notice Management fee accrues ~ rate * NAV * elapsed, minted as shares.
@@ -1882,7 +2062,7 @@ contract FCMVaultTest is Test {
     /// @notice Performance fee ~ rate * gain above HWM; not double-charged.
     function test_Fees_PerformanceAccrualAndHWM() public {
         address feeRcpt = address(0xFEE5);
-        _enableFees(feeRcpt, 0, 2_000); // 20% perf, no mgmt
+        _enableFees(feeRcpt, 0, 2000); // 20% perf, no mgmt
         _depositFor(user, 1 ether);
 
         uint256 navBefore = vault.totalAssets();
@@ -1894,7 +2074,7 @@ contract FCMVaultTest is Test {
         vault.accrueFees();
         uint256 feeShares = vault.balanceOf(feeRcpt);
         assertGt(feeShares, 0, "perf fee minted");
-        assertApproxEqRel(vault.convertToAssets(feeShares), gain * 2_000 / 10_000, 3e16, "perf ~20% gain");
+        assertApproxEqRel(vault.convertToAssets(feeShares), gain * 2000 / 10_000, 3e16, "perf ~20% gain");
 
         // Second accrual with no new gain -> no additional fee (HWM holds).
         uint256 prev = vault.balanceOf(feeRcpt);
@@ -1905,7 +2085,7 @@ contract FCMVaultTest is Test {
     /// @notice No performance fee while below the high-water mark (drawdown).
     function test_Fees_NoPerfInDrawdown() public {
         address feeRcpt = address(0xFEE5);
-        _enableFees(feeRcpt, 0, 2_000);
+        _enableFees(feeRcpt, 0, 2000);
         _depositFor(user, 1 ether);
 
         // First gain sets the HWM and charges.
@@ -1933,7 +2113,7 @@ contract FCMVaultTest is Test {
         vm.startPrank(admin);
         vault.setFeeRecipient(feeRcpt); // deliberately NOT allowlisted
         vault.setManagementFeeBps(200);
-        vault.setPerformanceFeeBps(2_000);
+        vault.setPerformanceFeeBps(2000);
         vm.stopPrank();
 
         _depositFor(user, 1 ether); // must not revert
@@ -1951,7 +2131,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(PYUSD0)).mint(admin, 1_000_000 ether);
         vm.prank(admin);
         vault.scheduleEmergencyRecovery();
-        vm.warp(block.timestamp + vault.recoveryDelay());
+        vm.warp(block.timestamp + vault.RECOVERY_DELAY());
         vm.startPrank(admin);
         PYUSD0.approve(address(vault), type(uint256).max);
         vault.executeEmergencyRecovery();
@@ -1967,7 +2147,7 @@ contract FCMVaultTest is Test {
     ///         the recipient's claim ~= management + performance fee.
     function test_Fees_CombinedAccrual() public {
         address feeRcpt = address(0xFEE5);
-        _enableFees(feeRcpt, 200, 2_000); // 2%/yr mgmt + 20% perf
+        _enableFees(feeRcpt, 200, 2000); // 2%/yr mgmt + 20% perf
         _depositFor(user, 1 ether);
 
         uint256 nav0 = vault.totalAssets();
@@ -1980,7 +2160,7 @@ contract FCMVaultTest is Test {
         uint256 feeShares = vault.balanceOf(feeRcpt);
         assertGt(feeShares, 0, "combined fee minted");
 
-        uint256 expected = (navAccrue * 200 / 10_000) + (gain * 2_000 / 10_000);
+        uint256 expected = (navAccrue * 200 / 10_000) + (gain * 2000 / 10_000);
         assertApproxEqRel(vault.convertToAssets(feeShares), expected, 3e16, "claim ~= mgmt + perf");
     }
 
@@ -1994,7 +2174,7 @@ contract FCMVaultTest is Test {
         MockERC20(address(FUSDEV)).mint(address(vault), FUSDEV.balanceOf(address(vault)) / 10);
         vm.warp(block.timestamp + 365 days);
 
-        _enableFees(feeRcpt, 200, 2_000);
+        _enableFees(feeRcpt, 200, 2000);
         vault.accrueFees();
         assertEq(vault.balanceOf(feeRcpt), 0, "no retroactive charge for the pre-enable window");
     }
@@ -2002,6 +2182,9 @@ contract FCMVaultTest is Test {
     /// @notice Fees accrue on the redeem path, and a de-allowlisted recipient
     ///         skips minting without bricking the redeem.
     function test_Fees_AccruesOnRedeemAndDeAllowlistDoesNotBrick() public {
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
         address feeRcpt = address(0xFEE5);
         _enableFees(feeRcpt, 200, 0); // mgmt only
         uint256 shares = _depositFor(user, 1 ether);
@@ -2011,9 +2194,8 @@ contract FCMVaultTest is Test {
         vault.redeem(shares / 2, user, user);
         assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the redeem path");
 
-        bytes32 role = vault.EARLY_ACCESS_ROLE();
         vm.prank(admin);
-        vault.revokeRole(role, feeRcpt);
+        vault.revokeEarlyAccess(feeRcpt);
         vm.warp(block.timestamp + 30 days);
         vm.prank(user);
         vault.redeem(shares / 4, user, user); // must not revert
@@ -2055,7 +2237,7 @@ contract FCMVaultTest is Test {
     ///         after the first deposit mints nothing.
     function test_Fees_NoPerfOnFirstDeposit() public {
         address feeRcpt = address(0xFEE5);
-        _enableFees(feeRcpt, 0, 2_000); // perf only
+        _enableFees(feeRcpt, 0, 2000); // perf only
         _depositFor(user, 1 ether);
 
         vault.accrueFees();
@@ -2067,7 +2249,7 @@ contract FCMVaultTest is Test {
     ///         (not 10/1.1 ≈ 9.09%, which a non-grossed-up mint would give).
     function test_Fees_GrossUpDeliversTrueRate() public {
         address feeRcpt = address(0xFEE5);
-        _enableFees(feeRcpt, 1_000, 0); // 10%/yr, no perf
+        _enableFees(feeRcpt, 1000, 0); // 10%/yr, no perf
         _depositFor(user, 1 ether);
 
         vm.warp(block.timestamp + 365 days);
@@ -2086,7 +2268,7 @@ contract FCMVaultTest is Test {
         _depositFor(user, 1 ether);
 
         vm.warp(block.timestamp + 30 days);
-        vault.rebalance(); // accrues fees at the top of rebalance
+        _harvestAndRebalance(); // accrues fees at the top of rebalance
         assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the rebalance path");
     }
 
@@ -2105,14 +2287,38 @@ contract FCMVaultTest is Test {
 
         assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the redeemInKind path");
     }
-}
 
-/// @dev Exposes the vault's internal price-limit math so the security-critical
-///      oracle -> `sqrtPriceLimitX96` conversion can be asserted directly.
-contract FCMVaultHarness is FCMVault {
-    constructor(FCMVault.InitParams memory p) FCMVault(p) {}
+    // Flooring a loan amount into yield can leave the yield worth less than the debt
+    // it backs; the delever and harvest legs round this up so the backing always
+    // covers. Surfaces the rounding edge case that motivates the ceil direction.
+    function test_YieldBacking_FloorUnderBacksButCeilCovers() public pure {
+        uint256 debt = 100;
+        uint256 price = 6e35; // 0.6 * 1e36; fractional, so the division has a remainder
 
-    function exposed_yieldDebtSwapLimit(address tokenIn) external view returns (uint160, bool) {
-        return _yieldDebtSwapLimit(tokenIn);
+        uint256 floorAmt = Math.mulDiv(debt, 1e36, price);
+        assertLt(Math.mulDiv(floorAmt, price, 1e36), debt, "floor under-backs");
+
+        uint256 ceilAmt = Math.mulDiv(debt, 1e36, price, Math.Rounding.Ceil);
+        assertGe(Math.mulDiv(ceilAmt, price, 1e36), debt, "ceil covers the debt");
+    }
+
+    /// @notice Redeem may fail with donation of debt. Check that fully works after a rebalance.
+    function test_Fuzz_Redeem_WithDebtDust(uint256 depositAmount) public {
+        depositAmount = bound(depositAmount, 1, 1e18);
+
+        uint256 shares = _depositFor(user, depositAmount);
+
+        uint256 borrowShares = uint256(MORPHO.position(vault.getMarket().id(), address(vault)).borrowShares);
+        MockERC20(address(PYUSD0)).mint(address(this), 1e30);
+        PYUSD0.approve(address(MORPHO), type(uint256).max);
+        MORPHO.repay(vault.getMarket(), 0, borrowShares - 1, address(vault), "");
+
+        vm.startPrank(user);
+        try vault.redeem(shares, user, user) {
+            return;
+        } catch {
+            vault.rebalance();
+            vault.redeem(shares, user, user);
+        }
     }
 }
