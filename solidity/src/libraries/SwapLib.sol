@@ -58,7 +58,7 @@ library SwapLib {
     /// price never crosses the limit. `amountOutMinimum` is left at 0 - protection comes entirely from the price
     /// limit, and a non-zero minimum would revert a legitimate partial fill.
     ///
-    ///         IMPORTANT: on a partial fill the router consumes LESS than `amountIn` and leaves the unspent `tokenIn`
+    /// IMPORTANT: on a partial fill the router consumes LESS than `amountIn` and leaves the unspent `tokenIn`
     /// with the caller - the caller must account for the remainder (the vault repays it). `sqrtPriceLimitX96` MUST be
     /// on the correct side of the current pool price (below it for a 0->1 swap, above it for 1->0), otherwise the pool
     /// reverts `SPL`; callers check the live price first. Caller MUST have approved `SWAP_ROUTER` for `tokenIn`.

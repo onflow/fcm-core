@@ -30,7 +30,6 @@ library FeesLib {
     function feesToMint(
         uint256 nav,
         uint256 claims,
-        // uint256 pricePerShare,
         uint256 managementFeeBps,
         uint256 performanceFeeBps,
         uint256 perfHighWaterMark,

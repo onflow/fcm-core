@@ -164,7 +164,8 @@ interface IFCMVault is IERC4626 {
     /// @dev Leverage adjustment only; harvest is a separate entry point.
     function rebalance() external;
     /// @notice Harvest surplus yield into collateral. Separate from `rebalance` so the keeper can control the maximum
-    ///        yield sold per call.
+    /// yield sold per call.
+    /// @param  maximumYield Maximum yield tokens to sell in this harvest.
     /// @param maximumYield Maximum yield tokens to sell in this harvest.
     function harvest(uint256 maximumYield) external;
     /// @notice Cancel a pending recovery during its timelock window.
@@ -173,10 +174,9 @@ interface IFCMVault is IERC4626 {
     /// @notice Execute a scheduled recovery once its timelock elapses. The owner funds the full debt in `loanToken`;
     /// the position is fully unwound (no swap, no oracle read) and all assets are swept to the owner. Burns no shares
     /// and permanently blocks deposits. `redeem` stays callable throughout the window so holders may exit first.
-    /// @dev
-    /// Oracle-independent by construction: fees are never accrued here (no NAV mark), and `repayAll` zeroes the debt
-    /// before `withdrawCollateral`, so Morpho's health check short-circuits on `borrowShares == 0` without reading its
-    /// oracle. Recovery stays executable when oracles are bricked.
+    /// @dev Oracle-independent by construction: fees are never accrued here (no NAV mark), and `repayAll` zeroes the
+    /// debt before `withdrawCollateral`, so Morpho's health check short-circuits on `borrowShares == 0` without reading
+    /// its oracle. Recovery stays executable when oracles are bricked.
     function executeEmergencyRecovery() external;
 
     /// @notice Escape hatch - swap-free, in-kind redemption: the caller repays `owner`'s pro-rata debt slice in
@@ -315,12 +315,12 @@ interface IFCMVault is IERC4626 {
     /// `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`. Default 0 -> no deposits until admin raises
     /// it.
     /// - This constraint prevents all deposits/mints which would cause the vault to exceed the configured TVL limit
-    ///   after the deposit/mint completes.
+    /// after the deposit/mint completes.
     /// - This constraint does not prevent any withdrawals/redeems under any circumstances.
     /// - This constraint does not prevent the vault from holding more assets than its configured TVL. This can happen
-    // if: /   - The owner sets maxTvl to a value lower than the current totalAssets
-    ///   - The value of vault holdings increases above the TVL limit due to market conditions. This can occur without
-    ///     any direct interactions with the vault.
+    /// if: - The owner sets maxTvl to a value lower than the current totalAssets
+    /// - The value of vault holdings increases above the TVL limit due to market conditions. This can occur without
+    /// any direct interactions with the vault.
     function maxTvl() external view returns (uint256);
     /// @notice Max price impact (basis points) tolerated on the rebalance swaps (lever and delever). It sets each
     /// swap's `sqrtPriceLimitX96` to the oracle price discounted by this amount, so the pool fills only while its
@@ -360,9 +360,9 @@ interface IFCMVault is IERC4626 {
     /// @dev NAV = collateral + yield - debt, with both yield and debt converted into asset units using oracle prices:
     /// - collateral: read directly from the Morpho position.
     /// - yield: balance of `yieldToken` held by the vault, priced through `yieldOracle` and the market oracle
-    ///   (see `_yieldToAsset`).
+    /// (see `_yieldToAsset`).
     /// - debt: outstanding loan-token debt on the Morpho market, valued at the market oracle price
-    ///   (see `MarketLib.debt`).
+    /// (see `MarketLib.debt`).
     ///
     /// Returns 0 if debt exceeds gross value (an underwater position). This is a stale read by default - callers that
     /// need an up-to-the-block NAV must accrue interest on the market in the same tx first (see `deposit`).
@@ -392,8 +392,8 @@ interface IFCMVault is IERC4626 {
     /// 1. Accrue market interest so `navBefore` and the post-deposit NAV measurement are both fresh.
     /// 2. Pull `assets` from the caller and supply them as collateral to the Morpho market.
     /// 3. Borrow `toBorrow = _targetBorrowAgainst(assets)` loan token and swap it into yield token on FlowSwap V3. The
-    ///    borrow is capped so this deposit cannot drag the existing position's health factor down to the target - small
-    ///    deposits never rebalance the whole protocol.
+    /// borrow is capped so this deposit cannot drag the existing position's health factor down to the target - small
+    /// deposits never rebalance the whole protocol.
     /// 4. Mint shares pro-rata to the NAV contribution.
     ///
     /// Rounding favors the vault: the share computation rounds down, so any residual NAV accrues to existing
@@ -417,11 +417,11 @@ interface IFCMVault is IERC4626 {
     /// `d* = p * debt`, the pro-rata debt slice. The unwind:
     /// 1. Sell exactly `p * yieldToken` for loanToken on FlowSwap V3. Call the realized loanToken output `loanGot`.
     /// 2. If `loanGot >= d*` (Case A - fair or favorable AMM execution): repay `d*`, withdraw `p * collateral` of the
-    ///    asset, and swap the surplus `loanGot - d*` loanToken to the asset.
+    /// asset, and swap the surplus `loanGot - d*` loanToken to the asset.
     /// 3. If `loanGot < d*` (Case B - yield underperformed): flash-borrow the shortfall `d* - loanGot` in loanToken,
-    ///    repay the full `d*`, withdraw the full `p * collateral`, and sell just enough of that collateral to repay the
-    ///    flash. The redeemer takes home their full pro-rata value; the collateral sold covers the debt the yield leg
-    ///    could not.
+    /// repay the full `d*`, withdraw the full `p * collateral`, and sell just enough of that collateral to repay the
+    /// flash. The redeemer takes home their full pro-rata value; the collateral sold covers the debt the yield leg
+    /// could not.
     /// 4. Burn shares and transfer the new asset balance to receiver.
     ///
     /// Rounding favors the vault: all pro-rata slices round down, so residuals accrue to remaining shareholders rather

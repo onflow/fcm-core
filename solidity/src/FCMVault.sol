@@ -722,11 +722,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
     /// @notice Lever-up branch of `rebalance`: position is under-levered (`hf > HEALTH_FACTOR_MAX`). Borrow exactly the
     /// debt slice that lands the position at `HEALTH_FACTOR_MAX_TARGET` and swap it into yield token.
-    /// @dev `targetDebt =
-    /// maxBorrow * WAD / HEALTH_FACTOR_MAX_TARGET` is the debt level that, against the current collateral, produces an
-    /// HF of exactly `HEALTH_FACTOR_MAX_TARGET` (just below the upper bound). Since `hf > max >= maxTarget`,
-    /// `currentDebt <
-    /// targetDebt`. The borrow leg adds `targetDebt - currentDebt`.
+    /// @dev `targetDebt = maxBorrow * WAD / HEALTH_FACTOR_MAX_TARGET` is the debt level that, against the current
+    /// collateral, produces an HF of exactly `HEALTH_FACTOR_MAX_TARGET` (just below the upper bound).
+    /// Since `hf > max >= maxTarget`, `currentDebt < targetDebt`. The borrow leg adds `targetDebt - currentDebt`.
     ///
     /// Partial: the full `borrowAmount` is borrowed up front, then the loan->yield swap runs under a
     /// `sqrtPriceLimitX96` derived from the oracle and `maxSlippageBps`. If the swap would push the pool past that
@@ -766,9 +764,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
     /// @notice Delever branch of `rebalance`: position is over-levered (`hf < HEALTH_FACTOR_MIN`). Sell yield token for
     /// loan token to repay enough debt to land the position back at `HEALTH_FACTOR_MIN_TARGET`.
-    /// @dev Sizing: targetDebt
-    /// = maxBorrow * WAD / HEALTH_FACTOR_MIN_TARGET repayAmount   = currentDebt - targetDebt yieldToSell   =
-    /// repayAmount * 1e36 / yieldOraclePrice
+    /// @dev Sizing: targetDebt = maxBorrow * WAD / HEALTH_FACTOR_MIN_TARGET
+    ///repayAmount = currentDebt - targetDebt
+    /// yieldToSell = repayAmount * 1e36 / yieldOraclePrice
     ///
     /// `yieldToSell` is the oracle-implied yield amount whose loan-token value equals `repayAmount`. AMM slippage shows
     /// up as a small under-shoot (post-rebalance HF is slightly below `HEALTH_FACTOR_MIN_TARGET` if the swap realized
@@ -1015,9 +1013,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         if (pricePerShare > perfHighWaterMark) perfHighWaterMark = pricePerShare;
     }
 
-    // @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more
-    // expensive. See
-    // https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
+    /// @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more
+    /// expensive. See
+    /// https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     function _decimalsOffset() internal pure returns (uint8) {
         return DECIMALS_OFFSET;
     }
