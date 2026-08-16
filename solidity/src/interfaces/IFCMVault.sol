@@ -165,7 +165,6 @@ interface IFCMVault is IERC4626 {
     function rebalance() external;
     /// @notice Harvest surplus yield into collateral. Separate from `rebalance` so the keeper can control the maximum
     /// yield sold per call.
-    /// @param  maximumYield Maximum yield tokens to sell in this harvest.
     /// @param maximumYield Maximum yield tokens to sell in this harvest.
     function harvest(uint256 maximumYield) external;
     /// @notice Cancel a pending recovery during its timelock window.
