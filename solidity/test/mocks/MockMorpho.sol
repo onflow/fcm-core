@@ -171,11 +171,17 @@ contract MockMorpho {
         return (x * y) / d;
     }
 
-    /// @dev Mock of Morpho's `flashLoan`: mints `assets` of `token` to the
-    ///      borrower, invokes its `onMorphoFlashLoan` callback, then reclaims the
-    ///      `assets` (fee-free, like Morpho Blue) via the borrower's approval.
+    /// @dev Mock of Morpho's `flashLoan`: lends `assets` of `token` from the
+    ///      singleton's OWN balance to the borrower, invokes its `onMorphoFlashLoan`
+    ///      callback, then reclaims the `assets` (fee-free, like Morpho Blue) via the
+    ///      borrower's approval. Lending from the real balance rather than minting is
+    ///      deliberate: it makes the flash depend on the singleton actually holding
+    ///      the token, so a flash of a token the singleton custodies none of — e.g.
+    ///      the loan token, which the vault only ever borrows — reverts, exactly as
+    ///      on-chain. This is what lets a test prove redeem's Case-B flash is
+    ///      self-collateralized (draws only on supplied collateral, not idle loan).
     function flashLoan(address token, uint256 assets, bytes calldata data) external {
-        MockERC20(token).mint(msg.sender, assets);
+        IERC20(token).safeTransfer(msg.sender, assets);
         IMorphoFlashLoanCallback(msg.sender).onMorphoFlashLoan(assets, data);
         IERC20(token).safeTransferFrom(msg.sender, address(this), assets);
         MockERC20(token).burn(address(this), assets);

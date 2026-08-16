@@ -179,26 +179,30 @@ sequenceDiagram
       User->>Outer: redeem(outerShare)
       activate Outer
 
-      Lender-->>Outer: flashloan (innerAsset)
+      Outer->>Dex: sell yield slice (yieldAsset → innerAsset)
+      Dex-->>Outer: innerAsset (may fall short of the debt slice)
+
+      Lender-->>Outer: flashloan collSlice (outerAsset)
+      Note over Outer,Lender: Flash the redeemer's OWN collateral slice —<br/>self-collateralized, needs no external loan-token liquidity
+
+      Outer->>Dex: swap shortfall (outerAsset → innerAsset)
+      Dex-->>Outer: innerAsset
+      Note over Outer,Dex: Vault now holds the full debt slice
 
       Outer->>Lender: repay (innerAsset)
       Lender-->>Outer: withdraw collateral (outerAsset)
+      Note over Lender: Repay before withdraw ⇒ hf-neutral ⇒ any HF
 
-      Outer->>Dex: swap (yieldAsset → innerAsset)
-      Dex-->>Outer: innerAsset
+      Outer->>Lender: repay flashloan collSlice (outerAsset)
 
-      Outer->>Dex: reconcile surplus (outerAsset ↔ innerAsset)
-      Dex-->>Outer: innerAsset
-
-      Outer->>Lender: repay flashloan (innerAsset)
-
-      Outer-->>User: outerAsset
+      Outer-->>User: outerAsset (unsold remainder = pro-rata value)
       deactivate Outer
 ```
 
 #### Pros
 
-- Deterministic unwind at any HF — debt is cleared before collateral moves
+- Deterministic unwind at any HF — debt is cleared before collateral moves.
+- **Self-collateralized** — flashes the vault's _own_ collateral slice, so it needs no external loan-token liquidity. The vault is a net borrower of loan token (none sits idle in the Morpho singleton for it to draw on), so flashing loan token would depend on other suppliers' liquidity and fail at high utilization; flashing the collateral, already in the singleton, cannot. **This self-sufficiency is the whole reason the flash path exists.**
 
 #### Cons
 
@@ -216,33 +220,29 @@ sequenceDiagram
       participant Lender as Lending Protocol
       participant Dex as AMM
 
-      Note over Lender: Initial: HF ≈ 1 (LTV near LLTV)<br/>In options A/B, if our recovered outerAsset is < debt<br />then we can't repay full debt amount.
+      Note over Lender: Initial: HF ≈ 1 (LTV near LLTV)<br/>In options A/B, if recovered outerAsset < debt<br/>we can't repay the full debt first.
 
       User->>Outer: redeem(outerShare)
       activate Outer
 
-      Lender-->>Outer: flashloan (innerAsset)
-      Note over Outer,Lender: Vault holds enough debt-token to repay in full<br/>without touching the position
+      Outer->>Dex: sell yieldSlice → innerAsset
+      Dex-->>Outer: innerAsset (may be < debtSlice → shortfall)
+
+      Lender-->>Outer: flashloan collSlice (outerAsset)
+      Note over Outer,Lender: Flash the redeemer's OWN collateral slice —<br/>self-collateralized, no external loan-token liquidity
+
+      Outer->>Dex: swap shortfall (outerAsset → innerAsset)
+      Dex-->>Outer: innerAsset
+      Note over Outer: Vault now holds the full debtSlice
 
       Outer->>Lender: repay full debtSlice (innerAsset)
-      Note over Lender: HF improves (debt ↓, coll unchanged)<br/>Position is over-collateralized
+      Note over Lender: HF improves (debt ↓, coll unchanged)
 
       Lender-->>Outer: withdraw collSlice (outerAsset)
-      Note over Lender: Always succeeds because we just repaid full debt slice
+      Note over Lender: Always succeeds — full debt slice repaid first
 
-      Outer->>Dex: sell yieldSlice → innerAsset
-      Dex-->>Outer: innerAsset (may be < flash loan amount)
-
-      alt surplus (yield sale ≥ flash)
-          Outer->>Dex: swap surplus innerAsset → outerAsset
-          Dex-->>Outer: extra outerAsset (user bonus)
-      else deficit (yield sale < flash)
-          Outer->>Dex: swap some collSlice → innerAsset
-          Dex-->>Outer: innerAsset (covers deficit)
-          Note over Outer: User absorbs their own<br/>yield shortfall at market price
-      end
-
-      Outer->>Lender: repay flashloan (innerAsset)
+      Outer->>Lender: repay flashloan collSlice (outerAsset)
+      Note over Outer: Withdrawn slice repays the flash;<br/>unsold remainder = user's pro-rata value
 
       Outer-->>User: outerAsset
       deactivate Outer
