@@ -10,32 +10,34 @@ import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 /// @notice Interface for the FCMVault
 interface IFCMVault is IERC4626 {
     struct InitParams {
-        IERC20 collateral;
+        IERC20 collateralToken;
         IERC20 loanToken;
         IERC20 yieldToken;
+
+        uint256 healthFactorMin;
+        uint256 healthFactorMinTarget;
+        uint256 healthFactorMax;
+        uint256 healthFactorMaxTarget;
+        uint256 yieldFactorMax;
+
+        address collateralLoanPool;
+        uint24 collateralLoanPoolFee;
+        address yieldLoanPool;
+        uint24 yieldLoanPoolFee;
+
         address marketOracle;
         address marketIrm;
         uint256 marketLltv;
-        uint24 feeYieldDebt;
-        uint24 feeAssetDebt;
-        address yieldDebtPool;
-        address assetDebtPool;
-        uint256 healthFactorMin;
-        uint256 healthFactorMax;
-        uint256 healthFactorMinTarget;
-        uint256 healthFactorMaxTarget;
-        uint256 yieldFactorMax;
         IOracle yieldOracle;
-        address owner;
-        uint256 recoveryDelay;
-        uint256 maxSlippageBps;
+
         string name;
         string symbol;
+        address owner;
     }
 
     /// @notice Emitted when a recovery is scheduled.
     /// @param caller Owner that scheduled it.
-    /// @param validAt Timestamp the recovery becomes executable (`now + recoveryDelay`).
+    /// @param validAt Timestamp the recovery becomes executable (`now + 7 days`).
     event EmergencyRecoveryScheduled(address indexed caller, uint256 validAt);
     /// @notice Emitted when a pending recovery is cancelled before execution.
     /// @param caller Owner that cancelled it.
@@ -197,8 +199,8 @@ interface IFCMVault is IERC4626 {
     function redeemInKind(uint256 shares, address receiver, address owner)
         external
         returns (uint256 collateralOut, uint256 yieldOut);
-    /// @notice Schedule a timelocked emergency recovery. Executable after `recoveryDelay`; the owner may cancel in the
-    /// meantime.
+    /// @notice Schedule a timelocked emergency recovery. Executable after `RECOVERY_DELAY` (7 days); the owner may
+    /// cancel in the meantime.
     function scheduleEmergencyRecovery() external;
     /// @notice Set the fee recipient. Accrues to the old recipient first.
     /// @dev The recipient must hold `EARLY_ACCESS_ROLE` to receive minted fee shares; if it doesn't, accrual silently
@@ -227,92 +229,70 @@ interface IFCMVault is IERC4626 {
     function revokeEarlyAccess(address account) external;
 
     /// @notice Address of the immutable collateral token.
-    /// @dev The collateral token is the asset and the collateral leg of the position.
-    /// @return collateralTokenAddress The collateral token address.
-    function COLLATERAL_TOKEN() external view returns (IERC20 collateralTokenAddress);
+    /// @dev The collateral token is the asset of the ERC4626 vault.
+    function COLLATERAL_TOKEN() external view returns (IERC20);
     /// @notice Address of the immutable loan token (inner vault asset).
     /// @dev The loan token is the inner vault's asset and the debt leg of the position.
-    /// @return loanTokenAddress The loan token address.
-    function LOAN_TOKEN() external view returns (IERC20 loanTokenAddress);
+    function LOAN_TOKEN() external view returns (IERC20);
     /// @notice Address of the immutable yield token (inner vault share).
     /// @dev The yield token is the inner vault's share token and the yield leg of the position.
-    /// @return yieldTokenAddress The yield token address.
-    function YIELD_TOKEN() external view returns (IERC20 yieldTokenAddress);
+    function YIELD_TOKEN() external view returns (IERC20);
 
-    /// @notice Health factor below which `rebalance` will delever (sell yield to repay debt). The position is
-    /// over-levered below this bound.
-    /// @dev WAD-scaled.
-    /// @return minHealthFactorThreshold The minimum health factor threshold.
-    function HEALTH_FACTOR_MIN() external view returns (uint256 minHealthFactorThreshold);
-    /// @notice Health factor above which `rebalance` will lever up (borrow more debt and swap to yield). The position
-    /// is under-levered above this bound.
-    /// @dev WAD-scaled.
-    /// @return healthFactorMax The maximum health factor threshold.
-    function HEALTH_FACTOR_MAX() external view returns (uint256 healthFactorMax);
+    /// @notice Minimum health factor below which `rebalance` delevers (sells yield to repay debt).
+    /// @dev WAD-scaled. Positions below this threshold are over-levered.
+    function HEALTH_FACTOR_MIN() external view returns (uint256);
     /// @notice Re-entry target for a delever: when `hf < healthFactorMin`, `rebalance` repays just enough debt to raise
     /// the health factor to this value, which sits just above the lower bound. Landing here rather than exactly on
     /// `healthFactorMin` leaves a small margin so routine drift does not immediately re-trigger.
     /// @dev WAD-scaled.
-    /// @return healthFactorMinTarget The re-entry target for a delever, WAD-scaled.
-    function HEALTH_FACTOR_MIN_TARGET() external view returns (uint256 healthFactorMinTarget);
+    function HEALTH_FACTOR_MIN_TARGET() external view returns (uint256);
+    /// @notice Health factor above which `rebalance` will lever up (borrow more debt and swap to yield). The position
+    /// is under-levered above this bound.
+    /// @dev WAD-scaled.
+    /// @return healthFactorMax The maximum health factor threshold.
+    function HEALTH_FACTOR_MAX() external view returns (uint256);
     /// @notice Re-entry target for a lever-up: when `hf > healthFactorMax`, `rebalance` borrows just enough to lower
     /// the health factor to this value, which sits just below the upper bound. WAD-scaled. The four health factors must
     /// satisfy `WAD <= healthFactorMin <= healthFactorMinTarget <= healthFactorMaxTarget <= healthFactorMax`.
     /// @dev WAD-scaled.
     /// @return healthFactorMaxTarget The re-entry target for a lever-up, WAD-scaled.
-    function HEALTH_FACTOR_MAX_TARGET() external view returns (uint256 healthFactorMaxTarget);
+    function HEALTH_FACTOR_MAX_TARGET() external view returns (uint256);
     /// @notice The yield factor is `yieldValue / debt`, WAD-scaled (WAD = the yield exactly repays the debt). It is NOT
     /// a yield rate. `yieldFactorMax` is the upper edge of its band: `rebalance`'s harvest leg fires only when the
     /// yield factor exceeds it, so it does not act on sub-threshold surplus. Must be `>= WAD`. Immutable, like the
     /// health-factor band bounds.
-    /// @return yieldFactorMax The upper edge of the yield-factor band, WAD-scaled.
-    function YIELD_FACTOR_MAX() external view returns (uint256 yieldFactorMax);
+    /// @dev WAD-scaled.
+    function YIELD_FACTOR_MAX() external view returns (uint256);
 
-    /// @notice The FlowSwap V3 yield/debt pool the rebalance swaps route through. Read for its live `slot0` marginal
-    /// price so a rebalance can derive a `sqrtPriceLimitX96` from the oracle and skip when the pool is already priced
-    /// past the slippage bound.
-    /// @return poolAddress The yield/debt pool address.
-    function YIELD_DEBT_POOL() external view returns (address poolAddress);
-    /// @notice Pool fee tier for the yield/debt pool used in rebalance swaps.
-    /// @dev Pool fee for swapping yield<->debt.
-    /// @return feeYieldDebt The pool fee for swapping yield<->debt.
-    function FEE_YIELD_DEBT() external view returns (uint24 feeYieldDebt);
-    /// @notice FlowSwap V3 asset/debt pool for the harvest loan->collateral leg. Its live `slot0` price is read to
-    /// bound leg 2 to the market oracle, skipping when the pool is already past the slippage bound.
-    /// @return assetDebtPoolAddress The asset/debt pool address.
-    function ASSET_DEBT_POOL() external view returns (address assetDebtPoolAddress);
-    /// @notice Pool fee tier for the asset/debt pool, used to reconcile redeem surplus from loan token back to the
-    /// underlying asset.
-    /// @return feeAssetDebt The pool fee for swapping asset<->debt.
-    function FEE_ASSET_DEBT() external view returns (uint24 feeAssetDebt);
-
-    /// @notice Address of the oracle for the yield token.
-    /// @dev We will deploy an oracle instance, which will provide the best available price information for the given
-    /// token. This may be a 3rd party oracle, onchain price information, or both.
-    /// @return yieldOracle The yield oracle address.
-    function YIELD_ORACLE() external view returns (IOracle yieldOracle);
+    /// @notice collateral/loan pool for swapping collateral to loan token or vice versa.
+    function COLLATERAL_LOAN_POOL() external view returns (address);
+    /// @notice Pool fee tier for the collateral/loan pool.
+    function COLLATERAL_LOAN_POOL_FEE() external view returns (uint24);
+    /// @notice loan/yield pool for swapping loan token to yield token or vice versa.
+    function YIELD_LOAN_POOL() external view returns (address);
+    /// @notice Pool fee tier for the loan/yield pool.
+    function YIELD_LOAN_POOL_FEE() external view returns (uint24);
 
     /// @notice Address of the oracle for the market.
-    /// @return marketOracle The market oracle address.
-    function MARKET_ORACLE() external view returns (address marketOracle);
+    function MARKET_ORACLE() external view returns (address);
     /// @notice Address of the interest rate model for the market.
-    /// @return marketIrm The market interest rate model address.
-    function MARKET_IRM() external view returns (address marketIrm);
+    function MARKET_IRM() external view returns (address);
     /// @notice Loan-to-value ratio for the market, WAD-scaled.
-    /// @return marketLltv The loan-to-value ratio for the market, WAD-scaled.
-    function MARKET_LLTV() external view returns (uint256 marketLltv);
+    function MARKET_LLTV() external view returns (uint256);
+    /// @notice Address of the oracle for the yield token.
+    function YIELD_ORACLE() external view returns (IOracle);
 
-    // - Timelocked emergency recovery (custodial, in-kind) -----
-    /// @notice Delay (in seconds) between scheduling and executing a recovery.
-    function RECOVERY_DELAY() external view returns (uint256);
+    /// @notice Recovery delay, in seconds.
+    function RECOVERY_DELAY() external view returns (uint32);
     /// @notice Timestamp a scheduled recovery becomes executable; 0 = none pending.
     function recoveryValidAt() external view returns (uint256);
     /// @notice Set once a recovery executes; permanently blocks new deposits.
     function recovered() external view returns (bool);
 
     // - Admin-controlled parameters & fees ---------
-    /// @notice TVL limit, denominated in the vault's Asset token. Enforced by `super.deposit`, which reverts with
-    /// `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`. Default 0 -> no deposits until owner raises
+    /// @notice TVL limit, denominated in the vault's Asset/Collateral token. Enforced by `super.deposit`, which reverts
+    /// with / `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`. Default 0 -> no deposits until owner
+    /// raises
     /// it.
     /// - This constraint prevents all deposits/mints which would cause the vault to exceed the configured TVL limit
     /// after the deposit/mint completes.
@@ -360,7 +340,7 @@ interface IFCMVault is IERC4626 {
     /// @dev NAV = collateral + yield - debt, with both yield and debt converted into asset units using oracle prices:
     /// - collateral: read directly from the Morpho position.
     /// - yield: balance of `yieldToken` held by the vault, priced through `yieldOracle` and the market oracle
-    /// (see `_yieldToAsset`).
+    /// (see `_yieldToCollateral`).
     /// - debt: outstanding loan-token debt on the Morpho market, valued at the market oracle price
     /// (see `MarketLib.debt`).
     ///

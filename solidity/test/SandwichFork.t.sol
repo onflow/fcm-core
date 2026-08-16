@@ -64,23 +64,27 @@ contract SandwichForkTest is Test {
     IERC20 constant WBTC = IERC20(0x717DAE2BaF7656BE9a9B01deE31d571a9d4c9579);
     IERC20 constant PYUSD0 = IERC20(0x99aF3EeA856556646C98c8B9b2548Fe815240750);
     IERC20 constant FUSDEV = IERC20(0xd069d989e2F44B70c65347d1853C0c67e10a9F8D);
+
+    uint256 constant HEALTH_FACTOR_MIN = 1_228_571_428_571_428_571;
+    uint256 constant HEALTH_FACTOR_MIN_TARGET = 1_230_329_041_487_839_771;
+    uint256 constant HEALTH_FACTOR_MAX = 1_433_333_333_333_333_333;
+    uint256 constant HEALTH_FACTOR_MAX_TARGET = 1_430_948_419_301_164_725;
+    uint256 constant YIELD_FACTOR_MAX = 1.01e18;
+
+    address internal collateralLoanPool;
+
     address constant MARKET_ORACLE = 0x5B3e0BA14443B444D557C0C2F85592d88B88f5c8;
     address constant MARKET_IRM = 0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546;
+    uint256 constant MARKET_LLTV = 0.86e18;
     IOracle constant YIELD_ORACLE = IOracle(0x144F613490DD55C9844Ef139CFB9B63433dD349F);
+
     address constant SWAP_FACTORY = 0xca6d7Bb03334bBf135902e1d919a5feccb461632;
-    // Shallow (~$20k liquidity) yield/debt pool every lever/delever swap uses.
     address constant REAL_POOL = 0x9196e243b7562B0866309013f2F9EB63F83A690f;
 
     // Real production band.
-    uint256 constant HF_MIN = 1_228_571_428_571_428_571;
-    uint256 constant HF_MAX = 1_433_333_333_333_333_333;
-    uint256 constant HF_MIN_TARGET = 1_230_329_041_487_839_771;
-    uint256 constant HF_MAX_TARGET = 1_430_948_419_301_164_725;
 
-    uint256 constant LLTV = 0.86e18;
-    uint256 constant YIELD_FACTOR_MAX = 1.01e18;
-    uint24 constant FEE_YIELD_DEBT = 100;
-    uint24 constant FEE_ASSET_DEBT = 3000;
+    uint24 constant COLLATERAL_LOAN_POOL_FEE = 3000;
+    uint24 constant YIELD_LOAN_POOL_FEE = 100;
 
     // ~$1M TVL from 100 individual $10k deposits (0.1 WBTC each at
     // ~$100k/BTC), each arbed back to the pool's clean spot afterwards — the
@@ -93,7 +97,6 @@ contract SandwichForkTest is Test {
     FCMVault internal vault;
     MarketParams internal mp;
     Id internal marketId;
-    address internal assetDebtPool;
     uint256 internal realPrice;
     uint256 internal snap;
     uint160 internal cleanSpot;
@@ -130,14 +133,14 @@ contract SandwichForkTest is Test {
             collateralToken: address(WBTC),
             oracle: MARKET_ORACLE,
             irm: MARKET_IRM,
-            lltv: LLTV
+            lltv: MARKET_LLTV
         });
         marketId = MarketParamsLib.id(mp);
 
-        // ── Asset/debt pool from factory
+        // ── Collateral/loan pool from factory
         // ───────────────────────────────────
-        assetDebtPool = _getPool(SWAP_FACTORY, address(WBTC), address(PYUSD0), FEE_ASSET_DEBT);
-        require(assetDebtPool != address(0), "WBTC/PYUSD0 pool missing");
+        collateralLoanPool = _getPool(SWAP_FACTORY, address(WBTC), address(PYUSD0), COLLATERAL_LOAN_POOL_FEE);
+        require(collateralLoanPool != address(0), "WBTC/PYUSD0 pool missing");
 
         // ── Supply PYUSD0 to the real Morpho market (needs liquidity) ──────
         // $1M TVL levers roughly $650k of debt at the deposit-target HF, plus
@@ -160,25 +163,23 @@ contract SandwichForkTest is Test {
         // ────────────────────
         vault = new FCMVault(
             IFCMVault.InitParams({
-                collateral: WBTC,
+                collateralToken: WBTC,
                 loanToken: PYUSD0,
                 yieldToken: FUSDEV,
+                healthFactorMin: HEALTH_FACTOR_MIN,
+                healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
+                healthFactorMax: HEALTH_FACTOR_MAX,
+                healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
+                yieldFactorMax: YIELD_FACTOR_MAX,
+                collateralLoanPool: collateralLoanPool,
+                collateralLoanPoolFee: COLLATERAL_LOAN_POOL_FEE,
+                yieldLoanPool: REAL_POOL,
+                yieldLoanPoolFee: YIELD_LOAN_POOL_FEE,
                 marketOracle: MARKET_ORACLE,
                 marketIrm: MARKET_IRM,
-                marketLltv: LLTV,
-                feeYieldDebt: FEE_YIELD_DEBT,
-                feeAssetDebt: FEE_ASSET_DEBT,
-                yieldDebtPool: REAL_POOL,
-                assetDebtPool: assetDebtPool,
-                healthFactorMin: HF_MIN,
-                healthFactorMax: HF_MAX,
-                healthFactorMinTarget: HF_MIN_TARGET,
-                healthFactorMaxTarget: HF_MAX_TARGET,
-                yieldFactorMax: YIELD_FACTOR_MAX,
+                marketLltv: MARKET_LLTV,
                 yieldOracle: YIELD_ORACLE,
                 owner: admin,
-                maxSlippageBps: 100,
-                recoveryDelay: 7 days,
                 name: "fcmWBTC-sandwich-fork",
                 symbol: "fcmWBTC-SF"
             })
@@ -215,7 +216,7 @@ contract SandwichForkTest is Test {
         // ── Push the collateral price +10% -> HF above max -> lever path ───
         uint256 raisedPrice = realPrice * 110 / 100;
         vm.mockCall(MARKET_ORACLE, abi.encodeWithSelector(IOracle.price.selector), abi.encode(raisedPrice));
-        assertGt(_hf(), HF_MAX, "HF above max after 10% rise -> lever path");
+        assertGt(_hf(), HEALTH_FACTOR_MAX, "HF above max after 10% rise -> lever path");
 
         // ── Fund attacker with real tokens via deal
         // ────────────────────────
@@ -334,7 +335,7 @@ contract SandwichForkTest is Test {
                 hfFinal = r.hfAfter;
                 tvlFinal = r.tvlUsd;
                 _arbPoolToSpot();
-                if (r.hfAfter <= HF_MAX) break;
+                if (r.hfAfter <= HEALTH_FACTOR_MAX) break;
             }
 
             string memory netStr = totalProfit >= 0
@@ -412,7 +413,7 @@ contract SandwichForkTest is Test {
                     ISwapRouter02.ExactInputSingleParams({
                     tokenIn: address(PYUSD0),
                     tokenOut: address(FUSDEV),
-                    fee: FEE_YIELD_DEBT,
+                    fee: YIELD_LOAN_POOL_FEE,
                     recipient: attacker,
                     amountIn: 100_000_000e6,
                     amountOutMinimum: 0,
@@ -436,7 +437,7 @@ contract SandwichForkTest is Test {
                     ISwapRouter02.ExactInputSingleParams({
                     tokenIn: address(FUSDEV),
                     tokenOut: address(PYUSD0),
-                    fee: FEE_YIELD_DEBT,
+                    fee: YIELD_LOAN_POOL_FEE,
                     recipient: attacker,
                     amountIn: yieldGotFront,
                     amountOutMinimum: 0,
@@ -461,7 +462,7 @@ contract SandwichForkTest is Test {
                     ISwapRouter02.ExactInputSingleParams({
                     tokenIn: address(FUSDEV),
                     tokenOut: address(PYUSD0),
-                    fee: FEE_YIELD_DEBT,
+                    fee: YIELD_LOAN_POOL_FEE,
                     recipient: arb,
                     amountIn: 100_000_000e18,
                     amountOutMinimum: 0,
@@ -475,7 +476,7 @@ contract SandwichForkTest is Test {
                     ISwapRouter02.ExactInputSingleParams({
                     tokenIn: address(PYUSD0),
                     tokenOut: address(FUSDEV),
-                    fee: FEE_YIELD_DEBT,
+                    fee: YIELD_LOAN_POOL_FEE,
                     recipient: arb,
                     amountIn: 100_000_000e6,
                     amountOutMinimum: 0,
@@ -504,7 +505,7 @@ contract SandwichForkTest is Test {
             Math.Rounding.Ceil
         );
         uint256 maxBorrow =
-            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(IOracle(MARKET_ORACLE).price(), LLTV, 1e36), 1e18);
+            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(IOracle(MARKET_ORACLE).price(), MARKET_LLTV, 1e36), 1e18);
         return Math.mulDiv(maxBorrow, 1e18, debt);
     }
 

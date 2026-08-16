@@ -28,14 +28,14 @@ contract TvlLimitTest is Test {
 
     uint256 internal constant WETH_PRICE = 2000e36;
     uint256 internal constant YIELD_PRICE = 1e36;
-    uint256 internal constant LLTV = 0.86e18;
+    uint256 internal constant MARKET_LLTV = 0.86e18;
     uint256 internal constant HEALTH_FACTOR_MIN = 1.25e18;
     uint256 internal constant HEALTH_FACTOR_MAX = 1.65e18;
     uint256 internal constant HEALTH_FACTOR_MIN_TARGET = 1.3e18;
     uint256 internal constant HEALTH_FACTOR_MAX_TARGET = 1.6e18;
     uint256 internal constant YIELD_FACTOR_MAX = 1.01e18;
-    uint24 internal constant FEE = 100;
-    uint24 internal constant FEE_ASSET_DEBT = 3000;
+    uint24 internal constant COLLATERAL_LOAN_POOL_FEE = 3000;
+    uint24 internal constant YIELD_LOAN_POOL_FEE = 100;
 
     FCMVault internal vault;
     MockOracle internal marketOracle;
@@ -69,27 +69,25 @@ contract TvlLimitTest is Test {
 
         vault = new FCMVault(
             IFCMVault.InitParams({
-                collateral: WETH,
+                collateralToken: WETH,
                 loanToken: PYUSD0,
                 yieldToken: FUSDEV,
-                marketOracle: address(marketOracle),
-                marketIrm: MOCK_IRM,
-                marketLltv: LLTV,
-                feeYieldDebt: FEE,
-                feeAssetDebt: FEE_ASSET_DEBT,
-                yieldDebtPool: address(new MockUniswapV3Pool()),
-                assetDebtPool: address(new MockUniswapV3Pool()),
                 healthFactorMin: HEALTH_FACTOR_MIN,
-                healthFactorMax: HEALTH_FACTOR_MAX,
                 healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
+                healthFactorMax: HEALTH_FACTOR_MAX,
                 healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
                 yieldFactorMax: YIELD_FACTOR_MAX,
+                collateralLoanPool: address(new MockUniswapV3Pool()),
+                collateralLoanPoolFee: COLLATERAL_LOAN_POOL_FEE,
+                yieldLoanPool: address(new MockUniswapV3Pool()),
+                yieldLoanPoolFee: YIELD_LOAN_POOL_FEE,
+                marketOracle: address(marketOracle),
+                marketIrm: MOCK_IRM,
+                marketLltv: MARKET_LLTV,
                 yieldOracle: IOracle(address(yieldOracle)),
                 owner: admin,
-                maxSlippageBps: 100,
-                recoveryDelay: 7 days,
-                name: "Flow Credit Markets WETH",
-                symbol: "fcmWETH"
+                name: "fcmWBTC-sandwich-fork",
+                symbol: "fcmWBTC-SF"
             })
         );
         asset = MockERC20(address(WETH));

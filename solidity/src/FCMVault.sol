@@ -21,13 +21,13 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 /// strategy.
 ///
 /// Strategy Mechanics (Three-Leg Position):
-/// 1. Asset Leg: Collateral token supplied to Morpho to create borrowing capacity.
+/// 1. Collateral Leg: Collateral token supplied to Morpho to create borrowing capacity.
 /// 2. Debt Leg: Loan token borrowed against the supplied collateral.
 /// 3. Yield Leg: Yield-bearing token bought/minted using the borrowed loan token.
 ///
 /// Key Operational Features:
 /// - Single Configuration: Each vault instance executes a single carry trade with immutable parameters.
-/// - External Rebalancing: Exposes a external rebalance() function to adjust LTV, preserve 100% net asset
+/// - External Rebalancing: Exposes a external rebalance() function to adjust LTV, preserve 100% net collateral
 /// exposure, maximize yield spread, and keep the position clear of liquidation thresholds.
 /// - ERC-4626 Tokenized Vault: Yield is auto-compounded directly into share price appreciation.
 contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
@@ -44,6 +44,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     uint256 internal constant MAX_MANAGEMENT_FEE_BPS = 1000;
     /// @dev Hard cap on the performance fee (50%) - owner cannot exceed.
     uint256 internal constant MAX_PERFORMANCE_FEE_BPS = 5000;
+    /// @inheritdoc IFCMVault
+    uint32 public constant RECOVERY_DELAY = 7 days;
 
     /// @inheritdoc IFCMVault
     /// @custom:security non-reentrant
@@ -58,25 +60,22 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     /// @inheritdoc IFCMVault
     uint256 public immutable HEALTH_FACTOR_MIN;
     /// @inheritdoc IFCMVault
-    uint256 public immutable HEALTH_FACTOR_MAX;
-    /// @inheritdoc IFCMVault
     uint256 public immutable HEALTH_FACTOR_MIN_TARGET;
+    /// @inheritdoc IFCMVault
+    uint256 public immutable HEALTH_FACTOR_MAX;
     /// @inheritdoc IFCMVault
     uint256 public immutable HEALTH_FACTOR_MAX_TARGET;
     /// @inheritdoc IFCMVault
     uint256 public immutable YIELD_FACTOR_MAX;
 
     /// @inheritdoc IFCMVault
-    address public immutable YIELD_DEBT_POOL;
+    address public immutable COLLATERAL_LOAN_POOL;
     /// @inheritdoc IFCMVault
-    uint24 public immutable FEE_YIELD_DEBT;
+    uint24 public immutable COLLATERAL_LOAN_POOL_FEE;
     /// @inheritdoc IFCMVault
-    address public immutable ASSET_DEBT_POOL;
+    address public immutable YIELD_LOAN_POOL;
     /// @inheritdoc IFCMVault
-    uint24 public immutable FEE_ASSET_DEBT;
-
-    /// @inheritdoc IFCMVault
-    IOracle public immutable YIELD_ORACLE;
+    uint24 public immutable YIELD_LOAN_POOL_FEE;
 
     /// @inheritdoc IFCMVault
     address public immutable MARKET_ORACLE;
@@ -84,10 +83,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     address public immutable MARKET_IRM;
     /// @inheritdoc IFCMVault
     uint256 public immutable MARKET_LLTV;
-
-    // - Timelocked emergency recovery (custodial, in-kind) -----
     /// @inheritdoc IFCMVault
-    uint256 public immutable RECOVERY_DELAY;
+    IOracle public immutable YIELD_ORACLE;
+
     /// @inheritdoc IFCMVault
     uint256 public recoveryValidAt;
     /// @inheritdoc IFCMVault
@@ -133,34 +131,35 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
             InvalidHealthFactorBounds(p.healthFactorMaxTarget, p.healthFactorMax)
         );
         require(p.yieldFactorMax >= MarketLib.WAD, BelowMinWad(p.yieldFactorMax));
-        require(p.yieldDebtPool != address(0), ZeroAddress());
-        require(p.assetDebtPool != address(0), ZeroAddress());
+        require(p.yieldLoanPool != address(0), ZeroAddress());
+        require(p.collateralLoanPool != address(0), ZeroAddress());
 
-        COLLATERAL_TOKEN = p.collateral;
+        COLLATERAL_TOKEN = p.collateralToken;
         LOAN_TOKEN = p.loanToken;
         YIELD_TOKEN = p.yieldToken;
-        FEE_YIELD_DEBT = p.feeYieldDebt;
-        FEE_ASSET_DEBT = p.feeAssetDebt;
-        YIELD_DEBT_POOL = p.yieldDebtPool;
-        ASSET_DEBT_POOL = p.assetDebtPool;
+
         HEALTH_FACTOR_MIN = p.healthFactorMin;
-        HEALTH_FACTOR_MAX = p.healthFactorMax;
         HEALTH_FACTOR_MIN_TARGET = p.healthFactorMinTarget;
+        HEALTH_FACTOR_MAX = p.healthFactorMax;
         HEALTH_FACTOR_MAX_TARGET = p.healthFactorMaxTarget;
         YIELD_FACTOR_MAX = p.yieldFactorMax;
-        YIELD_ORACLE = p.yieldOracle;
+
+        COLLATERAL_LOAN_POOL = p.collateralLoanPool;
+        COLLATERAL_LOAN_POOL_FEE = p.collateralLoanPoolFee;
+        YIELD_LOAN_POOL = p.yieldLoanPool;
+        YIELD_LOAN_POOL_FEE = p.yieldLoanPoolFee;
+
         MARKET_ORACLE = p.marketOracle;
         MARKET_IRM = p.marketIrm;
         MARKET_LLTV = p.marketLltv;
-        RECOVERY_DELAY = p.recoveryDelay;
-        maxSlippageBps = p.maxSlippageBps;
+        YIELD_ORACLE = p.yieldOracle;
 
         uint256 maxAllowance = type(uint256).max;
-        p.collateral.forceApprove(address(MarketLib.MORPHO), maxAllowance);
+        p.collateralToken.forceApprove(address(MarketLib.MORPHO), maxAllowance);
         p.loanToken.forceApprove(address(MarketLib.MORPHO), maxAllowance);
         p.loanToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
         p.yieldToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
-        p.collateral.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
+        p.collateralToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
 
         lastFeeAccrual = block.timestamp;
         // Seed the HWM at the starting price-per-share so the first deposit isn't counted as performance.
@@ -314,7 +313,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         if (toBorrow > 0) {
             market().borrow(toBorrow);
             // slither-disable-next-line unused-return -> swap output is measured via the totalAssets() delta below
-            SwapLib.swapExactIn(address(LOAN_TOKEN), address(YIELD_TOKEN), FEE_YIELD_DEBT, toBorrow);
+            SwapLib.swapExactIn(address(LOAN_TOKEN), address(YIELD_TOKEN), YIELD_LOAN_POOL_FEE, toBorrow);
         }
 
         // the depositor's contribution to NAV, denominated in outer vault assets
@@ -476,12 +475,12 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
     /// @inheritdoc IFCMVault
     function totalAssets() public view returns (uint256) {
-        uint256 assetAmount = market().collateral();
-        uint256 yieldInAsset = _yieldToAsset(YIELD_TOKEN.balanceOf(address(this)));
-        uint256 debtInAsset = market().debtToCollateral(market().debt());
-        uint256 gross = assetAmount + yieldInAsset;
-        if (gross > debtInAsset) {
-            return gross - debtInAsset;
+        uint256 collateral = market().collateral();
+        uint256 yieldInCollateral = _yieldToCollateral(YIELD_TOKEN.balanceOf(address(this)));
+        uint256 debtInCollateral = market().debtToCollateral(market().debt());
+        uint256 gross = collateral + yieldInCollateral;
+        if (gross > debtInCollateral) {
+            return gross - debtInCollateral;
         }
         return 0;
     }
@@ -500,7 +499,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     /// within the band incurs the lowest average-case cost. By convention, there is a small buffer between the band's
     /// bound and the target.
     /// Partial rebalancing: the rebalance swap carries a `sqrtPriceLimitX96` derived from the oracle price and
-    /// `maxSlippageBps` (see `_yieldDebtSwapLimit`). If reaching the re-entry target would push the pool past that
+    /// `maxSlippageBps` (see `_yieldLoanSwapLimit`). If reaching the re-entry target would push the pool past that
     /// price, the pool fills as much as possible without reverting.
     /// Note the bound is on the pool's *marginal price* relative to the oracle, i.e. on price impact. The pool's fixed
     /// LP fee is a separate, known cost and is not part of this bound.
@@ -543,14 +542,14 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     ///
     /// Case A (`loanGot >= d*`, fair or favorable execution):
     /// a. Repay exactly `d*` to Morpho.
-    /// b. Withdraw exactly `p * collateral` of the asset from Morpho.
+    /// b. Withdraw exactly `p * collateral` of the collateral from Morpho.
     /// c. Reconcile the surplus `loanGot - d*` loanToken to the
-    /// asset on the asset/debt pool. Surplus is real economic
+    /// collateral on the collateral/debt pool. Surplus is real economic
     /// value (yield leg outgrew the debt leg) and accrues to the
     /// redeemer.
     ///
     /// Case B (`loanGot < d*`, yield underperformed at the AMM):
-    /// a. Flash-borrow `p * collateral` of the *collateral* (asset) from
+    /// a. Flash-borrow `p * collateral` of the *collateral* from
     /// Morpho and sell just enough of it for the shortfall `d* - loanGot`
     /// in loanToken, so the vault holds the full `d*`.
     /// b. Repay the full `d*`, then withdraw the redeemer's `p * collateral`.
@@ -580,7 +579,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         uint256 loanBefore = LOAN_TOKEN.balanceOf(address(this));
         if (yieldOut > 0) {
             // slither-disable-next-line unused-return -> loanGot is measured from the loanToken balance delta below
-            SwapLib.swapExactIn(address(YIELD_TOKEN), address(LOAN_TOKEN), FEE_YIELD_DEBT, yieldOut);
+            SwapLib.swapExactIn(address(YIELD_TOKEN), address(LOAN_TOKEN), YIELD_LOAN_POOL_FEE, yieldOut);
         }
         uint256 loanGot = LOAN_TOKEN.balanceOf(address(this)) - loanBefore;
 
@@ -588,7 +587,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         uint256 collSlice = market().collateral().mulDiv(shares, claims, Math.Rounding.Floor);
 
         if (loanGot >= debtSlice) {
-            // Case A: full pro-rata unwind, reconcile surplus to the asset.
+            // Case A: full pro-rata unwind, reconcile surplus to the collateral.
             // slither-disable-next-line unused-return -> repay amount is known (debtSlice); Morpho reverts on failure
             if (debtSlice > 0) market().repay(debtSlice);
             if (collSlice > 0) market().withdrawCollateral(collSlice);
@@ -596,7 +595,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
             if (surplus > 0) {
                 // surplus-swap output is captured by the redeem balance delta
                 // slither-disable-next-line unused-return
-                SwapLib.swapExactIn(address(LOAN_TOKEN), address(COLLATERAL_TOKEN), FEE_ASSET_DEBT, surplus);
+                SwapLib.swapExactIn(address(LOAN_TOKEN), address(COLLATERAL_TOKEN), COLLATERAL_LOAN_POOL_FEE, surplus);
             }
         } else {
             // Case B: yield sale fell short. Flash the redeemer's own collateral
@@ -629,7 +628,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         // token, spending at most the slice; with `loanGot` already held that makes
         // the full `debtSlice`.
         // slither-disable-next-line unused-return -> collateral spent is captured by the redeem balance delta
-        SwapLib.swapExactOut(address(COLLATERAL_TOKEN), address(LOAN_TOKEN), FEE_ASSET_DEBT, shortfall, collSlice);
+        SwapLib.swapExactOut(
+            address(COLLATERAL_TOKEN), address(LOAN_TOKEN), COLLATERAL_LOAN_POOL_FEE, shortfall, collSlice
+        );
         // Repay the slice, THEN withdraw the redeemer's collateral (hf-neutral). Morpho
         // reclaims the flashed `collSlice`; the withdrawn slice covers it, unsold rest stays.
         // slither-disable-next-line unused-return -> repay amount is known (debtSlice); Morpho reverts on failure
@@ -662,7 +663,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         if (targetDebt <= currentDebt) return 0;
         uint256 borrowAmount = targetDebt - currentDebt;
 
-        (uint160 yieldDebtPriceLimit, bool ok) = _yieldDebtSwapLimit(address(LOAN_TOKEN));
+        (uint160 yieldLoanPriceLimit, bool ok) = _yieldLoanSwapLimit(address(LOAN_TOKEN));
         if (!ok) return 0; // pool already past the slippage bound - no-op.
 
         // Borrow first, then swap loan->yield bounded by the price limit. The
@@ -673,7 +674,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         market().borrow(borrowAmount);
         // slither-disable-next-line unused-return -> levered amount is measured via the loanToken balance delta below
         SwapLib.swapExactInToLimit(
-            address(LOAN_TOKEN), address(YIELD_TOKEN), FEE_YIELD_DEBT, borrowAmount, yieldDebtPriceLimit
+            address(LOAN_TOKEN), address(YIELD_TOKEN), YIELD_LOAN_POOL_FEE, borrowAmount, yieldLoanPriceLimit
         );
 
         // Repay the loan token the swap left behind, so no idle loan lingers.
@@ -715,14 +716,15 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         // slither-disable-next-line incorrect-equality -> exact-zero guard: nothing to sell, so skip the swap
         if (yieldToSell == 0) return 0;
 
-        (uint160 limit, bool ok) = _yieldDebtSwapLimit(address(YIELD_TOKEN));
+        (uint160 limit, bool ok) = _yieldLoanSwapLimit(address(YIELD_TOKEN));
         if (!ok) return 0; // pool already past the slippage bound - no-op.
 
         // Sell yield->loan bounded by the price limit. The pool partial-fills
         // up to it, so a too-large delever still repays as much as the bound
         // allows.
-        uint256 loanGot =
-            SwapLib.swapExactInToLimit(address(YIELD_TOKEN), address(LOAN_TOKEN), FEE_YIELD_DEBT, yieldToSell, limit);
+        uint256 loanGot = SwapLib.swapExactInToLimit(
+            address(YIELD_TOKEN), address(LOAN_TOKEN), YIELD_LOAN_POOL_FEE, yieldToSell, limit
+        );
 
         // Cap repayment at outstanding debt
         if (loanGot > currentDebt) {
@@ -750,7 +752,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     /// harvest; leg 2's is one-way - loan it cannot convert is repaid as debt, so that round the surplus deleverages
     /// the position instead of growing collateral. That is value-preserving (a debt paydown, NAV ~flat); the vault is
     /// left underlevered until the health factor drifts above the band and the lever leg re-levers. Leg 2's throughput
-    /// tracks asset/debt pool depth, which `maxTvl` bounds and which `redeemInKind` sidesteps entirely for exits.
+    /// tracks collateral/debt pool depth, which `maxTvl` bounds and which `redeemInKind` sidesteps entirely for exits.
     function _harvest(uint256 maximumYield) internal {
         // Frozen while a recovery is pending or executed: don't reshape the position
         // (yield -> collateral) while it is being wound down.
@@ -760,50 +762,51 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         uint256 yieldPrice = IOracle(YIELD_ORACLE).price();
         uint256 yieldBalance = YIELD_TOKEN.balanceOf(address(this));
 
-        // Yield needed to back the debt at oracle value; only the excess is harvestable
-        // surplus. Round up so the retained yield's oracle value stays >= debt (a floor
-        // residue would leave it a hair short), keeping the unwind invariant intact.
+        // Yield needed to back the debt at oracle value; only the excess is harvestable surplus. Round up so the
+        // retained yield's oracle value stays >= debt (a floor residue would leave it a hair short), keeping the unwind
+        // invariant intact.
         uint256 yieldForDebt = currentDebt.mulDiv(MarketLib.ORACLE_PRICE_SCALE, yieldPrice, Math.Rounding.Ceil);
-        // Fire only when the yield factor is above the band's upper edge: yieldBalance >
-        // yieldForDebt * YIELD_FACTOR_MAX / WAD (equivalently rho > YIELD_FACTOR_MAX). Then realize
-        // back down to yieldForDebt (rho = 1, bare backing).
+        // Fire only when the yield factor is above the band's upper edge: yieldBalance > yieldForDebt *
+        // YIELD_FACTOR_MAX / WAD (equivalently rho > YIELD_FACTOR_MAX). Then realize back down to yieldForDebt (rho =
+        // 1, bare backing).
         if (yieldBalance <= yieldForDebt.mulDiv(YIELD_FACTOR_MAX, MarketLib.WAD, Math.Rounding.Floor)) return;
         uint256 yieldToHarvest = yieldBalance - yieldForDebt;
         yieldToHarvest = Math.min(yieldToHarvest, maximumYield);
 
         uint256 loanBefore = LOAN_TOKEN.balanceOf(address(this));
 
-        // Leg 1: sell surplus yield -> loan on the yield/debt pool, bounded by an
-        // oracle-derived price limit (`maxSlippageBps` of price impact). The pool
-        // partial-fills up to the limit; when it is already past the bound the swap
-        // is skipped. Best-effort either way - harvest never reverts the rebalance
-        // or blocks the delever leg. Same mechanism as `_rebalanceDelever`.
-        (uint160 yieldDebtPriceLimit, bool ok) = _yieldDebtSwapLimit(address(YIELD_TOKEN));
+        // Leg 1: sell surplus yield -> loan on the yield/debt pool, bounded by an oracle-derived price limit
+        // (`maxSlippageBps` of price impact). The pool partial-fills up to the limit; when it is already past the bound
+        // the swap is skipped. Best-effort either way - harvest never reverts the rebalance or blocks the delever leg.
+        // Same mechanism as `_rebalanceDelever`.
+        (uint160 yieldLoanPriceLimit, bool ok) = _yieldLoanSwapLimit(address(YIELD_TOKEN));
         if (!ok) return;
         uint256 loanGot = SwapLib.swapExactInToLimit(
-            address(YIELD_TOKEN), address(LOAN_TOKEN), FEE_YIELD_DEBT, yieldToHarvest, yieldDebtPriceLimit
+            address(YIELD_TOKEN), address(LOAN_TOKEN), YIELD_LOAN_POOL_FEE, yieldToHarvest, yieldLoanPriceLimit
         );
-        // A dust surplus (or a pool already at the bound) rounds the swap output to
-        // zero; no-op rather than pass a zero amount to the next leg, which the router
-        // and Morpho reject.
+        // A dust surplus (or a pool already at the bound) rounds the swap output to zero; no-op rather than pass a zero
+        // amount to the next leg, which the router and Morpho reject.
         // slither-disable-next-line incorrect-equality -> exact-zero guard: nothing realized, skip
         if (loanGot == 0) return;
 
-        // Leg 2: loan -> collateral on the asset/debt pool, bounded to the market oracle
-        // like leg 1 - partial-fills up to the limit, skipped when already past the bound.
-        (uint160 assetDebtPriceLimit, bool assetOk) = _assetDebtSwapLimit();
-        uint256 collateralAdded = assetOk
+        // Leg 2: loan -> collateral on the collateral/debt pool, bounded to the market oracle like leg 1 -
+        // partial-fills up to the limit, skipped when already past the bound.
+        (uint160 collateralLoanPriceLimit, bool collateralOk) = _collateralLoanSwapLimit();
+        uint256 collateralAdded = collateralOk
             ? SwapLib.swapExactInToLimit(
-                address(LOAN_TOKEN), address(COLLATERAL_TOKEN), FEE_ASSET_DEBT, loanGot, assetDebtPriceLimit
+                address(LOAN_TOKEN),
+                address(COLLATERAL_TOKEN),
+                COLLATERAL_LOAN_POOL_FEE,
+                loanGot,
+                collateralLoanPriceLimit
             )
             : 0;
-        // Supply as collateral only - no re-lever. This raises hf; `rebalance`'s lever
-        // branch redeploys the collateral if/when hf later drifts above the band.
+        // Supply as collateral only - no re-lever. This raises hf; `rebalance`'s lever branch redeploys the collateral
+        // if/when hf later drifts above the band.
         if (collateralAdded > 0) market().supplyCollateral(collateralAdded);
 
-        // Repay whatever leg 2 did not convert (a partial fill, or all of it when skipped),
-        // capped at the debt so it cannot over-repay; only a remainder beyond the whole
-        // debt is left idle as loan.
+        // Repay whatever leg 2 did not convert (a partial fill, or all of it when skipped), capped at the debt so it
+        // cannot over-repay; only a remainder beyond the whole debt is left idle as loan.
         uint256 leftover = LOAN_TOKEN.balanceOf(address(this)) - loanBefore;
         if (leftover > currentDebt) {
             revert LeftoverDebt();
@@ -821,28 +824,30 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         return (HEALTH_FACTOR_MIN + HEALTH_FACTOR_MAX) / 2;
     }
 
-    /// @dev How much loan token to borrow against `newAssets` while keeping the position at the deposit-target HF
+    /// @dev How much loan token to borrow against `newCollaterals` while keeping the position at the deposit-target HF
     /// (`_depositTargetHf`, the band midpoint). Returns the smaller of two caps:
-    /// - `capFromNewAsset`: the borrow `newAssets` of fresh collateral could support on its own at the target HF.
-    /// - `capFromTargetDebt`: the additional borrow that, combined with existing debt and existing collateral, would
+    /// - `capFromNewCollateral`: the borrow `newCollaterals` of fresh collateral could support on its own at the target
+    /// HF. - `capFromTargetDebt`: the additional borrow that, combined with existing debt and existing collateral,
+    /// would
     /// land the whole position at the target HF.
     ///
     /// Taking the min means each deposit borrows at most its own proportional share of headroom: small deposits cannot
     /// rebalance an over-collateralized protocol back to target, and no deposit can push an already-too-leveraged
     /// position past the target HF (`capFromTargetDebt` clamps to 0 in that case).
-    /// Protocol-wide rebalancing (driving the whole position back inside the band regardless of new asset size) is the
-    /// job of `rebalance`, not `deposit`.
-    function _targetBorrowAgainst(uint256 newAssets) internal view returns (uint256) {
-        if (newAssets == 0) return 0;
+    /// Protocol-wide rebalancing (driving the whole position back inside the band regardless of new collateral size) is
+    /// the job of `rebalance`, not `deposit`.
+    function _targetBorrowAgainst(uint256 newCollaterals) internal view returns (uint256) {
+        if (newCollaterals == 0) return 0;
         uint256 targetHf = _depositTargetHf();
-        uint256 capFromNewAsset = market().maxBorrowFor(newAssets).mulDiv(MarketLib.WAD, targetHf, Math.Rounding.Floor);
+        uint256 capFromNewCollateral =
+            market().maxBorrowFor(newCollaterals).mulDiv(MarketLib.WAD, targetHf, Math.Rounding.Floor);
         uint256 capFromTargetDebt = market().maxBorrowAtHealthFactor(targetHf);
-        return capFromNewAsset < capFromTargetDebt ? capFromNewAsset : capFromTargetDebt;
+        return capFromNewCollateral < capFromTargetDebt ? capFromNewCollateral : capFromTargetDebt;
     }
 
-    /// @dev Routes yield -> debt -> asset. The two 1e36 oracle scales cancel.
-    function _yieldToAsset(uint256 yieldAmount) internal view returns (uint256) {
-        // slither-disable-next-line incorrect-equality -> exact-zero guard: zero yield converts to zero asset
+    /// @dev Routes yield -> debt -> collateral. The two 1e36 oracle scales cancel.
+    function _yieldToCollateral(uint256 yieldAmount) internal view returns (uint256) {
+        // slither-disable-next-line incorrect-equality -> exact-zero guard: zero yield converts to zero collateral
         if (yieldAmount == 0) return 0;
         return yieldAmount.mulDiv(IOracle(YIELD_ORACLE).price(), market().oraclePrice(), Math.Rounding.Floor);
     }
@@ -865,11 +870,11 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
     /// @dev Price limit for a swap on the yield/debt pool (rebalance lever/delever and harvest leg 1). The yield oracle
     /// quotes loan per yield token, 1e36-scaled.
-    function _yieldDebtSwapLimit(address tokenIn) internal view returns (uint160, bool) {
+    function _yieldLoanSwapLimit(address tokenIn) internal view returns (uint160, bool) {
         uint256 loanPerYield = IOracle(YIELD_ORACLE).price();
         return tokenIn == address(YIELD_TOKEN)
             ? SwapLib.swapLimit(
-                YIELD_DEBT_POOL,
+                YIELD_LOAN_POOL,
                 tokenIn,
                 address(LOAN_TOKEN),
                 loanPerYield,
@@ -877,7 +882,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
                 maxSlippageBps
             )
             : SwapLib.swapLimit(
-                YIELD_DEBT_POOL,
+                YIELD_LOAN_POOL,
                 tokenIn,
                 address(YIELD_TOKEN),
                 MarketLib.ORACLE_PRICE_SCALE,
@@ -886,11 +891,11 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
             );
     }
 
-    /// @dev Price limit for harvest leg 2's loan->collateral swap on the asset/debt pool. The market oracle quotes loan
-    /// per collateral, 1e36-scaled.
-    function _assetDebtSwapLimit() internal view returns (uint160, bool) {
+    /// @dev Price limit for harvest leg 2's loan->collateral swap on the collateral/debt pool. The market oracle quotes
+    /// loan per collateral, 1e36-scaled.
+    function _collateralLoanSwapLimit() internal view returns (uint160, bool) {
         return SwapLib.swapLimit(
-            ASSET_DEBT_POOL,
+            COLLATERAL_LOAN_POOL,
             address(LOAN_TOKEN),
             address(COLLATERAL_TOKEN),
             MarketLib.ORACLE_PRICE_SCALE,

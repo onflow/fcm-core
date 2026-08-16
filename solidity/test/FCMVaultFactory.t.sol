@@ -22,17 +22,19 @@ contract FCMVaultFactoryTest is Test {
     address constant WETH = 0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590;
     address constant PYUSD0 = 0x99aF3EeA856556646C98c8B9b2548Fe815240750;
     address constant FUSDEV = 0xd069d989e2F44B70c65347d1853C0c67e10a9F8D;
-    address constant MOCK_IRM = 0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546;
 
     uint256 constant WETH_PRICE = 2000e36;
     uint256 constant YIELD_PRICE = 1e36;
-    uint256 constant LLTV = 0.86e18;
+
+    uint256 constant MARKET_LLTV = 0.86e18;
+
+    address constant MOCK_IRM = 0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546;
 
     FCMVaultFactory internal factory;
     MockOracle internal marketOracle;
     MockOracle internal yieldOracle;
-    MockUniswapV3Pool internal yieldPool;
-    MockUniswapV3Pool internal assetPool;
+    MockUniswapV3Pool internal collateralLoanPool;
+    MockUniswapV3Pool internal yieldLoanPool;
     IFCMVault.InitParams internal initParams;
     bytes32 internal salt = bytes32(uint256(0xA11CE));
     bytes32 internal salt2 = bytes32(uint256(0xB0B));
@@ -49,31 +51,29 @@ contract FCMVaultFactoryTest is Test {
 
         marketOracle = new MockOracle(WETH_PRICE);
         yieldOracle = new MockOracle(YIELD_PRICE);
-        yieldPool = new MockUniswapV3Pool();
-        assetPool = new MockUniswapV3Pool();
+        yieldLoanPool = new MockUniswapV3Pool();
+        collateralLoanPool = new MockUniswapV3Pool();
 
         factory = new FCMVaultFactory();
 
         initParams = IFCMVault.InitParams({
-            collateral: IERC20(WETH),
+            collateralToken: IERC20(WETH),
             loanToken: IERC20(PYUSD0),
             yieldToken: IERC20(FUSDEV),
-            marketOracle: address(marketOracle),
-            marketIrm: MOCK_IRM,
-            marketLltv: LLTV,
-            feeYieldDebt: 100,
-            feeAssetDebt: 3000,
-            yieldDebtPool: address(yieldPool),
-            assetDebtPool: address(assetPool),
             healthFactorMin: 1.25e18,
             healthFactorMax: 1.65e18,
             healthFactorMinTarget: 1.3e18,
             healthFactorMaxTarget: 1.6e18,
             yieldFactorMax: 1.01e18,
+            collateralLoanPool: address(collateralLoanPool),
+            collateralLoanPoolFee: 3000,
+            yieldLoanPool: address(yieldLoanPool),
+            yieldLoanPoolFee: 100,
+            marketOracle: address(marketOracle),
+            marketIrm: MOCK_IRM,
+            marketLltv: MARKET_LLTV,
             yieldOracle: IOracle(address(yieldOracle)),
             owner: deployer,
-            maxSlippageBps: 100,
-            recoveryDelay: 7 days,
             name: "Flow Credit Markets WETH",
             symbol: "fcmWETH"
         });

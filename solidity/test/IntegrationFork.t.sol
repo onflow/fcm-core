@@ -54,20 +54,20 @@ contract IntegrationForkTest is Test {
     address constant MARKET_IRM = 0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546;
     IOracle constant YIELD_ORACLE = IOracle(0x144F613490DD55C9844Ef139CFB9B63433dD349F);
     address constant SWAP_FACTORY = 0xca6d7Bb03334bBf135902e1d919a5feccb461632;
-    // The yield/debt pool is the shallow (~$20k liquidity) pool the vault
+    // The yield/loan pool is the shallow (~$20k liquidity) pool the vault
     // leans on for every lever/delever/harvest/redeem swap.
-    address constant YIELD_DEBT_POOL = 0x9196e243b7562B0866309013f2F9EB63F83A690f;
+    address constant YIELD_LOAN_POOL = 0x9196e243b7562B0866309013f2F9EB63F83A690f;
 
     // Real production band (from mainnet.toml).
-    uint256 constant HF_MIN = 1_228_571_428_571_428_571;
-    uint256 constant HF_MAX = 1_433_333_333_333_333_333;
-    uint256 constant HF_MIN_TARGET = 1_230_329_041_487_839_771;
-    uint256 constant HF_MAX_TARGET = 1_430_948_419_301_164_725;
+    uint256 constant HEALTH_FACTOR_MIN = 1_228_571_428_571_428_571;
+    uint256 constant HEALTH_FACTOR_MIN_TARGET = 1_230_329_041_487_839_771;
+    uint256 constant HEALTH_FACTOR_MAX = 1_433_333_333_333_333_333;
+    uint256 constant HEALTH_FACTOR_MAX_TARGET = 1_430_948_419_301_164_725;
 
-    uint256 constant LLTV = 0.86e18;
+    uint256 constant MARKET_LLTV = 0.86e18;
     uint256 constant YIELD_FACTOR_MAX = 1.01e18;
-    uint24 constant FEE_YIELD_DEBT = 100;
-    uint24 constant FEE_ASSET_DEBT = 3000;
+    uint24 constant YIELD_LOAN_POOL_FEE = 100;
+    uint24 constant COLLATERAL_LOAN_POOL_FEE = 3000;
 
     // 100 deposits of 0.1 WBTC (~$10k each at ~$100k/BTC) -> ~$1M TVL.
     uint256 constant N_USERS = 100;
@@ -81,11 +81,11 @@ contract IntegrationForkTest is Test {
     FCMVault internal vault;
     MarketParams internal mp;
     Id internal marketId;
-    address internal assetDebtPool;
+    address internal collateralLoanPool;
     uint256 internal realPrice; // real oracle price before mocking
-    uint160 internal cleanSpot; // yield/debt pool's starting (fair) spot
+    uint160 internal cleanSpot; // yield/loan pool's starting (fair) spot
 
-    address internal admin = address(this);
+    address internal owner = address(this);
     address internal arb = makeAddr("arb");
     address[] internal users;
 
@@ -104,10 +104,10 @@ contract IntegrationForkTest is Test {
         // Mock the market oracle so we can change the price later.
         vm.mockCall(MARKET_ORACLE, abi.encodeWithSelector(IOracle.price.selector), abi.encode(realPrice));
 
-        // ── Derive the asset/debt pool from the factory
+        // ── Derive the collateral/loan pool from the factory
         // ────────────────────
-        assetDebtPool = _getPool(SWAP_FACTORY, address(WBTC), address(PYUSD0), FEE_ASSET_DEBT);
-        require(assetDebtPool != address(0), "WBTC/PYUSD0 pool missing");
+        collateralLoanPool = _getPool(SWAP_FACTORY, address(WBTC), address(PYUSD0), COLLATERAL_LOAN_POOL_FEE);
+        require(collateralLoanPool != address(0), "WBTC/PYUSD0 pool missing");
 
         // ── Market params
         // ──────────────────────────────────────────────────
@@ -116,7 +116,7 @@ contract IntegrationForkTest is Test {
             collateralToken: address(WBTC),
             oracle: MARKET_ORACLE,
             irm: MARKET_IRM,
-            lltv: LLTV
+            lltv: MARKET_LLTV
         });
         marketId = MarketParamsLib.id(mp);
 
@@ -133,31 +133,29 @@ contract IntegrationForkTest is Test {
         console.log("Supplied $10M PYUSD0 to Morpho market");
 
         // ── Record the pool's starting ("clean") spot price ────────────────
-        (cleanSpot,,,,,,) = IUniswapV3Pool(YIELD_DEBT_POOL).slot0();
+        (cleanSpot,,,,,,) = IUniswapV3Pool(YIELD_LOAN_POOL).slot0();
 
         // ── Deploy FCMVault with real production config
         // ────────────────────
         vault = new FCMVault(
             IFCMVault.InitParams({
-                collateral: WBTC,
+                collateralToken: WBTC,
                 loanToken: PYUSD0,
                 yieldToken: FUSDEV,
+                healthFactorMin: HEALTH_FACTOR_MIN,
+                healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
+                healthFactorMax: HEALTH_FACTOR_MAX,
+                healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
+                yieldFactorMax: YIELD_FACTOR_MAX,
+                collateralLoanPool: collateralLoanPool,
+                collateralLoanPoolFee: COLLATERAL_LOAN_POOL_FEE,
+                yieldLoanPool: YIELD_LOAN_POOL,
+                yieldLoanPoolFee: YIELD_LOAN_POOL_FEE,
                 marketOracle: MARKET_ORACLE,
                 marketIrm: MARKET_IRM,
-                marketLltv: LLTV,
-                feeYieldDebt: FEE_YIELD_DEBT,
-                feeAssetDebt: FEE_ASSET_DEBT,
-                yieldDebtPool: YIELD_DEBT_POOL,
-                assetDebtPool: assetDebtPool,
-                healthFactorMin: HF_MIN,
-                healthFactorMax: HF_MAX,
-                healthFactorMinTarget: HF_MIN_TARGET,
-                healthFactorMaxTarget: HF_MAX_TARGET,
-                yieldFactorMax: YIELD_FACTOR_MAX,
+                marketLltv: MARKET_LLTV,
                 yieldOracle: YIELD_ORACLE,
-                owner: admin,
-                maxSlippageBps: 100,
-                recoveryDelay: 7 days,
+                owner: owner,
                 name: "fcmWBTC-integration-fork",
                 symbol: "fcmWBTC-IF"
             })
@@ -186,7 +184,7 @@ contract IntegrationForkTest is Test {
         console.log("Real WBTC oracle price:", realPrice);
         console.log("Yield oracle price:", IOracle(YIELD_ORACLE).price());
         console.log("Pool spot (clean):", uint256(cleanSpot));
-        console.log("Pool liquidity:", uint256(IUniswapV3Pool(YIELD_DEBT_POOL).liquidity()));
+        console.log("Pool liquidity:", uint256(IUniswapV3Pool(YIELD_LOAN_POOL).liquidity()));
         console.log("---");
     }
 
@@ -211,14 +209,14 @@ contract IntegrationForkTest is Test {
         // ── 2. Collateral price +10% -> rebalance until back in band ───────
         (uint256 itersUp, uint256 hfUp) = _shockPriceAndRebalanceUntilOk(realPrice * 110 / 100);
         console.log("Lever rebalance: iterations =", itersUp, "| HF final =", hfUp / 1e15);
-        assertGe(hfUp, HF_MIN, "HF >= min after +10% shock rebalanced");
-        assertLe(hfUp, HF_MAX, "HF <= max after +10% shock rebalanced");
+        assertGe(hfUp, HEALTH_FACTOR_MIN, "HF >= min after +10% shock rebalanced");
+        assertLe(hfUp, HEALTH_FACTOR_MAX, "HF <= max after +10% shock rebalanced");
 
         // ── 3. Collateral price -10% (from original) -> rebalance until ok ─
         (uint256 itersDown, uint256 hfDown) = _shockPriceAndRebalanceUntilOk(realPrice * 90 / 100);
         console.log("Delever rebalance: iterations =", itersDown, "| HF final =", hfDown / 1e15);
-        assertGe(hfDown, HF_MIN, "HF >= min after -10% shock rebalanced");
-        assertLe(hfDown, HF_MAX, "HF <= max after -10% shock rebalanced");
+        assertGe(hfDown, HEALTH_FACTOR_MIN, "HF >= min after -10% shock rebalanced");
+        assertLe(hfDown, HEALTH_FACTOR_MAX, "HF <= max after -10% shock rebalanced");
 
         // ── 4. Restore price to original, then everyone slowly withdraws ───
         vm.mockCall(MARKET_ORACLE, abi.encodeWithSelector(IOracle.price.selector), abi.encode(realPrice));
@@ -264,7 +262,7 @@ contract IntegrationForkTest is Test {
         console.log("HF right after price shock:", hfFinal / 1e15);
 
         for (uint256 i = 0; i < MAX_REBALANCE_ITERATIONS; i++) {
-            if (hfFinal >= HF_MIN && hfFinal <= HF_MAX) break;
+            if (hfFinal >= HEALTH_FACTOR_MIN && hfFinal <= HEALTH_FACTOR_MAX) break;
             vault.rebalance();
             _arbPoolToSpot();
             hfFinal = _hf();
@@ -298,7 +296,7 @@ contract IntegrationForkTest is Test {
     ///      pool back to `cleanSpot` after a vault interaction has moved it.
     ///      Mirrors the pattern used by `SandwichFork.t.sol`.
     function _arbPoolToSpot() internal {
-        (uint160 currentSpot,,,,,,) = IUniswapV3Pool(YIELD_DEBT_POOL).slot0();
+        (uint160 currentSpot,,,,,,) = IUniswapV3Pool(YIELD_LOAN_POOL).slot0();
         if (currentSpot < cleanSpot) {
             vm.prank(arb);
             ISwapRouter02(address(SwapLib.SWAP_ROUTER))
@@ -306,7 +304,7 @@ contract IntegrationForkTest is Test {
                     ISwapRouter02.ExactInputSingleParams({
                     tokenIn: address(FUSDEV),
                     tokenOut: address(PYUSD0),
-                    fee: FEE_YIELD_DEBT,
+                    fee: YIELD_LOAN_POOL_FEE,
                     recipient: arb,
                     amountIn: 100_000_000e18,
                     amountOutMinimum: 0,
@@ -320,7 +318,7 @@ contract IntegrationForkTest is Test {
                     ISwapRouter02.ExactInputSingleParams({
                     tokenIn: address(PYUSD0),
                     tokenOut: address(FUSDEV),
-                    fee: FEE_YIELD_DEBT,
+                    fee: YIELD_LOAN_POOL_FEE,
                     recipient: arb,
                     amountIn: 100_000_000e6,
                     amountOutMinimum: 0,
@@ -349,7 +347,7 @@ contract IntegrationForkTest is Test {
             Math.Rounding.Ceil
         );
         uint256 maxBorrow =
-            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(IOracle(MARKET_ORACLE).price(), LLTV, 1e36), 1e18);
+            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(IOracle(MARKET_ORACLE).price(), MARKET_LLTV, 1e36), 1e18);
         return Math.mulDiv(maxBorrow, 1e18, debt);
     }
 
