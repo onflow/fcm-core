@@ -40,9 +40,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     /// https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/token/ERC20/extensions/ERC4626.sol#L32-L39
     uint8 internal constant DECIMALS_OFFSET = 6;
 
-    /// @dev Hard cap on the management fee (10%/yr) - admin cannot exceed.
+    /// @dev Hard cap on the management fee (10%/yr) - owner cannot exceed.
     uint256 internal constant MAX_MANAGEMENT_FEE_BPS = 1000;
-    /// @dev Hard cap on the performance fee (50%) - admin cannot exceed.
+    /// @dev Hard cap on the performance fee (50%) - owner cannot exceed.
     uint256 internal constant MAX_PERFORMANCE_FEE_BPS = 5000;
 
     /// @inheritdoc IFCMVault
@@ -118,7 +118,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         _logVaultState();
     }
 
-    constructor(InitParams memory p) ERC20(p.name, p.symbol) Ownable(p.admin) {
+    constructor(InitParams memory p) ERC20(p.name, p.symbol) Ownable(p.owner) {
         require(p.healthFactorMin >= MarketLib.WAD, BelowMinWad(p.healthFactorMin));
         require(
             p.healthFactorMin <= p.healthFactorMinTarget,
@@ -152,17 +152,15 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         MARKET_ORACLE = p.marketOracle;
         MARKET_IRM = p.marketIrm;
         MARKET_LLTV = p.marketLltv;
+        RECOVERY_DELAY = p.recoveryDelay;
+        maxSlippageBps = p.maxSlippageBps;
 
         uint256 maxAllowance = type(uint256).max;
         p.collateral.forceApprove(address(MarketLib.MORPHO), maxAllowance);
         p.loanToken.forceApprove(address(MarketLib.MORPHO), maxAllowance);
         p.loanToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
         p.yieldToken.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
-        // redeem's Case-B flash sells collateral for the debt shortfall.
         p.collateral.forceApprove(address(SwapLib.SWAP_ROUTER), maxAllowance);
-
-        RECOVERY_DELAY = p.recoveryDelay;
-        maxSlippageBps = 100; // 1% default; admin retunes per pool depth.
 
         lastFeeAccrual = block.timestamp;
         // Seed the HWM at the starting price-per-share so the first deposit isn't counted as performance.

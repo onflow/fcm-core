@@ -71,7 +71,8 @@ contract FCMVaultFactoryTest is Test {
             healthFactorMaxTarget: 1.6e18,
             yieldFactorMax: 1.01e18,
             yieldOracle: IOracle(address(yieldOracle)),
-            admin: deployer,
+            owner: deployer,
+            maxSlippageBps: 100,
             recoveryDelay: 7 days,
             name: "Flow Credit Markets WETH",
             symbol: "fcmWETH"

@@ -77,7 +77,8 @@ contract DeployVault is ConfiguredScript {
                 healthFactorMaxTarget: c.healthFactorMaxTarget,
                 yieldFactorMax: c.yieldFactorMax,
                 yieldOracle: IOracle(yieldOracle),
-                admin: deployer,
+                owner: deployer,
+                maxSlippageBps: 100,
                 recoveryDelay: c.recoveryDelay,
                 name: name,
                 symbol: symbol

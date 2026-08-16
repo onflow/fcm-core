@@ -26,8 +26,9 @@ interface IFCMVault is IERC4626 {
         uint256 healthFactorMaxTarget;
         uint256 yieldFactorMax;
         IOracle yieldOracle;
-        address admin;
+        address owner;
         uint256 recoveryDelay;
+        uint256 maxSlippageBps;
         string name;
         string symbol;
     }
@@ -46,7 +47,7 @@ interface IFCMVault is IERC4626 {
     /// @param loanOut Over-funded loan token remainder swept back to the owner.
     event EmergencyRecoveryExecuted(uint256 debtRepaid, uint256 collateralOut, uint256 yieldOut, uint256 loanOut);
 
-    /// @notice Emitted when the admin updates the fee recipient (old + new).
+    /// @notice Emitted when the owner updates the fee recipient (old + new).
     /// @param oldRecipient Previous fee recipient.
     /// @param newRecipient New fee recipient.
     event FeeRecipientSet(address indexed oldRecipient, address indexed newRecipient);
@@ -60,19 +61,19 @@ interface IFCMVault is IERC4626 {
     /// @param yieldSold Yield token sold (the surplus above debt backing).
     /// @param collateralAdded Collateral supplied from the swap proceeds.
     event Harvested(uint256 yieldSold, uint256 collateralAdded);
-    /// @notice Emitted when the admin updates the management fee (old + new).
+    /// @notice Emitted when the owner updates the management fee (old + new).
     /// @param oldBps Previous management fee rate, in basis points.
     /// @param newBps New management fee rate, in basis points.
     event ManagementFeeSet(uint256 oldBps, uint256 newBps);
-    /// @notice Emitted when the admin updates `maxSlippageBps`.
+    /// @notice Emitted when the owner updates `maxSlippageBps`.
     /// @param oldBps Previous slippage tolerance, in basis points.
     /// @param newBps New slippage tolerance, in basis points.
     event MaxSlippageBpsSet(uint256 oldBps, uint256 newBps);
-    /// @notice Emitted when the admin updates the TVL limit.
+    /// @notice Emitted when the owner updates the TVL limit.
     /// @param previousMaxTvl Previous TVL limit.
     /// @param newMaxTvl New TVL limit.
     event MaxTvlSet(uint256 previousMaxTvl, uint256 newMaxTvl);
-    /// @notice Emitted when the admin updates the performance fee (old + new).
+    /// @notice Emitted when the owner updates the performance fee (old + new).
     /// @param oldBps Previous performance fee rate, in basis points.
     /// @param newBps New performance fee rate, in basis points.
     event PerformanceFeeSet(uint256 oldBps, uint256 newBps);
@@ -311,7 +312,7 @@ interface IFCMVault is IERC4626 {
 
     // - Admin-controlled parameters & fees ---------
     /// @notice TVL limit, denominated in the vault's Asset token. Enforced by `super.deposit`, which reverts with
-    /// `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`. Default 0 -> no deposits until admin raises
+    /// `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`. Default 0 -> no deposits until owner raises
     /// it.
     /// - This constraint prevents all deposits/mints which would cause the vault to exceed the configured TVL limit
     /// after the deposit/mint completes.
@@ -325,7 +326,7 @@ interface IFCMVault is IERC4626 {
     /// swap's `sqrtPriceLimitX96` to the oracle price discounted by this amount, so the pool fills only while its
     /// marginal price stays within tolerance and partial-fills (or skips) past it - rather than reverting. Bounds
     /// price impact, not the pool's fixed LP fee. Applies only to vault-initiated rebalances - deposit/redeem
-    /// slippage is the caller's responsibility, set via the ERC4626 router. Defaults to 1%, admin-adjustable.
+    /// slippage is the caller's responsibility, set via the ERC4626 router. Defaults to 1%, owner-adjustable.
     function maxSlippageBps() external view returns (uint256);
     /// @notice Flat yearly management fee on NAV, in basis points. 0 = off.
     /// @dev Linear accrual of the annual rate; bounded by the 10% cap.

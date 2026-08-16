@@ -155,7 +155,8 @@ contract IntegrationForkTest is Test {
                 healthFactorMaxTarget: HF_MAX_TARGET,
                 yieldFactorMax: YIELD_FACTOR_MAX,
                 yieldOracle: YIELD_ORACLE,
-                admin: admin,
+                owner: admin,
+                maxSlippageBps: 100,
                 recoveryDelay: 7 days,
                 name: "fcmWBTC-integration-fork",
                 symbol: "fcmWBTC-IF"

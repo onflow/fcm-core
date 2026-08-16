@@ -85,7 +85,8 @@ contract TvlLimitTest is Test {
                 healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
                 yieldFactorMax: YIELD_FACTOR_MAX,
                 yieldOracle: IOracle(address(yieldOracle)),
-                admin: admin,
+                owner: admin,
+                maxSlippageBps: 100,
                 recoveryDelay: 7 days,
                 name: "Flow Credit Markets WETH",
                 symbol: "fcmWETH"
