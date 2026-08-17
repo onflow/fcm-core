@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
 import {console} from "forge-std/console.sol";
 
-import {FCMVault} from "../src/FCMVault.sol";
-import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
-import {ISwapRouter02} from "../src/interfaces/external/ISwapRouter02.sol";
-import {IUniswapV3Pool} from "../src/interfaces/external/IUniswapV3Pool.sol";
-import {MarketLib} from "../src/libraries/MarketLib.sol";
-import {SwapLib} from "../src/libraries/SwapLib.sol";
+import {FCMVault} from "../../src/FCMVault.sol";
+import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
+import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
+import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
+import {MarketLib} from "../../src/libraries/MarketLib.sol";
+import {SwapLib} from "../../src/libraries/SwapLib.sol";
 import {Id, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
@@ -31,7 +31,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 ///
 ///         Goal: quantify, at realistic TVL,
 ///           1. How much value a sandwich attacker can extract from a single
-///              vault rebalance (`test_Sandwich_SingleSweep_VaultLossBounded`).
+///              vault rebalance (`test_sandwich_singleSweepVaultLossBounded`).
 ///           2. How many rebalance rounds / how long it takes an attacker to
 ///              push the vault back to a normal health factor, and their
 ///              net cost for doing so (`test_Sandwich_SoftDOS_...`).
@@ -47,7 +47,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 ///         curve a synthetic mock would model. `vault.maxSlippageBps` (1%) is
 ///         a bound on price *impact* relative to the oracle, not a guarantee
 ///         that 1% of headroom buys a proportional amount of fill. Empirically
-///         (`test_Sandwich_SoftDOS_RebalanceUntilNormal`), the lever swap fills
+///         (`test_sandwich_softDOSRebalanceUntilNormal`), the lever swap fills
 ///         fine through ~40bps of attacker push (a few rebalance calls fully
 ///         re-lever the vault), then the fillable amount collapses by >30x
 ///         between 40bps and 45bps of push and the vault can no longer
@@ -250,7 +250,7 @@ contract SandwichForkTest is Test {
     //         vault rebalance at realistic ($1M) TVL?
     // =====================================================================
 
-    function test_Sandwich_SingleSweep_VaultLossBounded() public {
+    function test_sandwich_singleSweepVaultLossBounded() public {
         console.log("=== Single sandwich sweep: 0.05% to 0.95% push (REAL pool, $1M TVL) ===");
         console.log("pushBps | attackerProfit($) | debtAdded(PYUSD) | yieldBought(mFUSDEV) | overpayBps | tvl$");
 
@@ -318,7 +318,7 @@ contract SandwichForkTest is Test {
     //         the "IMPORTANT" note in the contract-level doc comment above.
     // =====================================================================
 
-    function test_Sandwich_SoftDOS_RebalanceUntilNormal() public {
+    function test_sandwich_softDOSRebalanceUntilNormal() public {
         console.log("=== Soft DOS: rebalance until normal HF or 100 iterations ($1M TVL) ===");
         console.log("pushBps | iterations | attackerNet($) | hfFinal | tvl$");
 
@@ -369,7 +369,7 @@ contract SandwichForkTest is Test {
     //         grief the vault's rebalance path at realistic TVL.
     // =====================================================================
 
-    function test_Sandwich_HardDOS_Push1Percent_100Times() public {
+    function test_sandwich_hardDOSPush1Percent100Times() public {
         vm.revertToState(snap);
         _arbPoolToSpot();
 

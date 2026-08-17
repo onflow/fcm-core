@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {IUniswapV3Factory} from "./interfaces/IUniswapV3Factory.sol";

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
-/// @dev Morpho IOracle-compatible mock: returns a fixed 1e36-scaled price.
 contract MockOracle {
     uint256 public priceValue;
 

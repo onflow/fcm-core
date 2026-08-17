@@ -1,26 +1,30 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.25;
+pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
 import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {Deployers} from "./utils/Deployers.sol";
+import {Errors} from "./utils/Errors.sol";
 import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
 contract FCMEmergencyRecoveryTest is Test, Deployers {
     using VaultHelpers for FCMVault;
-    bytes errorBobUnauthorized = abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(bob));
-    bytes errorNotReady = abi.encodeWithSelector(IFCMVault.EmergencyRecoveryNotReady.selector);
-    bytes errorActive = abi.encodeWithSelector(IFCMVault.EmergencyRecoveryActive.selector);
+    bytes errorBobUnauthorized = Errors.ownableUnauthorizedAccount(address(bob));
+    bytes errorNotReady = Errors.emergencyRecoveryNotReady();
+    bytes errorActive = Errors.emergencyRecoveryActive();
 
     function setUp() public {
         deployVault();
+
+        vm.prank(owner);
+        vault.setMaxTvl(1e21);
+        vault.grantFundApprove(alice, 1 ether);
     }
 
-    function test_OnlyOwner() public {
+    function test_emergencyRecovery_onlyOwner() public {
         vm.prank(bob);
         vm.expectRevert(errorBobUnauthorized);
         vault.scheduleEmergencyRecovery();
@@ -43,10 +47,16 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
         vault.executeEmergencyRecovery();
     }
 
-    function test_RecoveryDelay() public {
+    function test_emergencyRecovery_noScheduled() public {
+        vm.prank(owner);
+        vm.expectRevert(errorNotReady);
+        vault.executeEmergencyRecovery();
+    }
+
+    function test_emergencyRecovery_recoveryDelay() public {
         vm.startPrank(owner);
         vault.scheduleEmergencyRecovery();
-        uint256 snapshot = vm.snapshot();
+        uint256 snapshot = vm.snapshotState();
 
         assertEq(vault.emergencyRecoveryValidAt(), block.timestamp + vault.EMERGENCY_RECOVERY_DELAY());
         assertEq(vault.emergencyRecoveryActive(), true);
@@ -58,12 +68,12 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
         vm.warp(vault.emergencyRecoveryValidAt());
         vault.executeEmergencyRecovery();
 
-        vm.revertTo(snapshot);
+        vm.revertToState(snapshot);
         vm.warp(vault.emergencyRecoveryValidAt() * 2);
         vault.executeEmergencyRecovery();
     }
 
-    function test_doubleSchedule() public {
+    function test_emergencyRecovery_scheduleTwiceIsIdempotent() public {
         vm.startPrank(owner);
         vault.scheduleEmergencyRecovery();
         vault.scheduleEmergencyRecovery();
@@ -71,23 +81,23 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
         assertEq(vault.emergencyRecoveryActive(), true);
     }
 
-    function test_cancelNotScheduled() public {
+    function test_emergencyRecovery_cancelNotScheduled() public {
         vm.startPrank(owner);
         vault.cancelEmergencyRecovery();
-        assertEq(vault.emergencyRecoveryValidAt(), 0, "recovery not scheduled");
+        assertEq(vault.emergencyRecoveryValidAt(), 0);
         assertEq(vault.emergencyRecoveryActive(), false);
     }
 
-    function test_doubleCancel() public {
+    function test_emergencyRecovery_cancelTwiceIsIdempotent() public {
         vm.startPrank(owner);
         vault.scheduleEmergencyRecovery();
         vault.cancelEmergencyRecovery();
         vault.cancelEmergencyRecovery();
-        assertEq(vault.emergencyRecoveryValidAt(), 0, "recovery not scheduled");
+        assertEq(vault.emergencyRecoveryValidAt(), 0);
         assertEq(vault.emergencyRecoveryActive(), false);
     }
 
-    function test_noCancelAfterExecute() public {
+    function test_emergencyRecovery_noCancelAfterExecute() public {
         vm.startPrank(owner);
         vault.scheduleEmergencyRecovery();
         uint64 emergencyRecoveryValidAt = vault.emergencyRecoveryValidAt();
@@ -98,16 +108,16 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
         vault.cancelEmergencyRecovery();
     }
 
-    function test_cancelBeforeExecute() public {
+    function test_emergencyRecovery_cancelBeforeExecute() public {
         vm.startPrank(owner);
         vault.scheduleEmergencyRecovery();
         vm.warp(vault.emergencyRecoveryValidAt());
         vault.cancelEmergencyRecovery();
-        assertEq(vault.emergencyRecoveryValidAt(), 0, "recovery not scheduled");
+        assertEq(vault.emergencyRecoveryValidAt(), 0);
         assertEq(vault.emergencyRecoveryActive(), false);
     }
 
-    function test_events() public {
+    function test_emergencyRecovery_emitsScheduleAndCancelEvents() public {
         uint256 expectedValidAt = block.timestamp + vault.EMERGENCY_RECOVERY_DELAY();
         vm.expectEmit(true, false, false, true);
         emit IFCMVault.EmergencyRecoveryScheduled(expectedValidAt);
@@ -122,13 +132,12 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
         vm.stopPrank();
     }
 
-    function test_happyPath() public {
-        setCollateralPrice(10 ether);
-        setYieldPrice(0.1 ether);
+    function test_emergencyRecovery_executeSweepsAllAssetsToOwner() public {
         uint256 originalCollateral = 1 ether;
-        vault.depositFor(alice, originalCollateral);
+        vm.prank(alice);
+        vault.deposit(originalCollateral, alice);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
-        assertNotEq(originalYield, 0, "originalYield should not be 0");
+        assertNotEq(originalYield, 0);
 
         assertEq(COLLATERAL_TOKEN.balanceOf(address(owner)), 0);
         assertEq(YIELD_TOKEN.balanceOf(address(owner)), 0);
@@ -154,8 +163,8 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
         uint256 collateralOut = COLLATERAL_TOKEN.balanceOf(owner);
         uint256 yieldOut = YIELD_TOKEN.balanceOf(owner);
 
-        assertEq(collateralOut, originalCollateral, "collateralOut should be originalCollateral");
-        assertEq(yieldOut, originalYield, "yieldOut should be originalYield");
+        assertEq(collateralOut, originalCollateral);
+        assertEq(yieldOut, originalYield);
 
         for (uint256 i = 0; i < entries.length; i++) {
             if (entries[i].topics[0] == IFCMVault.EmergencyRecoveryExecuted.selector) {
@@ -164,14 +173,14 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
 
                 assertEq(collateralOut, collateralOutRecorded);
                 assertEq(yieldOut, yieldOutRecorded);
-                assertEq(0, loanOutRecorded, "loanOutRecorded should be 0");
+                assertEq(0, loanOutRecorded);
                 return;
             }
         }
         revert("EmergencyRecoveryExecuted event not found");
     }
 
-    function test_unaccountedTokens() public {
+    function test_emergencyRecovery_unaccountedTokens() public {
         LOAN_TOKEN.mint(address(vault), 1 ether);
         COLLATERAL_TOKEN.mint(address(vault), 1 ether);
         YIELD_TOKEN.mint(address(vault), 1 ether);
@@ -181,8 +190,8 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
         vm.warp(vault.emergencyRecoveryValidAt());
         vault.executeEmergencyRecovery();
 
-        assertEq(LOAN_TOKEN.balanceOf(address(owner)), 1 ether, "loan not swept");
-        assertEq(COLLATERAL_TOKEN.balanceOf(address(owner)), 1 ether, "collateral not swept");
-        assertEq(YIELD_TOKEN.balanceOf(address(owner)), 1 ether, "yield not swept");
+        assertEq(LOAN_TOKEN.balanceOf(address(owner)), 1 ether);
+        assertEq(COLLATERAL_TOKEN.balanceOf(address(owner)), 1 ether);
+        assertEq(YIELD_TOKEN.balanceOf(address(owner)), 1 ether);
     }
 }

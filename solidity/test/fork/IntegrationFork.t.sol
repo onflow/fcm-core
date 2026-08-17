@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
+import {FCMVault} from "../../src/FCMVault.sol";
+import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
+import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
+import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
+import {MarketLib} from "../../src/libraries/MarketLib.sol";
+import {SwapLib} from "../../src/libraries/SwapLib.sol";
+import {Id, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
+import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
 import {console} from "forge-std/console.sol";
-
-import {FCMVault} from "../src/FCMVault.sol";
-import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
-import {ISwapRouter02} from "../src/interfaces/external/ISwapRouter02.sol";
-import {IUniswapV3Pool} from "../src/interfaces/external/IUniswapV3Pool.sol";
-import {MarketLib} from "../src/libraries/MarketLib.sol";
-import {SwapLib} from "../src/libraries/SwapLib.sol";
-import {Id, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
-import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
-import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 
 /// @notice Full-lifetime integration test: a realistic $1M-TVL FCMVault built
 ///         up from 100 individual $10k deposits, on a Flow mainnet fork
@@ -196,7 +195,7 @@ contract IntegrationForkTest is Test {
     // Test: full livetime lifecycle at realistic ($1M TVL vs $20k pool) scale
     // =====================================================================
 
-    function test_Integration_FullLifecycle_Realistic() public {
+    function test_integration_fullLifecycleRealistic() public {
         vm.startPrank(address(0x1337));
         deal(address(WBTC), address(0x1337), 1e18);
         WBTC.approve(address(MarketLib.MORPHO), type(uint256).max);

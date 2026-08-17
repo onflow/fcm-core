@@ -312,7 +312,8 @@ interface IFCMVault is IERC4626 {
     /// swap's `sqrtPriceLimitX96` to the oracle price discounted by this amount, so the pool fills only while its
     /// marginal price stays within tolerance and partial-fills (or skips) past it - rather than reverting. Bounds
     /// price impact, not the pool's fixed LP fee. Applies only to vault-initiated rebalances - deposit/redeem
-    /// slippage is the caller's responsibility, set via the ERC4626 router. Defaults to 1%, owner-adjustable.
+    /// slippage is the caller's responsibility, set via the ERC4626 router. Defaults to 0 (off) at deploy time -
+    /// rebalance/harvest swaps no-op until the owner sets a non-zero tolerance. Owner-adjustable.
     function maxSlippageBps() external view returns (uint256);
     /// @notice Flat yearly management fee on NAV, in basis points. 0 = off.
     /// @dev Linear accrual of the annual rate; bounded by the 10% cap.
