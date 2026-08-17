@@ -31,4 +31,15 @@ library VaultHelpers {
         shares = vault.deposit(amount, who);
         VM.stopPrank();
     }
+
+    function grantFundApprove(FCMVault vault, address who, uint256 amount) internal {
+        VM.prank(vault.owner());
+        vault.grantEarlyAccess(who);
+
+        MockERC20 token = MockERC20(address(vault.COLLATERAL_TOKEN()));
+        token.mint(who, amount);
+
+        VM.prank(who);
+        token.approve(address(vault), amount);
+    }
 }
