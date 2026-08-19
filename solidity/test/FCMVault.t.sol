@@ -51,6 +51,10 @@ contract FCMVaultTest is Test {
     uint24 internal constant COLLATERAL_LOAN_POOL_FEE = 3000;
     MockUniswapV3Pool internal yieldLoanPool;
     uint24 internal constant YIELD_LOAN_POOL_FEE = 100;
+    // Aliases used by the risk-disclosures tests (matching the incoming
+    // ce16f7b version's naming, so those tests compile unchanged).
+    uint24 internal constant FEE = YIELD_LOAN_POOL_FEE; // 100
+    uint24 internal constant FEE_ASSET_DEBT = COLLATERAL_LOAN_POOL_FEE; // 3000
 
     address constant MOCK_MARKET_IRM = 0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546;
 
@@ -2156,6 +2160,223 @@ contract FCMVaultTest is Test {
         vm.stopPrank();
 
         assertGt(vault.balanceOf(feeRcpt), 0, "fee accrued via the redeemInKind path");
+    }
+
+    // ---- risk-disclosures.md coverage --------------------------------------
+    // Tests below exercise the by-design cost/risk items documented in
+    // docs/risk-disclosures.md, so the disclosures stay grounded in actual
+    // vault behavior rather than only in prose.
+
+    /// @notice risk-disclosures.md §1.1: deposit's borrow->yield swap uses
+    ///         `swapExactIn` (`amountOutMinimum = 0`, no price limit) — unlike
+    ///         rebalance/harvest, which bound their swaps to `maxSlippageBps`
+    ///         and skip rather than fill at a bad price (see
+    ///         test_Rebalance_LeverSkipsWhenSpotPastBound). An extreme pool
+    ///         fee still lets `deposit` go through; the entire cost lands on
+    ///         the depositor's own NAV contribution, uncapped.
+    function test_Deposit_NoSlippageProtection_AcceptsAnyPrice() public {
+        // Extreme haircut on the yield/debt pool tier deposit's borrow->yield
+        // leg routes through.
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBpsForPool(FEE, 9900); // 99%
+
+        uint256 amount = 1 ether;
+        MockERC20(address(WETH)).mint(user, amount);
+        vm.startPrank(user);
+        WETH.approve(address(vault), amount);
+        uint256 shares = vault.deposit(amount, user);
+        vm.stopPrank();
+
+        assertGt(shares, 0, "deposit succeeds despite the terrible price -- no min-out to trip");
+        // The depositor supplied `amount` collateral and took on proportional
+        // debt, but the swap of that debt into yield realized only ~1% of fair
+        // value: their NAV contribution is gutted well below half of `amount`.
+        assertLt(vault.convertToAssets(shares), amount / 2, "bad price directly costs the depositor, uncapped");
+    }
+
+    /// @notice risk-disclosures.md §1.1: redeem's yield->loan swap is
+    ///         likewise unprotected (`swapExactIn`). An extreme pool fee
+    ///         still lets `redeem` go through rather than reverting; it is
+    ///         Case B's flash-loan-and-sell-collateral fallback (see
+    ///         `_unwindSlice`) that makes the redeemer whole, not any
+    ///         swap-level slippage bound -- there is none on this leg.
+    function test_Redeem_NoSlippageProtection_AcceptsAnyPrice() public {
+        marketOracle.setPrice(1e36); // 1:1 so the mock's constant-rate swap matches debtToCollateral
+        uint256 shares = _depositFor(user, 1 ether);
+
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBpsForPool(FEE, 9900); // 99%
+        // Fund the singleton's collateral balance so the Case-B flash (triggered by
+        // Ceil'd debtSlice) can lend collSlice AND the in-callback withdraw can draw collSlice.
+        MockERC20(address(WETH)).mint(address(MORPHO), 2 ether);
+
+        uint256 collBefore = WETH.balanceOf(address(MORPHO));
+
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(shares, user, user);
+
+        assertLt(
+            WETH.balanceOf(address(MORPHO)),
+            collBefore,
+            "collateral sold to cover the shortfall the bad price left behind"
+        );
+        assertEq(vault.balanceOf(user), 0, "shares burned; redeem did not revert on the bad price");
+        assertGt(assetsOut, 0, "redeemer still made whole via Case B, not a swap-level protection");
+    }
+
+    /// @notice risk-disclosures.md §9: a fully-utilized Morpho market (no
+    ///         spare lender supply) blocks `deposit` outright -- the vault has
+    ///         no supply-only fallback if the market can't absorb the borrow leg.
+    function test_Deposit_RevertsWhenMorphoMarketIlliquid() public {
+        MarketParams memory mp = vault.getMarket();
+        // Effectively zero borrow headroom -- mirrors a fully-utilized market.
+        MockMorpho(address(MORPHO)).setBorrowCap(mp, 1);
+
+        uint256 amount = 1 ether;
+        MockERC20(address(WETH)).mint(user, amount);
+        vm.startPrank(user);
+        WETH.approve(address(vault), amount);
+        vm.expectRevert(bytes("INSUFFICIENT_LIQUIDITY"));
+        vault.deposit(amount, user);
+        vm.stopPrank();
+    }
+
+    /// @notice risk-disclosures.md §9: the same fully-utilized-market condition
+    ///         also blocks `rebalance`'s lever-up leg -- and because the whole call
+    ///         is one transaction, the revert unwinds any harvest work that already
+    ///         ran earlier in the same `rebalance()` call.
+    function test_Rebalance_LeverRevertsWhenMorphoMarketIlliquid() public {
+        _depositFor(user, 1 ether);
+
+        // Push HF above max so rebalance wants to lever up (borrow more).
+        marketOracle.setPrice(2300e36);
+
+        MarketParams memory mp = vault.getMarket();
+        Market memory mkt = MORPHO.market(MarketParamsLib.id(mp));
+        // Cap total debt at exactly what's already outstanding -- no spare
+        // capacity for the additional borrow rebalance wants.
+        MockMorpho(address(MORPHO)).setBorrowCap(mp, mkt.totalBorrowAssets);
+
+        vm.expectRevert(bytes("INSUFFICIENT_LIQUIDITY"));
+        vault.rebalance();
+    }
+
+    /// @notice risk-disclosures.md §9: Morpho's own health check blocks ANY
+    ///         collateral withdrawal while the position is already unhealthy --
+    ///         even redeem's HF-neutral, proportional repay-then-withdraw,
+    ///         since the ratio it preserves is already below 1. `rebalance`'s
+    ///         delever leg is a pure repay (no withdrawal) and so can restore
+    ///         health without tripping the same check, unblocking redeem again.
+    /// @dev    The mock doesn't derive "unhealthy" from oracle/LTV math --
+    ///         it isn't asked to by the vault, which computes its own health
+    ///         factor from raw state. Instead the test marks the position
+    ///         blocked directly (`setMinCollateral`), matching what a real
+    ///         underwater position's Morpho check would do, then clears it to
+    ///         represent the check passing again once health is restored.
+    function test_Redeem_BlockedWhileUnderwater_ThenRebalanceUnblocksIt() public {
+        _depositFor(user, 1 ether);
+
+        // Partial liquidation: seize ~35% of collateral, no debt repaid.
+        // maxBorrow falls to ~0.65x, landing HF at ~0.94 (just underwater).
+        _liquidate({seizedCollateral: 0.35 ether, repaidAssets: 0});
+        assertLt(_healthFactor(), 1e18, "underwater after liquidation");
+
+        // Mark the position blocked: any withdrawal reverts, mirroring what
+        // Morpho's own health check would do while underwater.
+        MarketParams memory mp = vault.getMarket();
+        MockMorpho(address(MORPHO)).setMinCollateral(mp, address(vault), type(uint256).max);
+
+        uint256 shares = vault.balanceOf(user) / 2;
+        vm.prank(user);
+        vm.expectRevert(IFCMVault.VaultUnhealthy.selector);
+        vault.redeem(shares, user, user);
+
+        // A pure repay (no withdraw) lifts HF back above 1; the block itself
+        // is cleared here to represent Morpho's check passing again now that
+        // the position is healthy.
+        vault.rebalance();
+        assertGe(_healthFactor(), 1e18, "rebalance restores health");
+        MockMorpho(address(MORPHO)).setMinCollateral(mp, address(vault), 0);
+
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(shares, user, user);
+        assertGt(assetsOut, 0, "redeem succeeds once the position is healthy again");
+    }
+
+    /// @notice risk-disclosures.md §4/§5: after a partial liquidation, a
+    ///         realistic recovery (one `rebalance()` delever, paying the
+    ///         yield/debt pool's real-world fee tier) restores the position
+    ///         to the health-factor band at a swap cost well within a budget
+    ///         scaled to the fraction actually liquidated -- a small partial
+    ///         liquidation needs a proportionally small delever, so it should
+    ///         cost proportionally less than a full wipeout would. The
+    ///         recovery path does not compound the damage.
+    function test_Recovery_AfterLiquidation_BoundedExtraLossRestoringHealth() public {
+        // Realistic swap cost on the yield/debt leg the delever routes
+        // through (FlowSwap's PYUSD0/yield-token tier is 0.01%, see README).
+        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setFeeBpsForPool(FEE, 1);
+
+        uint256 depositAmount = 10 ether;
+        _depositFor(user, depositAmount);
+
+        // Partial liquidation: seize ~35% of collateral, no debt repaid --
+        // a realistic partial liquidation, not a wipeout. HF falls to ~0.94.
+        uint256 liquidatedFractionBps = 3500; // 35%
+        _liquidate({seizedCollateral: depositAmount * liquidatedFractionBps / 10_000, repaidAssets: 0});
+        assertLt(_healthFactor(), 1e18, "underwater after liquidation");
+        uint256 navAfterLiquidation = vault.totalAssets();
+
+        // Recover: one delever repays enough debt from yield to clear the
+        // band's lower bound again.
+        vault.rebalance();
+        assertGe(_healthFactor(), HEALTH_FACTOR_MIN, "back inside the band");
+        uint256 navAfterRecovery = vault.totalAssets();
+
+        // Budget: 2% of NAV for a *full* liquidation, scaled down to the
+        // fraction actually liquidated here (35%) -- 2% * 35% = 0.7%.
+        uint256 maxExtraLossBps = 200 * liquidatedFractionBps / 10_000;
+        assertGe(
+            navAfterRecovery,
+            navAfterLiquidation * (10_000 - maxExtraLossBps) / 10_000,
+            "recovery costs <= 2% * liquidated fraction of NAV beyond the liquidation loss itself"
+        );
+    }
+
+    /// @notice risk-disclosures.md §4/§5: a *full* liquidation (100% of
+    ///         collateral seized, no debt repaid) wipes the position's
+    ///         collateral entirely while debt survives intact -- the worst
+    ///         case, unlike the partial liquidation above. `rebalance` must
+    ///         still not revert: its delever leg sells down all the yield it
+    ///         holds to repay as much debt as it can. Since the yield leg
+    ///         backs the debt ~1:1 right after a deposit, this fully zeroes
+    ///         the debt too -- leaving a debt-free, valueless (zero-collateral)
+    ///         position rather than a stuck one, and `redeem` still doesn't
+    ///         revert against it (it just returns ~nothing).
+    function test_Rebalance_FullLiquidation_ZeroesDebtWithoutReverting() public {
+        uint256 depositAmount = 10 ether;
+        _depositFor(user, depositAmount);
+
+        // Full liquidation: seize ALL collateral, no debt repaid.
+        _liquidate({seizedCollateral: depositAmount, repaidAssets: 0});
+        assertEq(_healthFactor(), 0, "no collateral left to back any debt");
+
+        uint256 debtBefore = _debt();
+        assertGt(debtBefore, 0, "debt survives the collateral wipeout");
+
+        // Best-effort: must not revert even though the band's target is
+        // unreachable (there is no collateral left to lever against).
+        vault.rebalance();
+
+        // The delever leg sold down all held yield (which backed the debt
+        // ~1:1) to repay as much debt as it could -- here, effectively all of it.
+        assertLt(_debt(), debtBefore, "debt reduced by delevering the yield leg");
+        assertApproxEqAbs(_debt(), 0, depositAmount / 1000, "debt fully cleared by the yield sale");
+        assertEq(_healthFactor(), type(uint256).max, "no debt left -- position reads healthy despite zero collateral");
+
+        // Vault remains functional: redeeming against the now-valueless
+        // position does not revert, it just returns ~nothing.
+        uint256 remainingShares = vault.balanceOf(user);
+        vm.prank(user);
+        uint256 assetsOut = vault.redeem(remainingShares, user, user);
+        assertEq(assetsOut, 0, "no collateral left to return");
     }
 
     // Flooring a loan amount into yield can leave the yield worth less than the debt

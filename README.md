@@ -24,6 +24,10 @@ make cadence-test   # cadence tests only (requires the Flow CLI)
 
 See [Architecture](./docs/architecture.md)
 
+## Security
+
+See [Risk Disclosures](./docs/risk-disclosures.md) for all ways funds may be lost that are intentional (fees, slippage, liquidation, rounding, etc.), and [Security Surface](./docs/security-surface.md) for dependency/byzantine failure modes.
+
 ## Deployment
 
 Deployments are **manual** and target Flow mainnet directly — see the
