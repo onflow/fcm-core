@@ -61,24 +61,23 @@ contract DeployVault is ConfiguredScript {
 
         FCMVault vault = new FCMVault(
             IFCMVault.InitParams({
-                collateral: IERC20(c.collateral),
+                collateralToken: IERC20(c.collateralToken),
                 loanToken: IERC20(c.loanToken),
                 yieldToken: IERC20(c.yieldToken),
+                healthFactorMin: c.healthFactorMin,
+                healthFactorMinTarget: c.healthFactorMinTarget,
+                healthFactorMax: c.healthFactorMax,
+                healthFactorMaxTarget: c.healthFactorMaxTarget,
+                yieldFactorMax: c.yieldFactorMax,
+                collateralLoanPool: c.collateralLoanPool,
+                collateralLoanPoolFee: c.collateralLoanPoolFee,
+                yieldLoanPool: c.yieldLoanPool,
+                yieldLoanPoolFee: c.yieldLoanPoolFee,
                 marketOracle: c.marketOracle,
                 marketIrm: c.marketIrm,
                 marketLltv: c.marketLltv,
-                feeYieldDebt: c.feeYieldDebt,
-                feeAssetDebt: c.feeAssetDebt,
-                yieldDebtPool: c.yieldDebtPool,
-                assetDebtPool: c.assetDebtPool,
-                healthFactorMin: c.healthFactorMin,
-                healthFactorMax: c.healthFactorMax,
-                healthFactorMinTarget: c.healthFactorMinTarget,
-                healthFactorMaxTarget: c.healthFactorMaxTarget,
-                yieldFactorMax: c.yieldFactorMax,
                 yieldOracle: IOracle(yieldOracle),
-                admin: deployer,
-                recoveryDelay: c.recoveryDelay,
+                owner: deployer,
                 name: name,
                 symbol: symbol
             })
@@ -89,6 +88,9 @@ contract DeployVault is ConfiguredScript {
             vault.grantEarlyAccess(grantees[i]);
         }
         vault.setMaxTvl(maxTvl);
+        // maxSlippageBps defaults to 0 (not in InitParams); set the 1% production
+        // default here so rebalance swaps don't no-op against an off-oracle pool.
+        vault.setMaxSlippageBps(100);
         vm.stopBroadcast();
 
         console.log("=== deployment complete ===");

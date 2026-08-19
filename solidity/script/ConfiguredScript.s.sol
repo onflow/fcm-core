@@ -20,24 +20,27 @@ abstract contract ConfiguredScript is Script {
 
     struct Config {
         uint256 chainId;
-        address collateral;
+
+        address collateralToken;
         address loanToken;
         address yieldToken;
+
+        uint256 healthFactorMin;
+        uint256 healthFactorMinTarget;
+        uint256 healthFactorMax;
+        uint256 healthFactorMaxTarget;
+        uint256 yieldFactorMax;
+
+        address swapFactory;
+        address collateralLoanPool;
+        uint24 collateralLoanPoolFee;
+        address yieldLoanPool;
+        uint24 yieldLoanPoolFee;
+
         address marketOracle;
         address marketIrm;
         uint256 marketLltv;
-        uint24 feeYieldDebt;
-        uint24 feeAssetDebt;
-        uint256 healthFactorMin;
-        uint256 healthFactorMax;
-        uint256 healthFactorMinTarget;
-        uint256 healthFactorMaxTarget;
-        uint256 yieldFactorMax;
         address yieldOracle;
-        address swapFactory;
-        address yieldDebtPool;
-        address assetDebtPool;
-        uint256 recoveryDelay;
     }
 
     function _loadConfig() internal view returns (Config memory c) {
@@ -51,33 +54,33 @@ abstract contract ConfiguredScript is Script {
             c.chainId == block.chainid, string.concat("config chainId does not match RPC chain (network=", network, ")")
         );
 
-        c.collateral = vm.parseTomlAddress(toml, ".collateral");
+        c.collateralToken = vm.parseTomlAddress(toml, ".collateralToken");
         c.loanToken = vm.parseTomlAddress(toml, ".loanToken");
         c.yieldToken = vm.parseTomlAddress(toml, ".yieldToken");
-        c.marketOracle = vm.parseTomlAddress(toml, ".marketOracle");
-        c.marketIrm = vm.parseTomlAddress(toml, ".marketIrm");
-        c.marketLltv = vm.parseTomlUint(toml, ".marketLltv");
-        c.feeYieldDebt = uint24(vm.parseTomlUint(toml, ".feeYieldDebt"));
-        c.feeAssetDebt = uint24(vm.parseTomlUint(toml, ".feeAssetDebt"));
+
         c.healthFactorMin = vm.parseTomlUint(toml, ".healthFactorMin");
         c.healthFactorMax = vm.parseTomlUint(toml, ".healthFactorMax");
         c.healthFactorMinTarget = vm.parseTomlUint(toml, ".healthFactorMinTarget");
         c.healthFactorMaxTarget = vm.parseTomlUint(toml, ".healthFactorMaxTarget");
         c.yieldFactorMax = vm.parseTomlUint(toml, ".yieldFactorMax");
-        c.yieldOracle = vm.parseTomlAddress(toml, ".yieldOracle");
+
         c.swapFactory = vm.parseTomlAddress(toml, ".swapFactory");
-        c.yieldDebtPool = vm.parseTomlAddress(toml, ".yieldDebtPool");
-        // Derived from the factory rather than a separate config field: the canonical
-        // collateral/loan pool at the asset/debt fee tier, which harvest's leg 2 routes
-        // through. Existence is asserted in `_requirePoolsExist`.
-        c.assetDebtPool = IUniswapV3Factory(c.swapFactory).getPool(c.collateral, c.loanToken, c.feeAssetDebt);
-        c.recoveryDelay = vm.parseTomlUint(toml, ".recoveryDelay");
+        c.collateralLoanPool =
+            IUniswapV3Factory(c.swapFactory).getPool(c.collateralToken, c.loanToken, c.collateralLoanPoolFee);
+        c.collateralLoanPoolFee = uint24(vm.parseTomlUint(toml, ".collateralLoanPoolFee"));
+        c.yieldLoanPool = IUniswapV3Factory(c.swapFactory).getPool(c.yieldToken, c.loanToken, c.yieldLoanPoolFee);
+        c.yieldLoanPoolFee = uint24(vm.parseTomlUint(toml, ".yieldLoanPoolFee"));
+
+        c.marketOracle = vm.parseTomlAddress(toml, ".marketOracle");
+        c.marketIrm = vm.parseTomlAddress(toml, ".marketIrm");
+        c.marketLltv = vm.parseTomlUint(toml, ".marketLltv");
+        c.yieldOracle = vm.parseTomlAddress(toml, ".yieldOracle");
     }
 
     function _marketParams(Config memory c) internal pure returns (MarketParams memory) {
         return MarketParams({
             loanToken: c.loanToken,
-            collateralToken: c.collateral,
+            collateralToken: c.collateralToken,
             oracle: c.marketOracle,
             irm: c.marketIrm,
             lltv: c.marketLltv
@@ -100,10 +103,10 @@ abstract contract ConfiguredScript is Script {
 
     /// @dev Both FlowSwap pools the vault trades on must exist.
     function _requirePoolsExist(Config memory c) internal view {
-        address yieldPool = IUniswapV3Factory(c.swapFactory).getPool(c.yieldToken, c.loanToken, c.feeYieldDebt);
+        address yieldPool = IUniswapV3Factory(c.swapFactory).getPool(c.yieldToken, c.loanToken, c.yieldLoanPoolFee);
         require(yieldPool != address(0), "yield/debt pool missing");
-        require(yieldPool == c.yieldDebtPool, "config yieldDebtPool does not match factory");
-        require(c.assetDebtPool != address(0), "asset/debt pool missing");
+        require(yieldPool == c.yieldLoanPool, "config yieldLoanPool does not match factory");
+        require(c.collateralLoanPool != address(0), "asset/debt pool missing");
     }
 
     /// @dev The account whose key signs broadcast transactions. Must be

@@ -7,7 +7,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title SwapLib
 /// @author Flow Foundation
-/// @notice Thin wrapper around FlowSwap V3's SwapRouter02 on Flow EVM mainnet. Internal helpers — inlined into the
+/// @notice Thin wrapper around FlowSwap V3's SwapRouter02 on Flow EVM mainnet. Internal helpers - inlined into the
 /// caller, recipient is always `address(this)`.
 library SwapLib {
     /// @custom:security non-reentrant
@@ -55,11 +55,11 @@ library SwapLib {
     /// @dev This is the
     /// canonical Uniswap V3 mechanism for a best-effort swap under a price bound: the pool's swap loop runs while input
     /// remains AND the marginal price has not reached the limit, so the marginal (and therefore average) execution
-    /// price never crosses the limit. `amountOutMinimum` is left at 0 — protection comes entirely from the price
+    /// price never crosses the limit. `amountOutMinimum` is left at 0 - protection comes entirely from the price
     /// limit, and a non-zero minimum would revert a legitimate partial fill.
     ///
-    ///         IMPORTANT: on a partial fill the router consumes LESS than `amountIn` and leaves the unspent `tokenIn`
-    /// with the caller — the caller must account for the remainder (the vault repays it). `sqrtPriceLimitX96` MUST be
+    /// IMPORTANT: on a partial fill the router consumes LESS than `amountIn` and leaves the unspent `tokenIn`
+    /// with the caller - the caller must account for the remainder (the vault repays it). `sqrtPriceLimitX96` MUST be
     /// on the correct side of the current pool price (below it for a 0->1 swap, above it for 1->0), otherwise the pool
     /// reverts `SPL`; callers check the live price first. Caller MUST have approved `SWAP_ROUTER` for `tokenIn`.
     /// @param tokenIn Token being sold.
@@ -127,7 +127,7 @@ library SwapLib {
     /// average price is bounded by `maxSlippageBps` of price impact relative to the fair rate.
     ///
     /// `ok` is false when the limit is out of tick-math range, or when the pool's live marginal price is already on the
-    /// bad side of it (any swap would no-op or revert `SPL`) — the caller then skips.
+    /// bad side of it (any swap would no-op or revert `SPL`) - the caller then skips.
     /// @param pool The Uniswap V3 pool address for the `tokenIn`/`tokenOut` pair.
     /// @param tokenIn The token the swap sells.
     /// @param tokenOut The token the swap buys.

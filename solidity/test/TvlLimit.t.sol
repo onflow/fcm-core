@@ -19,7 +19,7 @@ import {Test} from "forge-std/Test.sol";
 
 /// @notice Tests for the TVL limit on FCMVault.
 contract TvlLimitTest is Test {
-    // Token addresses — using the real Flow EVM addresses so mocks are
+    // Token addresses - using the real Flow EVM addresses so mocks are
     // etched where the vault constants would otherwise point.
     IERC20 constant WETH = IERC20(0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590);
     IERC20 constant PYUSD0 = IERC20(0x99aF3EeA856556646C98c8B9b2548Fe815240750);
@@ -28,14 +28,14 @@ contract TvlLimitTest is Test {
 
     uint256 internal constant WETH_PRICE = 2000e36;
     uint256 internal constant YIELD_PRICE = 1e36;
-    uint256 internal constant LLTV = 0.86e18;
+    uint256 internal constant MARKET_LLTV = 0.86e18;
     uint256 internal constant HEALTH_FACTOR_MIN = 1.25e18;
     uint256 internal constant HEALTH_FACTOR_MAX = 1.65e18;
     uint256 internal constant HEALTH_FACTOR_MIN_TARGET = 1.3e18;
     uint256 internal constant HEALTH_FACTOR_MAX_TARGET = 1.6e18;
     uint256 internal constant YIELD_FACTOR_MAX = 1.01e18;
-    uint24 internal constant FEE = 100;
-    uint24 internal constant FEE_ASSET_DEBT = 3000;
+    uint24 internal constant COLLATERAL_LOAN_POOL_FEE = 3000;
+    uint24 internal constant YIELD_LOAN_POOL_FEE = 100;
 
     FCMVault internal vault;
     MockOracle internal marketOracle;
@@ -69,26 +69,25 @@ contract TvlLimitTest is Test {
 
         vault = new FCMVault(
             IFCMVault.InitParams({
-                collateral: WETH,
+                collateralToken: WETH,
                 loanToken: PYUSD0,
                 yieldToken: FUSDEV,
-                marketOracle: address(marketOracle),
-                marketIrm: MOCK_IRM,
-                marketLltv: LLTV,
-                feeYieldDebt: FEE,
-                feeAssetDebt: FEE_ASSET_DEBT,
-                yieldDebtPool: address(new MockUniswapV3Pool()),
-                assetDebtPool: address(new MockUniswapV3Pool()),
                 healthFactorMin: HEALTH_FACTOR_MIN,
-                healthFactorMax: HEALTH_FACTOR_MAX,
                 healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
+                healthFactorMax: HEALTH_FACTOR_MAX,
                 healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
                 yieldFactorMax: YIELD_FACTOR_MAX,
+                collateralLoanPool: address(new MockUniswapV3Pool()),
+                collateralLoanPoolFee: COLLATERAL_LOAN_POOL_FEE,
+                yieldLoanPool: address(new MockUniswapV3Pool()),
+                yieldLoanPoolFee: YIELD_LOAN_POOL_FEE,
+                marketOracle: address(marketOracle),
+                marketIrm: MOCK_IRM,
+                marketLltv: MARKET_LLTV,
                 yieldOracle: IOracle(address(yieldOracle)),
-                admin: admin,
-                recoveryDelay: 7 days,
-                name: "Flow Credit Markets WETH",
-                symbol: "fcmWETH"
+                owner: admin,
+                name: "fcmWBTC-sandwich-fork",
+                symbol: "fcmWBTC-SF"
             })
         );
         asset = MockERC20(address(WETH));
@@ -130,7 +129,7 @@ contract TvlLimitTest is Test {
         );
     }
 
-    // -------------------- defaults --------------------
+    // ---------- defaults ----------
 
     function test_MaxTvlDefaultsToZero() public view {
         assertEq(vault.maxTvl(), 0, "maxTvl should default to 0");
@@ -149,7 +148,7 @@ contract TvlLimitTest is Test {
         assertEq(vault.maxDeposit(owner), 0);
     }
 
-    // -------------------- setMaxTvl --------------------
+    // ---------- setMaxTvl ----------
 
     function test_SetMaxTvl_OnlyOwner() public {
         vm.prank(alice);
@@ -183,7 +182,7 @@ contract TvlLimitTest is Test {
         vault.setMaxTvl(500);
     }
 
-    // -------------------- transferOwnership --------------------
+    // ---------- transferOwnership ----------
 
     function test_TransferOwnership_OnlyOwner() public {
         vm.prank(alice);
@@ -225,13 +224,13 @@ contract TvlLimitTest is Test {
         vault.renounceOwnership();
         assertEq(vault.owner(), address(0));
 
-        // The limit is now frozen — no caller can change it.
+        // The limit is now frozen - no caller can change it.
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, owner));
         vault.setMaxTvl(2000);
         vm.stopPrank();
     }
 
-    // -------------------- deposit() limit enforcement --------------------
+    // ---------- deposit() limit enforcement ----------
 
     function test_Deposit_BelowLimitSucceeds() public {
         vm.prank(owner);
@@ -294,7 +293,7 @@ contract TvlLimitTest is Test {
         }
     }
 
-    // -------------------- maxDeposit() --------------------
+    // ---------- maxDeposit() ----------
 
     /// @dev Returned value of `maxDeposit` should reflect the remaining limit.
     function test_MaxDeposit_ReturnsRemainingCapacity() public {
@@ -317,7 +316,7 @@ contract TvlLimitTest is Test {
 
     /// @notice If the admin lowers the limit below current TVL, `maxDeposit`
     ///         must clamp to 0 rather than underflow, and new deposits must
-    ///         revert. Existing TVL stays put — the limit is not retroactive.
+    ///         revert. Existing TVL stays put - the limit is not retroactive.
     function test_MaxDeposit_ClampsToZeroWhenLimitLoweredBelowTvl() public {
         vm.prank(owner);
         vault.setMaxTvl(1000);
@@ -348,7 +347,7 @@ contract TvlLimitTest is Test {
         assertEq(vault.maxDeposit(owner), 0);
     }
 
-    // -------------------- mint() disabled --------------------
+    // ---------- mint() disabled ----------
 
     function test_Mint_AlwaysReverts() public {
         // `mint` is disabled via `maxMint()` returning 0, independent of TVL limit.

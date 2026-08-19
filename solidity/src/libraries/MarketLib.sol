@@ -12,8 +12,8 @@ import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 /// @author Flow Foundation
 /// @notice Read + write helpers around a Morpho Blue market on Flow EVM mainnet. Hardcodes the Morpho singleton so
 /// callers operate purely on a `MarketParams`. All prices follow Morpho's IOracle convention (1e36-scaled
-/// collateral→debt).
-///         Callers MUST call `accrueInterest` in the same tx before reading `debt` — this lib reads `position` +
+/// collateral->debt).
+/// Callers MUST call `accrueInterest` in the same tx before reading `debt` - this lib reads `position` +
 /// `market` directly instead of going through Morpho's `expectedBorrowAssets` periphery.
 library MarketLib {
     using Math for uint256;
@@ -27,7 +27,7 @@ library MarketLib {
     uint256 internal constant VIRTUAL_SHARES = 1e6;
     uint256 internal constant VIRTUAL_ASSETS = 1;
 
-    // ---- writes --------------------------------------------------------
+    // -- writes ----------------------------
 
     /// @notice Settles accrued interest on the given market into Morpho's stored state.
     /// @dev Must be called in the same tx before any read that depends on up-to-the-block debt (e.g. `debt`,
@@ -87,9 +87,9 @@ library MarketLib {
 
     /// @notice Withdraw `assets` units of the collateral token from this contract's Morpho position back to this
     /// contract.
-    /// @dev Morpho enforces that the withdrawal leaves the position with a health factor ≥ 1.
+    /// @dev Morpho enforces that the withdrawal leaves the position with a health factor >= 1.
     ///
-    ///         Both the `onBehalf` and `receiver` arguments to Morpho are `address(this)`: the collateral belongs to
+    /// Both the `onBehalf` and `receiver` arguments to Morpho are `address(this)`: the collateral belongs to
     /// this contract.
     /// @param market Morpho market parameters identifying the position.
     /// @param assets Amount of collateral to withdraw, in token units.
@@ -97,7 +97,7 @@ library MarketLib {
         MORPHO.withdrawCollateral(market, assets, address(this), address(this));
     }
 
-    // ---- reads ---------------------------------------------------------
+    // -- reads -----------------------------
 
     /// @notice Returns this contract's collateral balance in the given market, in raw collateral-token units.
     /// @param market Morpho market parameters identifying the position.
@@ -109,8 +109,8 @@ library MarketLib {
     /// @dev `pos.borrowShares` represents the "debt shares" we owe. Debt shares are an intermediary representation used
     /// to track each borrower's proportional claim on the market's total debt as interest accrues over time.
     /// `mkt.totalBorrowShares` is the total outstanding "debt shares" across all borrowers, and `mkt.totalBorrowAssets`
-    /// is the total outstanding debt denominated in the loan asset. Our debt in asset terms is therefore `(borrowShares
-    /// / totalBorrowShares) * totalBorrowAssets`.
+    /// is the total outstanding debt denominated in the loan asset. Our debt in asset terms is therefore
+    /// `(borrowShares / totalBorrowShares) * totalBorrowAssets`.
     /// For example, if `borrowShares` is 10 and `totalBorrowShares` is 100, we owe 10% of all debt in the market. If
     /// `totalBorrowAssets` is 1000, we owe (10/100) * 1000 = 100 units of the loan asset.
     /// `VIRTUAL_ASSETS` and `VIRTUAL_SHARES` are Morpho's inflation-attack mitigation: they seed the share/asset ratio
@@ -136,7 +136,7 @@ library MarketLib {
     /// tokens' decimal configurations.
     /// Example (WETH collateral / USDC loan, 1 WETH = 2500 USDC):
     /// price = 2500 * 10^(36 + 6 - 18) = 2.5e27
-    /// 1 WETH (1e18) collateral → (1e18 * 2.5e27) / 1e36 = 2.5e9 = 2500 USDC
+    /// 1 WETH (1e18) collateral -> (1e18 * 2.5e27) / 1e36 = 2.5e9 = 2500 USDC
     /// @param market Morpho market parameters identifying the position.
     function oraclePrice(MarketParams memory market) internal view returns (uint256) {
         return IOracle(market.oracle).price();

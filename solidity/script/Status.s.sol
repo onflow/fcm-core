@@ -50,12 +50,13 @@ contract Status is ConfiguredScript {
 
     function _reportPools(Config memory c) internal view {
         console.log("--- FlowSwap pools");
-        address yieldPool = IUniswapV3Factory(c.swapFactory).getPool(c.yieldToken, c.loanToken, c.feeYieldDebt);
-        address assetPool = IUniswapV3Factory(c.swapFactory).getPool(c.collateral, c.loanToken, c.feeAssetDebt);
-        console.log("yield/debt pool (fee %s): %s", c.feeYieldDebt, yieldPool);
-        console.log("asset/debt pool (fee %s): %s", c.feeAssetDebt, assetPool);
-        if (yieldPool != c.yieldDebtPool) {
-            console.log("CONFIG MISMATCH: yieldDebtPool in config is %s", c.yieldDebtPool);
+        address yieldPool = IUniswapV3Factory(c.swapFactory).getPool(c.yieldToken, c.loanToken, c.yieldLoanPoolFee);
+        address assetPool =
+            IUniswapV3Factory(c.swapFactory).getPool(c.collateralToken, c.loanToken, c.collateralLoanPoolFee);
+        console.log("yield/debt pool (fee %s): %s", c.yieldLoanPoolFee, yieldPool);
+        console.log("asset/debt pool (fee %s): %s", c.collateralLoanPoolFee, assetPool);
+        if (yieldPool != c.yieldLoanPool) {
+            console.log("CONFIG MISMATCH: yieldLoanPool in config is %s", c.yieldLoanPool);
         }
         if (yieldPool != address(0)) {
             (, int24 tick,,,,,) = IUniswapV3Pool(yieldPool).slot0();
@@ -88,7 +89,7 @@ contract Status is ConfiguredScript {
         if (deployer == address(0)) return;
         console.log("--- Deployer %s", deployer);
         console.log("native FLOW (gas): %s", deployer.balance);
-        console.log("collateral balance: %s", IERC20(c.collateral).balanceOf(deployer));
+        console.log("collateral balance: %s", IERC20(c.collateralToken).balanceOf(deployer));
         console.log("loan token balance: %s", IERC20(c.loanToken).balanceOf(deployer));
     }
 }

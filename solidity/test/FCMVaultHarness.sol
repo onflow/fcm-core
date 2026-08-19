@@ -9,7 +9,7 @@ contract FCMVaultHarness is FCMVault {
     constructor(FCMVault.InitParams memory p) FCMVault(p) {}
 
     // forge-lint: disable-next-item(mixed-case-function)
-    function exposed_yieldDebtSwapLimit(address tokenIn) external view returns (uint160, bool) {
-        return _yieldDebtSwapLimit(tokenIn);
+    function exposed_yieldLoanSwapLimit(address tokenIn) external view returns (uint160, bool) {
+        return _yieldLoanSwapLimit(tokenIn);
     }
 }

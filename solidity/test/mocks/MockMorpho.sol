@@ -69,7 +69,7 @@ contract MockMorpho {
     ///         need to manage Morpho allowances. Mirrors Morpho's share
     ///         rounding (`assets * (totalShares + VIRTUAL_SHARES) /
     ///         (totalAssets + VIRTUAL_ASSETS)`, rounded UP) and caps shares
-    ///         burned at the position's outstanding balance — the cap is a
+    ///         burned at the position's outstanding balance - the cap is a
     ///         mock-only safeguard against rounding overshoot on full repay;
     ///         real Morpho enforces this via its accounting invariants. The
     ///         `shares` and `data` parameters are ignored.
@@ -109,7 +109,7 @@ contract MockMorpho {
     /// @notice Mock for Morpho's `withdrawCollateral`. Decrements the
     ///         position's collateral balance and transfers the collateral
     ///         token to `receiver`.
-    /// @dev    The real Morpho enforces post-state health factor ≥ 1 here,
+    /// @dev    The real Morpho enforces post-state health factor >= 1 here,
     ///         rejecting withdrawals that would put the position
     ///         under-collateralized. This mock skips that check; tests
     ///         needing HF-bound behavior should drive position state
@@ -129,7 +129,7 @@ contract MockMorpho {
     ///         net effect of a real Morpho `liquidate`: collateral is reduced
     ///         and the borrow position (shares + market totals) is paid down
     ///         using the same share rounding as `repay`. No tokens are moved
-    ///         and no liquidation-incentive or bad-debt math is applied —
+    ///         and no liquidation-incentive or bad-debt math is applied -
     ///         tests only need the resulting accounting state (e.g. an
     ///         underwater position with genuinely reduced collateral) to
     ///         exercise rebalance recovery. The share burn is capped at the

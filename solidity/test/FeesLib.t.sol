@@ -6,7 +6,7 @@ import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
 
-/// @dev Tests for FeesLib.feesToMint — verifies fee calculation and logical
+/// @dev Tests for FeesLib.feesToMint - verifies fee calculation and logical
 /// branches in isolation. Event emission is tested via the vault integration tests.
 contract FeesLibTest is Test {
     using Math for uint256;

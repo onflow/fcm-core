@@ -5,7 +5,7 @@ chainId = 747
 
 # --- Tokens ---
 # WBTC
-collateral = "0x717DAE2BaF7656BE9a9B01deE31d571a9d4c9579"
+collateralToken = "0x717DAE2BaF7656BE9a9B01deE31d571a9d4c9579"
 # PYUSD0
 loanToken  = "0x99aF3EeA856556646C98c8B9b2548Fe815240750"
 # FUSDEV
@@ -32,14 +32,16 @@ healthFactorMaxTarget = "1430948419301164725"  # 860000000000000000 * 100 / 60.1
 healthFactorMax = "1433333333333333333"       # 860000000000000000 * 100 / 60    (LTV 60%)
 
 # --- FlowSwap V3 pool fee tiers ---
-feeYieldDebt = 100
-feeAssetDebt = 3000
+# Pool addresses are derived from swapFactory + these fees in ConfiguredScript.
+yieldLoanPoolFee = 100
+collateralLoanPoolFee = 3000
 
 # --- Periphery ---
+# yieldOracle: optional pre-deployed oracle; omit (or leave unset) to have
+# DeployVault deploy a fresh YieldTokenOracle reading the yield token's rate.
 yieldOracle  = "0x144F613490DD55C9844Ef139CFB9B63433dD349F"
 swapFactory  = "0xca6d7Bb03334bBf135902e1d919a5feccb461632"
-yieldDebtPool = "0x9196e243b7562B0866309013f2F9EB63F83A690f"
 
 # --- Timelocked emergency recovery ---
-# Delay (seconds) between scheduling and executing a recovery. 604800 = 7 days.
-recoveryDelay = 604800
+# Delay is now a contract constant (FCMVault.RECOVERY_DELAY = 7 days), no
+# longer configured here.
