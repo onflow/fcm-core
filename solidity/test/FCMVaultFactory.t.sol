@@ -41,7 +41,7 @@ contract FCMVaultFactoryTest is Test {
     address internal deployer = address(0xCA401);
 
     function setUp() public {
-        bytes memory erc20Code = address(new MockERC20()).code;
+        bytes memory erc20Code = address(new MockERC20("erc20", "erc20")).code;
         vm.etch(WETH, erc20Code);
         vm.etch(PYUSD0, erc20Code);
         vm.etch(FUSDEV, erc20Code);

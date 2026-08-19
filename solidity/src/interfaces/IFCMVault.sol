@@ -35,19 +35,16 @@ interface IFCMVault is IERC4626 {
         address owner;
     }
 
-    /// @notice Emitted when a recovery is scheduled.
-    /// @param caller Owner that scheduled it.
-    /// @param validAt Timestamp the recovery becomes executable (`now + 7 days`).
-    event EmergencyRecoveryScheduled(address indexed caller, uint256 validAt);
-    /// @notice Emitted when a pending recovery is cancelled before execution.
-    /// @param caller Owner that cancelled it.
-    event EmergencyRecoveryCancelled(address indexed caller);
-    /// @notice Emitted when a recovery executes and the position is swept to the owner.
-    /// @param debtRepaid Loan token the owner funded to clear the debt.
-    /// @param collateralOut Collateral swept to the owner.
-    /// @param yieldOut Yield token swept to the owner.
-    /// @param loanOut Over-funded loan token remainder swept back to the owner.
-    event EmergencyRecoveryExecuted(uint256 debtRepaid, uint256 collateralOut, uint256 yieldOut, uint256 loanOut);
+    /// @notice Emitted when an emergency recovery is scheduled.
+    /// @param validAt Timestamp the emergency recovery becomes executable (`now + 7 days`).
+    event EmergencyRecoveryScheduled(uint256 validAt);
+    /// @notice Emitted when a pending emergency recovery is cancelled before execution.
+    event EmergencyRecoveryCancelled();
+    /// @notice Emitted when an emergency recovery executes and the position is swept to the owner.
+    /// @param collateralOut The amount of collateral tokens swept to the owner.
+    /// @param yieldOut The amount of yield tokens swept to the owner.
+    /// @param loanOut The amount of unaccounted loan tokens swept to the owner.
+    event EmergencyRecoveryExecuted(uint256 collateralOut, uint256 yieldOut, uint256 loanOut);
 
     /// @notice Emitted when the owner updates the fee recipient (old + new).
     /// @param oldRecipient Previous fee recipient.
@@ -170,15 +167,18 @@ interface IFCMVault is IERC4626 {
     /// yield sold per call.
     /// @param maximumYield Maximum yield tokens to sell in this harvest.
     function harvest(uint256 maximumYield) external;
-    /// @notice Cancel a pending recovery during its timelock window.
-    function cancelEmergencyRecovery() external;
 
-    /// @notice Execute a scheduled recovery once its timelock elapses. The owner funds the full debt in `loanToken`;
-    /// the position is fully unwound (no swap, no oracle read) and all assets are swept to the owner. Burns no shares
-    /// and permanently blocks deposits. `redeem` stays callable throughout the window so holders may exit first.
-    /// @dev Oracle-independent by construction: fees are never accrued here (no NAV mark), and `repayAll` zeroes the
-    /// debt before `withdrawCollateral`, so Morpho's health check short-circuits on `borrowShares == 0` without reading
-    /// its oracle. Recovery stays executable when oracles are bricked.
+    /// @notice Schedule a timelocked emergency recovery. Executable after `recoveryDelay`; the owner may cancel in the
+    /// meantime.
+    function scheduleEmergencyRecovery() external;
+    /// @notice Cancel a pending recovery during its timelock window.
+    /// @dev Its not possible to cancel after the emergency recovery has been executed.
+    function cancelEmergencyRecovery() external;
+    /// @notice Execute a scheduled recovery once its timelock elapses.
+    /// @dev WARNING: Must have repaid the full debt externally, must be done atomically to prevent frontrunning!
+    /// @dev The position is fully unwound and all assets are swept to the owner. Oracle-independent by construction:
+    /// fees are never accrued here (no NAV mark), and `withdrawCollateral` after the debt is cleared short-circuits
+    /// Morpho's health check.
     function executeEmergencyRecovery() external;
 
     /// @notice Escape hatch - swap-free, in-kind redemption: the caller repays `owner`'s pro-rata debt slice in
@@ -199,9 +199,7 @@ interface IFCMVault is IERC4626 {
     function redeemInKind(uint256 shares, address receiver, address owner)
         external
         returns (uint256 collateralOut, uint256 yieldOut);
-    /// @notice Schedule a timelocked emergency recovery. Executable after `RECOVERY_DELAY` (7 days); the owner may
-    /// cancel in the meantime.
-    function scheduleEmergencyRecovery() external;
+
     /// @notice Set the fee recipient. Accrues to the old recipient first.
     /// @dev The recipient must hold `EARLY_ACCESS_ROLE` to receive minted fee shares; if it doesn't, accrual silently
     /// skips (see `_accrueFees`).
@@ -237,6 +235,11 @@ interface IFCMVault is IERC4626 {
     /// @notice Address of the immutable yield token (inner vault share).
     /// @dev The yield token is the inner vault's share token and the yield leg of the position.
     function YIELD_TOKEN() external view returns (IERC20);
+
+    /// @notice Current health factor of the vault's Morpho position (WAD-scaled).
+    /// @dev WAD-scaled. `WAD` (1e18) is the liquidation line; below `HEALTH_FACTOR_MIN` is over-levered, above
+    /// `HEALTH_FACTOR_MAX` is under-levered.
+    function healthFactor() external view returns (uint256);
 
     /// @notice Minimum health factor below which `rebalance` delevers (sells yield to repay debt).
     /// @dev WAD-scaled. Positions below this threshold are over-levered.
@@ -282,12 +285,15 @@ interface IFCMVault is IERC4626 {
     /// @notice Address of the oracle for the yield token.
     function YIELD_ORACLE() external view returns (IOracle);
 
-    /// @notice Recovery delay, in seconds.
-    function RECOVERY_DELAY() external view returns (uint32);
+    // - Timelocked emergency recovery (custodial, in-kind) -----
+    /// @notice Delay (in seconds) between scheduling and executing a recovery.
+    function EMERGENCY_RECOVERY_DELAY() external view returns (uint32);
     /// @notice Timestamp a scheduled recovery becomes executable; 0 = none pending.
-    function recoveryValidAt() external view returns (uint256);
-    /// @notice Set once a recovery executes; permanently blocks new deposits.
-    function recovered() external view returns (bool);
+    function emergencyRecoveryValidAt() external view returns (uint64);
+    /// @notice Set when a recovery is scheduled. Can be unset before the recovery is executed.
+    function emergencyRecoveryActive() external view returns (bool);
+    /// @notice Set once the recovery executes. Will never be unset after being set.
+    function emergencyRecovered() external view returns (bool);
 
     // - Admin-controlled parameters & fees ---------
     /// @notice TVL limit, denominated in the vault's Asset/Collateral token. Enforced by `super.deposit`, which reverts

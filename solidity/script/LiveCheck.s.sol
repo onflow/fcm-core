@@ -107,7 +107,7 @@ contract LiveCheck is Script {
     ///      read is fresh while the pre-read may lag by unaccrued interest
     ///      (immaterial for this report).
     function _debt(FCMVault vault) internal view returns (uint256) {
-        MarketParams memory market = vault.getMarket();
+        MarketParams memory market = vault.market();
         Position memory pos = MarketLib.MORPHO.position(market.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
         Market memory mkt = MarketLib.MORPHO.market(market.id());
