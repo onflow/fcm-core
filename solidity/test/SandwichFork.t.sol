@@ -82,7 +82,6 @@ contract SandwichForkTest is Test {
     address constant SWAP_FACTORY = 0xca6d7Bb03334bBf135902e1d919a5feccb461632;
     address constant REAL_POOL = 0x9196e243b7562B0866309013f2F9EB63F83A690f;
 
-
     uint24 constant COLLATERAL_LOAN_POOL_FEE = 3000;
     uint24 constant YIELD_LOAN_POOL_FEE = 100;
 
