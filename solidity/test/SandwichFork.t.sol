@@ -65,6 +65,7 @@ contract SandwichForkTest is Test {
     IERC20 constant PYUSD0 = IERC20(0x99aF3EeA856556646C98c8B9b2548Fe815240750);
     IERC20 constant FUSDEV = IERC20(0xd069d989e2F44B70c65347d1853C0c67e10a9F8D);
 
+    // Real production band.
     uint256 constant HEALTH_FACTOR_MIN = 1_228_571_428_571_428_571;
     uint256 constant HEALTH_FACTOR_MIN_TARGET = 1_230_329_041_487_839_771;
     uint256 constant HEALTH_FACTOR_MAX = 1_433_333_333_333_333_333;
@@ -81,7 +82,6 @@ contract SandwichForkTest is Test {
     address constant SWAP_FACTORY = 0xca6d7Bb03334bBf135902e1d919a5feccb461632;
     address constant REAL_POOL = 0x9196e243b7562B0866309013f2F9EB63F83A690f;
 
-    // Real production band.
 
     uint24 constant COLLATERAL_LOAN_POOL_FEE = 3000;
     uint24 constant YIELD_LOAN_POOL_FEE = 100;

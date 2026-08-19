@@ -291,16 +291,16 @@ interface IFCMVault is IERC4626 {
 
     // - Admin-controlled parameters & fees ---------
     /// @notice TVL limit, denominated in the vault's Asset/Collateral token. Enforced by `super.deposit`, which reverts
-    /// with / `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`. Default 0 -> no deposits until owner
-    /// raises
-    /// it.
+    /// with `ERC4626ExceededMaxDeposit` when `assets > maxDeposit(receiver)`. Default 0 -> no deposits until owner
+    /// raises it.
     /// - This constraint prevents all deposits/mints which would cause the vault to exceed the configured TVL limit
     /// after the deposit/mint completes.
     /// - This constraint does not prevent any withdrawals/redeems under any circumstances.
     /// - This constraint does not prevent the vault from holding more assets than its configured TVL. This can happen
-    /// if: - The owner sets maxTvl to a value lower than the current totalAssets
-    /// - The value of vault holdings increases above the TVL limit due to market conditions. This can occur without
-    /// any direct interactions with the vault.
+    /// if: 
+    ///   - The owner sets maxTvl to a value lower than the current totalAssets
+    ///   - The value of vault holdings increases above the TVL limit due to market conditions. This can occur without
+    ///     any direct interactions with the vault.
     function maxTvl() external view returns (uint256);
     /// @notice Max price impact (basis points) tolerated on the rebalance swaps (lever and delever). It sets each
     /// swap's `sqrtPriceLimitX96` to the oracle price discounted by this amount, so the pool fills only while its
