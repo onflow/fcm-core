@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {Id, Market} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorpho, Id} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {console} from "forge-std/Script.sol";
 
@@ -36,8 +36,8 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 contract DeployVault is ConfiguredScript {
     function run() public {
         Config memory c = _loadConfig();
-        Market memory m = _requireMarketExists(c);
-        require(m.totalSupplyAssets > 0, "market has no loan liquidity; run SeedMarket first");
+        // Market memory m = _requireMarketExists(c);
+        // require(m.totalSupplyAssets > 0, "market has no loan liquidity; run SeedMarket first");
         _requirePoolsExist(c);
 
         uint256 maxTvl = vm.envOr("MAX_TVL", uint256(0));
@@ -77,6 +77,7 @@ contract DeployVault is ConfiguredScript {
                 marketIrm: c.marketIrm,
                 marketLltv: c.marketLltv,
                 yieldOracle: IOracle(yieldOracle),
+                morpho: IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f),
                 owner: deployer,
                 name: name,
                 symbol: symbol

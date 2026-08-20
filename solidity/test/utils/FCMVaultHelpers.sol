@@ -2,9 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../../src/FCMVault.sol";
-import {MarketLib} from "../../src/libraries/MarketLib.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
-import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorpho, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Vm} from "forge-std/Vm.sol";
@@ -24,29 +23,29 @@ library VaultHelpers {
         return _market;
     }
 
-    /// @dev The vault's outstanding debt in its Morpho market. Mirrors `MarketLib.debt`
+    /// @dev The vault's outstanding debt in its Morpho market. Mirrors `MorphoLib.debt`
     /// but queries the vault's position (`address(vault)`), not `address(this)`, so it
-    /// is safe to call from a test contract. (`MarketLib.debt` inlines `address(this)`,
+    /// is safe to call from a test contract. (`MorphoLib.debt` inlines `address(this)`,
     /// which from a test resolves to the test contract - the test has no Morpho position.)
     function debt(FCMVault vault) internal view returns (uint256) {
         MarketParams memory mp = market(vault);
-        Position memory pos = MarketLib.MORPHO.position(mp.id(), address(vault));
+        Position memory pos = IMorpho(address(vault.MORPHO())).position(mp.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
-        Market memory mkt = MarketLib.MORPHO.market(mp.id());
+        Market memory mkt = IMorpho(address(vault.MORPHO())).market(mp.id());
         return uint256(pos.borrowShares)
             .mulDiv(uint256(mkt.totalBorrowAssets) + 1, uint256(mkt.totalBorrowShares) + 1e6, Math.Rounding.Ceil);
     }
 
     /// @dev The vault's collateral supplied to its Morpho market, in raw collateral-token units.
-    /// Mirrors `MarketLib.collateral` but queries the vault's position (`address(vault)`),
+    /// Mirrors `MorphoLib.collateral` but queries the vault's position (`address(vault)`),
     /// not `address(this)`, so it is safe to call from a test contract.
     function collateral(FCMVault vault) internal view returns (uint256) {
-        return uint256(MarketLib.MORPHO.position(market(vault).id(), address(vault)).collateral);
+        return uint256(IMorpho(address(vault.MORPHO())).position(market(vault).id(), address(vault)).collateral);
     }
 
     /// @dev The vault's Morpho position (collateral + borrow shares).
     function position(FCMVault vault) internal view returns (Position memory) {
-        return MarketLib.MORPHO.position(market(vault).id(), address(vault));
+        return IMorpho(address(vault.MORPHO())).position(market(vault).id(), address(vault));
     }
 
     function grantFundApprove(FCMVault vault, address who, uint256 amount) internal {

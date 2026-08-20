@@ -7,7 +7,6 @@ import {Test} from "forge-std/Test.sol";
 import {FCMVaultFactory} from "../src/FCMVaultFactory.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
 import {IFCMVaultFactory} from "../src/interfaces/IFCMVaultFactory.sol";
-import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {SwapLib} from "../src/libraries/SwapLib.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockIrm} from "./mocks/MockIrm.sol";
@@ -15,6 +14,7 @@ import {MockMorpho} from "./mocks/MockMorpho.sol";
 import {MockOracle} from "./mocks/MockOracle.sol";
 import {MockPool} from "./mocks/MockPool.sol";
 import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
+import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 
 contract FCMVaultFactoryTest is Test {
@@ -29,6 +29,7 @@ contract FCMVaultFactoryTest is Test {
     uint256 constant MARKET_LLTV = 0.86e18;
 
     address constant MOCK_IRM = 0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546;
+    address constant MORPHO = 0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f;
 
     FCMVaultFactory internal factory;
     MockOracle internal marketOracle;
@@ -45,7 +46,7 @@ contract FCMVaultFactoryTest is Test {
         vm.etch(WETH, erc20Code);
         vm.etch(PYUSD0, erc20Code);
         vm.etch(FUSDEV, erc20Code);
-        vm.etch(address(MarketLib.MORPHO), address(new MockMorpho()).code);
+        vm.etch(MORPHO, address(new MockMorpho()).code);
         vm.etch(address(SwapLib.SWAP_ROUTER), address(new MockSwapRouter()).code);
         vm.etch(MOCK_IRM, address(new MockIrm()).code);
 
@@ -73,6 +74,7 @@ contract FCMVaultFactoryTest is Test {
             marketIrm: MOCK_IRM,
             marketLltv: MARKET_LLTV,
             yieldOracle: IOracle(address(yieldOracle)),
+            morpho: IMorpho(MORPHO),
             owner: deployer,
             name: "Flow Credit Markets WETH",
             symbol: "fcmWETH"

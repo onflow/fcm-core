@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {Id, Market} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorpho, Id, Market} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -9,7 +9,6 @@ import {console} from "forge-std/Script.sol";
 
 import {YieldTokenOracle} from "../src/YieldTokenOracle.sol";
 import {IUniswapV3Pool} from "../src/interfaces/external/IUniswapV3Pool.sol";
-import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {ConfiguredScript, IUniswapV3Factory} from "./ConfiguredScript.s.sol";
 
 /// @title Status
@@ -35,7 +34,7 @@ contract Status is ConfiguredScript {
         console.log("--- Morpho market");
         console.log("market id:");
         console.logBytes32(Id.unwrap(_marketId(c)));
-        Market memory m = MarketLib.MORPHO.market(_marketId(c));
+        Market memory m = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f).market(_marketId(c));
         if (m.lastUpdate == 0) {
             console.log("MARKET DOES NOT EXIST for config params -- fix config before deploying");
             return;

@@ -4,12 +4,11 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Script, console} from "forge-std/Script.sol";
 
-import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorpho, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
 
 import {FCMVault} from "../src/FCMVault.sol";
-import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {VaultHelpers} from "../test/utils/FCMVaultHelpers.sol";
 
 /// @title LiveCheck
@@ -102,15 +101,15 @@ contract LiveCheck is Script {
     /// @dev The vault's outstanding debt on its Morpho market, in loan-token
     ///      units. Converts borrow shares to assets with Morpho's own
     ///      `SharesMathLib.toAssetsUp`, matching how Morpho charges debt (and
-    ///      the contract's `MarketLib.debt`). Read from stored state;
+    ///      the contract's `MorphoLib.debt`). Read from stored state;
     ///      `rebalance` accrues interest in the same tx, so the post-rebalance
     ///      read is fresh while the pre-read may lag by unaccrued interest
     ///      (immaterial for this report).
     function _debt(FCMVault vault) internal view returns (uint256) {
         MarketParams memory market = vault.market();
-        Position memory pos = MarketLib.MORPHO.position(market.id(), address(vault));
+        Position memory pos = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f).position(market.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
-        Market memory mkt = MarketLib.MORPHO.market(market.id());
+        Market memory mkt = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f).market(market.id());
         return uint256(pos.borrowShares).toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
     }
 }

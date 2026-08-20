@@ -3,10 +3,11 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
-import {MarketLib} from "../src/libraries/MarketLib.sol";
+import {MorphoLib} from "../src/libraries/MorphoLib.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
+import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
@@ -149,7 +150,7 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
         vm.warp(vault.emergencyRecoveryValidAt());
         LOAN_TOKEN.mint(owner, 1e10 ether);
         LOAN_TOKEN.approve(address(vault), type(uint256).max);
-        MarketLib.repayAll(vault.market());
+        MorphoLib.repayAll(IMorpho(address(MORPHO)), vault.market());
 
         vm.recordLogs();
         vault.executeEmergencyRecovery();
@@ -157,8 +158,8 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
 
         assertEq(COLLATERAL_TOKEN.balanceOf(address(vault)), 0);
         assertEq(YIELD_TOKEN.balanceOf(address(vault)), 0);
-        assertEq(MarketLib.collateral(vault.market()), 0);
-        assertEq(MarketLib.debt(vault.market()), 0);
+        assertEq(MorphoLib.collateral(IMorpho(address(MORPHO)), vault.market()), 0);
+        assertEq(MorphoLib.debt(IMorpho(address(MORPHO)), vault.market()), 0);
 
         uint256 collateralOut = COLLATERAL_TOKEN.balanceOf(owner);
         uint256 yieldOut = YIELD_TOKEN.balanceOf(owner);

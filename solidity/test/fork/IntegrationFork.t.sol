@@ -5,9 +5,8 @@ import {FCMVault} from "../../src/FCMVault.sol";
 import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
 import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
 import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
-import {MarketLib} from "../../src/libraries/MarketLib.sol";
 import {SwapLib} from "../../src/libraries/SwapLib.sol";
-import {Id, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorpho, Id, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -45,6 +44,7 @@ import {console} from "forge-std/console.sol";
 ///         Forks Flow mainnet directly (no env var needed).
 ///         Run with: forge test --match-contract IntegrationForkTest -vv
 contract IntegrationForkTest is Test {
+    IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
     // Real Flow mainnet addresses (from deployments/mainnet.toml).
     IERC20 constant WBTC = IERC20(0x717DAE2BaF7656BE9a9B01deE31d571a9d4c9579);
     IERC20 constant PYUSD0 = IERC20(0x99aF3EeA856556646C98c8B9b2548Fe815240750);
@@ -122,12 +122,12 @@ contract IntegrationForkTest is Test {
         // ── Supply PYUSD0 to the real Morpho market so the vault can borrow ──
         // $1M TVL levers roughly $650k of debt at the deposit-target HF, plus
         // headroom for the lever-up rebalance — supply generously.
-        // Market memory mkt = MarketLib.MORPHO.market(marketId);
+        // Market memory mkt = MORPHO.market(marketId);
         address supplier = makeAddr("supplier");
         deal(address(PYUSD0), supplier, 10_000_000e6);
         vm.startPrank(supplier);
-        PYUSD0.approve(address(MarketLib.MORPHO), type(uint256).max);
-        MarketLib.MORPHO.supply(mp, 10_000_000e6, 0, supplier, "");
+        PYUSD0.approve(address(MORPHO), type(uint256).max);
+        MORPHO.supply(mp, 10_000_000e6, 0, supplier, "");
         vm.stopPrank();
         console.log("Supplied $10M PYUSD0 to Morpho market");
 
@@ -154,6 +154,7 @@ contract IntegrationForkTest is Test {
                 marketIrm: MARKET_IRM,
                 marketLltv: MARKET_LLTV,
                 yieldOracle: YIELD_ORACLE,
+                morpho: MORPHO,
                 owner: owner,
                 name: "fcmWBTC-integration-fork",
                 symbol: "fcmWBTC-IF"
@@ -198,8 +199,8 @@ contract IntegrationForkTest is Test {
     function test_integration_fullLifecycleRealistic() public {
         vm.startPrank(address(0x1337));
         deal(address(WBTC), address(0x1337), 1e18);
-        WBTC.approve(address(MarketLib.MORPHO), type(uint256).max);
-        MarketLib.MORPHO.supplyCollateral(mp, 1e18, address(0x1337), "");
+        WBTC.approve(address(MORPHO), type(uint256).max);
+        MORPHO.supplyCollateral(mp, 1e18, address(0x1337), "");
         vm.stopPrank();
         // ── 1. Build up ~$1M TVL from 100 individual $10k deposits ─────────
         _depositAllUsers();
@@ -340,9 +341,9 @@ contract IntegrationForkTest is Test {
     }
 
     function _hf() internal view returns (uint256) {
-        Position memory pos = MarketLib.MORPHO.position(marketId, address(vault));
+        Position memory pos = MORPHO.position(marketId, address(vault));
         if (pos.borrowShares == 0) return type(uint256).max;
-        Market memory mkt = MarketLib.MORPHO.market(marketId);
+        Market memory mkt = MORPHO.market(marketId);
         uint256 debt = Math.mulDiv(
             uint256(pos.borrowShares),
             uint256(mkt.totalBorrowAssets) + 1,
@@ -355,9 +356,9 @@ contract IntegrationForkTest is Test {
     }
 
     function _debt() internal view returns (uint256) {
-        Position memory pos = MarketLib.MORPHO.position(marketId, address(vault));
+        Position memory pos = MORPHO.position(marketId, address(vault));
         if (pos.borrowShares == 0) return 0;
-        Market memory mkt = MarketLib.MORPHO.market(marketId);
+        Market memory mkt = MORPHO.market(marketId);
         return Math.mulDiv(
             uint256(pos.borrowShares),
             uint256(mkt.totalBorrowAssets) + 1,

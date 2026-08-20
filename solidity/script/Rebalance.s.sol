@@ -3,13 +3,12 @@ pragma solidity ^0.8.24;
 
 import {Script, console} from "forge-std/Script.sol";
 
-import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorpho, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
 
 import {FCMVault} from "../src/FCMVault.sol";
-import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {VaultHelpers} from "../test/utils/FCMVaultHelpers.sol";
 
 /// @title Rebalance
@@ -70,7 +69,7 @@ contract Rebalance is Script {
     ///      `type(uint256).max` when there is no debt.
     function _healthFactor(FCMVault vault) internal view returns (uint256) {
         MarketParams memory mp = vault.market();
-        Position memory pos = MarketLib.MORPHO.position(mp.id(), address(vault));
+        Position memory pos = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f).position(mp.id(), address(vault));
         if (pos.borrowShares == 0) return type(uint256).max;
         uint256 debt = _debtFromPosition(mp, pos);
         uint256 maxBorrow = (uint256(pos.collateral) * ((IOracle(mp.oracle).price() * mp.lltv) / 1e36)) / 1e18;
@@ -80,16 +79,16 @@ contract Rebalance is Script {
     /// @dev The vault's outstanding debt in loan-token units.
     function _debt(FCMVault vault) internal view returns (uint256) {
         MarketParams memory mp = vault.market();
-        Position memory pos = MarketLib.MORPHO.position(mp.id(), address(vault));
+        Position memory pos = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f).position(mp.id(), address(vault));
         if (pos.borrowShares == 0) return 0;
         return _debtFromPosition(mp, pos);
     }
 
     /// @dev Converts borrow shares to loan-token debt with Morpho's own
     ///      `SharesMathLib.toAssetsUp`, matching how Morpho charges debt (and
-    ///      the contract's `MarketLib.debt`).
+    ///      the contract's `MorphoLib.debt`).
     function _debtFromPosition(MarketParams memory mp, Position memory pos) internal view returns (uint256) {
-        Market memory mkt = MarketLib.MORPHO.market(mp.id());
+        Market memory mkt = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f).market(mp.id());
         return uint256(pos.borrowShares).toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
     }
 }

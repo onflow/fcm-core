@@ -3,7 +3,6 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../../src/FCMVault.sol";
 import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
-import {MarketLib} from "../../src/libraries/MarketLib.sol";
 import {SwapLib} from "../../src/libraries/SwapLib.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockIrm} from "../mocks/MockIrm.sol";
@@ -13,6 +12,7 @@ import {MockPool} from "../mocks/MockPool.sol";
 import {MockSwapRouter} from "../mocks/MockSwapRouter.sol";
 import {FCMVaultHarness} from "./FCMVaultHarness.sol";
 import {VaultHelpers} from "./FCMVaultHelpers.sol";
+import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -34,7 +34,7 @@ contract Deployers is Test {
     MockPool immutable YIELD_LOAN_POOL = MockPool(makeAddr("YIELD_LOAN_POOL"));
     uint24 constant YIELD_LOAN_POOL_FEE = 100;
 
-    MockMorpho constant MORPHO = MockMorpho(address(MarketLib.MORPHO));
+    MockMorpho constant MORPHO = MockMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
     MockOracle immutable MARKET_ORACLE = MockOracle(makeAddr("MARKET_ORACLE"));
     MockIrm immutable MARKET_IRM = MockIrm(makeAddr("MARKET_IRM"));
     uint256 constant MARKET_LLTV = 0.86e18;
@@ -75,7 +75,7 @@ contract Deployers is Test {
         vm.etch(address(MARKET_ORACLE), address(new MockOracle(COLLATERAL_PRICE)).code);
         vm.etch(address(MARKET_IRM), address(new MockIrm()).code);
         vm.etch(address(YIELD_ORACLE), address(new MockOracle(YIELD_PRICE)).code);
-        vm.etch(address(MarketLib.MORPHO), address(new MockMorpho()).code);
+        vm.etch(address(MORPHO), address(new MockMorpho()).code);
     }
 
     function defaultInitParams() public view returns (IFCMVault.InitParams memory initParams) {
@@ -96,6 +96,7 @@ contract Deployers is Test {
             marketIrm: address(MARKET_IRM),
             marketLltv: MARKET_LLTV,
             yieldOracle: IOracle(address(YIELD_ORACLE)),
+            morpho: IMorpho(address(MORPHO)),
             name: "Flow Credit Market Mock",
             symbol: "fcmMock",
             owner: owner

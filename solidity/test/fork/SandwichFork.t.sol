@@ -10,9 +10,8 @@ import {FCMVault} from "../../src/FCMVault.sol";
 import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
 import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
 import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
-import {MarketLib} from "../../src/libraries/MarketLib.sol";
 import {SwapLib} from "../../src/libraries/SwapLib.sol";
-import {Id, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorpho, Id, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
@@ -61,6 +60,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 ///
 ///         Forks Flow mainnet directly (no env var needed).
 contract SandwichForkTest is Test {
+    IMorpho constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
     IERC20 constant WBTC = IERC20(0x717DAE2BaF7656BE9a9B01deE31d571a9d4c9579);
     IERC20 constant PYUSD0 = IERC20(0x99aF3EeA856556646C98c8B9b2548Fe815240750);
     IERC20 constant FUSDEV = IERC20(0xd069d989e2F44B70c65347d1853C0c67e10a9F8D);
@@ -144,13 +144,13 @@ contract SandwichForkTest is Test {
         // ── Supply PYUSD0 to the real Morpho market (needs liquidity) ──────
         // $1M TVL levers roughly $650k of debt at the deposit-target HF, plus
         // headroom for lever-up rebalances during the attacks below.
-        Market memory mkt = MarketLib.MORPHO.market(marketId);
+        Market memory mkt = MORPHO.market(marketId);
         if (mkt.totalSupplyAssets < 5_000_000e6) {
             address supplier = makeAddr("supplier");
             deal(address(PYUSD0), supplier, 10_000_000e6);
             vm.startPrank(supplier);
-            PYUSD0.approve(address(MarketLib.MORPHO), type(uint256).max);
-            MarketLib.MORPHO.supply(mp, 10_000_000e6, 0, supplier, "");
+            PYUSD0.approve(address(MORPHO), type(uint256).max);
+            MORPHO.supply(mp, 10_000_000e6, 0, supplier, "");
             vm.stopPrank();
         }
 
@@ -178,6 +178,7 @@ contract SandwichForkTest is Test {
                 marketIrm: MARKET_IRM,
                 marketLltv: MARKET_LLTV,
                 yieldOracle: YIELD_ORACLE,
+                morpho: MORPHO,
                 owner: admin,
                 name: "fcmWBTC-sandwich-fork",
                 symbol: "fcmWBTC-SF"
@@ -499,9 +500,9 @@ contract SandwichForkTest is Test {
     }
 
     function _hf() internal view returns (uint256) {
-        Position memory pos = MarketLib.MORPHO.position(marketId, address(vault));
+        Position memory pos = MORPHO.position(marketId, address(vault));
         if (pos.borrowShares == 0) return type(uint256).max;
-        Market memory mkt = MarketLib.MORPHO.market(marketId);
+        Market memory mkt = MORPHO.market(marketId);
         uint256 debt = Math.mulDiv(
             uint256(pos.borrowShares),
             uint256(mkt.totalBorrowAssets) + 1,
@@ -514,9 +515,9 @@ contract SandwichForkTest is Test {
     }
 
     function _debt() internal view returns (uint256) {
-        Position memory pos = MarketLib.MORPHO.position(marketId, address(vault));
+        Position memory pos = MORPHO.position(marketId, address(vault));
         if (pos.borrowShares == 0) return 0;
-        Market memory mkt = MarketLib.MORPHO.market(marketId);
+        Market memory mkt = MORPHO.market(marketId);
         return Math.mulDiv(
             uint256(pos.borrowShares),
             uint256(mkt.totalBorrowAssets) + 1,

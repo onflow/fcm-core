@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
+import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {IERC4626} from "openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
@@ -29,6 +30,7 @@ interface IFCMVault is IERC4626 {
         address marketIrm;
         uint256 marketLltv;
         IOracle yieldOracle;
+        IMorpho morpho;
 
         string name;
         string symbol;
@@ -276,6 +278,8 @@ interface IFCMVault is IERC4626 {
     /// @notice Pool fee tier for the loan/yield pool.
     function YIELD_LOAN_POOL_FEE() external view returns (uint24);
 
+    /// @notice Address of the Morpho Blue singleton.
+    function MORPHO() external view returns (IMorpho);
     /// @notice Address of the oracle for the market.
     function MARKET_ORACLE() external view returns (address);
     /// @notice Address of the interest rate model for the market.
@@ -349,7 +353,7 @@ interface IFCMVault is IERC4626 {
     /// - yield: balance of `yieldToken` held by the vault, priced through `yieldOracle` and the market oracle
     /// (see `_yieldToCollateral`).
     /// - debt: outstanding loan-token debt on the Morpho market, valued at the market oracle price
-    /// (see `MarketLib.debt`).
+    /// (see `MorphoLib.debt`).
     ///
     /// Returns 0 if debt exceeds gross value (an underwater position). This is a stale read by default - callers that
     /// need an up-to-the-block NAV must accrue interest on the market in the same tx first (see `deposit`).
