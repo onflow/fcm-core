@@ -1,4 +1,4 @@
-FCMGasSnapshotsTest:test_gas_deposit() (gas: 312994)
-FCMGasSnapshotsTest:test_gas_harvest() (gas: 162587)
-FCMGasSnapshotsTest:test_gas_rebalance() (gas: 113359)
-FCMGasSnapshotsTest:test_gas_redeem() (gas: 204576)
+FCMGasSnapshotsTest:test_gas_deposit() (gas: 314629)
+FCMGasSnapshotsTest:test_gas_harvest() (gas: 164232)
+FCMGasSnapshotsTest:test_gas_rebalance() (gas: 115148)
+FCMGasSnapshotsTest:test_gas_redeem() (gas: 206572)

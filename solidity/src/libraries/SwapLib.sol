@@ -25,6 +25,7 @@ library SwapLib {
     /// `fee` is the FlowSwap V3 fee tier (e.g. 100 / 500 / 3000). Setting `amountOutMinimum = 0` is intentional for
     /// legs whose downstream accounting already enforces fairness (e.g. redeem scales by realized output); use
     /// `swapExactInToLimit` for legs that need an explicit price-impact bound.
+    /// @param swapRouter The FlowSwap V3 SwapRouter02 instance.
     /// @param tokenIn Token being sold.
     /// @param tokenOut Token being bought.
     /// @param fee Pool fee tier.
@@ -60,6 +61,7 @@ library SwapLib {
     /// with the caller - the caller must account for the remainder (the vault repays it). `sqrtPriceLimitX96` MUST be
     /// on the correct side of the current pool price (below it for a 0->1 swap, above it for 1->0), otherwise the pool
     /// reverts `SPL`; callers check the live price first. Caller MUST have approved `SWAP_ROUTER` for `tokenIn`.
+    /// @param swapRouter The FlowSwap V3 SwapRouter02 instance.
     /// @param tokenIn Token being sold.
     /// @param tokenOut Token being bought.
     /// @param fee Pool fee tier.
@@ -92,6 +94,7 @@ library SwapLib {
     /// @dev Exact-output single-hop; recipient is always `address(this)`. Used by redeem's Case-B
     /// path to buy exactly the redeemer's debt shortfall from their collateral, spending no more than the
     /// slippage-grossed collateral withdrawn for it.
+    /// @param swapRouter The FlowSwap V3 SwapRouter02 instance.
     /// @param tokenIn Token being sold.
     /// @param tokenOut Token being bought.
     /// @param fee Pool fee tier.

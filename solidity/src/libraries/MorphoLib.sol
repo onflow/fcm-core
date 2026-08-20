@@ -25,6 +25,7 @@ library MorphoLib {
     /// @notice Settles accrued interest on the given market into Morpho's stored state.
     /// @dev Must be called in the same tx before any read that depends on up-to-the-block debt (e.g. `debt`,
     /// `healthFactor`, `maxBorrowAtHealthFactor`). Without this, reads reflect the last-touched block's state.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     function accrueInterest(IMorpho morpho, MarketParams memory market) internal {
         morpho.accrueInterest(market);
@@ -32,6 +33,7 @@ library MorphoLib {
 
     /// @notice Supplies `assets` of collateral token from this contract to the market on behalf of itself.
     /// @dev Assumes the caller has already approved the Morpho singleton for `assets` of the collateral token.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     /// @param assets Amount of collateral to supply, in token units.
     function supplyCollateral(IMorpho morpho, MarketParams memory market, uint256 assets) internal {
@@ -41,6 +43,7 @@ library MorphoLib {
     /// @notice Borrows `assets` of loan token against this contract's collateral, with the loan tokens sent to itself.
     /// @dev Passes `shares = 0` so Morpho interprets the call as an asset-denominated borrow. Reverts inside Morpho if
     /// the resulting position would exceed LLTV.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     /// @param assets Amount of loan token to borrow, in token units.
     function borrow(IMorpho morpho, MarketParams memory market, uint256 assets) internal {
@@ -51,6 +54,7 @@ library MorphoLib {
     /// @notice Repay `assets` units of the loan token to Morpho, reducing this contract's debt on the market.
     /// @dev `onBehalf = address(this)` repays this contract's own position; the trailing `""` is Morpho's callback
     /// data, unused.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     /// @param assets Amount of loan token to repay, in token units.
     /// @return assetsRepaid Mirrors `assets` (Morpho's return convention).
@@ -68,8 +72,9 @@ library MorphoLib {
     /// an asset amount back to shares either over-shoots (repaying `debt()` over-burns -> revert) or under-shoots
     /// (leaving dust borrow shares that block a full-collateral withdrawal). Repaying by shares clears it precisely.
     /// Morpho pulls the required loan token from this contract's balance, so the caller must pre-fund it.
-    /// @return assetsRepaid Loan token consumed to clear the position.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
+    /// @return assetsRepaid Loan token consumed to clear the position.
     function repayAll(IMorpho morpho, MarketParams memory market) internal returns (uint256 assetsRepaid) {
         uint256 borrowShares = uint256(morpho.position(market.id(), address(this)).borrowShares);
         if (borrowShares == 0) return 0;
@@ -83,6 +88,7 @@ library MorphoLib {
     ///
     /// Both the `onBehalf` and `receiver` arguments to Morpho are `address(this)`: the collateral belongs to
     /// this contract.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     /// @param assets Amount of collateral to withdraw, in token units.
     function withdrawCollateral(IMorpho morpho, MarketParams memory market, uint256 assets) internal {
@@ -90,6 +96,7 @@ library MorphoLib {
     }
 
     /// @notice Returns this contract's collateral balance in the given market, in raw collateral-token units.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     function collateral(IMorpho morpho, MarketParams memory market) internal view returns (uint256) {
         return uint256(morpho.position(market.id(), address(this)).collateral);
@@ -107,6 +114,7 @@ library MorphoLib {
     /// so the first borrower cannot manipulate it. They must be included in every conversion to match Morpho's internal
     /// accounting.
     /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     function debt(IMorpho morpho, MarketParams memory market) internal view returns (uint256) {
         Position memory pos = morpho.position(market.id(), address(this));
@@ -162,6 +170,7 @@ library MorphoLib {
 
     /// @notice Returns the maximum loan-token amount borrowable against this contract's current collateral balance.
     /// @dev Convenience wrapper over `maxBorrowFor(collateral(market))`.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     function maxBorrow(IMorpho morpho, MarketParams memory market) internal view returns (uint256) {
         return maxBorrowFor(market, collateral(morpho, market));
@@ -174,6 +183,7 @@ library MorphoLib {
     /// an unborrowed position cannot be liquidated.
     /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required, since `debt` reads stored
     /// state and does not include unaccrued interest.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     function healthFactor(IMorpho morpho, MarketParams memory market) internal view returns (uint256) {
         uint256 debtAmount = debt(morpho, market);
@@ -186,6 +196,7 @@ library MorphoLib {
     /// implies a health factor at or below the target (i.e. borrowing more would push the position deeper toward
     /// liquidation than requested).
     /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     /// @param targetHealthFactor WAD-scaled target health factor (WAD = liquidation threshold).
     function maxBorrowAtHealthFactor(IMorpho morpho, MarketParams memory market, uint256 targetHealthFactor)
