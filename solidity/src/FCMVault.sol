@@ -201,7 +201,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
     /// @inheritdoc IFCMVault
     function setFeeRecipient(address newRecipient) external onlyOwner {
-        // require(newRecipient != address(0), ZeroAddress());
         _accrueFees();
         emit FeeRecipientSet(feeRecipient, newRecipient);
         feeRecipient = newRecipient;
