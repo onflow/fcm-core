@@ -7,11 +7,9 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title SwapLib
 /// @author Flow Foundation
-/// @notice Thin wrapper around FlowSwap V3's SwapRouter02 on Flow EVM mainnet. Internal helpers - inlined into the
-/// caller, recipient is always `address(this)`.
+/// @notice Thin wrapper around FlowSwap V3's SwapRouter02. The router address is passed as a parameter, not
+/// hardcoded. Internal helpers - inlined into the caller, recipient is always `address(this)`.
 library SwapLib {
-    /// @custom:security non-reentrant
-    ISwapRouter02 internal constant SWAP_ROUTER = ISwapRouter02(0xeEDC6Ff75e1b10B903D9013c358e446a73d35341);
     uint256 internal constant BPS = 10_000;
     /// @dev Uniswap V3 tick-math bounds on a valid `sqrtPriceLimitX96`. A limit outside `(MIN_SQRT_RATIO,
     /// MAX_SQRT_RATIO)` is rejected by the pool; the vault treats such a limit as "no feasible swap" and skips.
@@ -32,11 +30,11 @@ library SwapLib {
     /// @param fee Pool fee tier.
     /// @param amountIn Amount of `tokenIn` to sell.
     /// @return amountOut Realized amount of `tokenOut` received.
-    function swapExactIn(address tokenIn, address tokenOut, uint24 fee, uint256 amountIn)
+    function swapExactIn(ISwapRouter02 swapRouter, address tokenIn, address tokenOut, uint24 fee, uint256 amountIn)
         internal
         returns (uint256 amountOut)
     {
-        return SWAP_ROUTER.exactInputSingle(
+        return swapRouter.exactInputSingle(
             ISwapRouter02.ExactInputSingleParams({
                 tokenIn: tokenIn,
                 tokenOut: tokenOut,
@@ -69,13 +67,14 @@ library SwapLib {
     /// @param sqrtPriceLimitX96 Q64.96 marginal-price bound the swap will not cross; the fill stops here if reached.
     /// @return amountOut Realized amount of `tokenOut` received.
     function swapExactInToLimit(
+        ISwapRouter02 swapRouter,
         address tokenIn,
         address tokenOut,
         uint24 fee,
         uint256 amountIn,
         uint160 sqrtPriceLimitX96
     ) internal returns (uint256 amountOut) {
-        return SWAP_ROUTER.exactInputSingle(
+        return swapRouter.exactInputSingle(
             ISwapRouter02.ExactInputSingleParams({
                 tokenIn: tokenIn,
                 tokenOut: tokenOut,
@@ -99,11 +98,15 @@ library SwapLib {
     /// @param amountOut Exact amount of `tokenOut` to receive.
     /// @param amountInMaximum Max `tokenIn` to spend; router reverts above it.
     /// @return amountIn Realized `tokenIn` spent.
-    function swapExactOut(address tokenIn, address tokenOut, uint24 fee, uint256 amountOut, uint256 amountInMaximum)
-        internal
-        returns (uint256 amountIn)
-    {
-        return SWAP_ROUTER.exactOutputSingle(
+    function swapExactOut(
+        ISwapRouter02 swapRouter,
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountOut,
+        uint256 amountInMaximum
+    ) internal returns (uint256 amountIn) {
+        return swapRouter.exactOutputSingle(
             ISwapRouter02.ExactOutputSingleParams({
                 tokenIn: tokenIn,
                 tokenOut: tokenOut,

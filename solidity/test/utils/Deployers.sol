@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../../src/FCMVault.sol";
 import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
-import {SwapLib} from "../../src/libraries/SwapLib.sol";
+import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockIrm} from "../mocks/MockIrm.sol";
 import {MockMorpho} from "../mocks/MockMorpho.sol";
@@ -35,6 +35,7 @@ contract Deployers is Test {
     uint24 constant YIELD_LOAN_POOL_FEE = 100;
 
     MockMorpho constant MORPHO = MockMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
+    ISwapRouter02 constant SWAP_ROUTER = ISwapRouter02(0xeEDC6Ff75e1b10B903D9013c358e446a73d35341);
     MockOracle immutable MARKET_ORACLE = MockOracle(makeAddr("MARKET_ORACLE"));
     MockIrm immutable MARKET_IRM = MockIrm(makeAddr("MARKET_IRM"));
     uint256 constant MARKET_LLTV = 0.86e18;
@@ -56,8 +57,8 @@ contract Deployers is Test {
         etchMocks();
         setCollateralPrice(COLLATERAL_PRICE);
         setYieldPrice(YIELD_PRICE);
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setPool(COLLATERAL_LOAN_POOL_FEE, COLLATERAL_LOAN_POOL);
-        MockSwapRouter(address(SwapLib.SWAP_ROUTER)).setPool(YIELD_LOAN_POOL_FEE, YIELD_LOAN_POOL);
+        MockSwapRouter(address(SWAP_ROUTER)).setPool(COLLATERAL_LOAN_POOL_FEE, COLLATERAL_LOAN_POOL);
+        MockSwapRouter(address(SWAP_ROUTER)).setPool(YIELD_LOAN_POOL_FEE, YIELD_LOAN_POOL);
         vaultHarness = new FCMVaultHarness(defaultInitParams());
         vault = FCMVault(address(vaultHarness));
         MORPHO.supplyLiquidity(vault.market(), 100 ether);
@@ -70,7 +71,7 @@ contract Deployers is Test {
 
         vm.etch(address(COLLATERAL_LOAN_POOL), address(new MockPool()).code);
         vm.etch(address(YIELD_LOAN_POOL), address(new MockPool()).code);
-        vm.etch(address(SwapLib.SWAP_ROUTER), address(new MockSwapRouter()).code);
+        vm.etch(address(SWAP_ROUTER), address(new MockSwapRouter()).code);
 
         vm.etch(address(MARKET_ORACLE), address(new MockOracle(COLLATERAL_PRICE)).code);
         vm.etch(address(MARKET_IRM), address(new MockIrm()).code);
@@ -97,6 +98,7 @@ contract Deployers is Test {
             marketLltv: MARKET_LLTV,
             yieldOracle: IOracle(address(YIELD_ORACLE)),
             morpho: IMorpho(address(MORPHO)),
+            swapRouter: SWAP_ROUTER,
             name: "Flow Credit Market Mock",
             symbol: "fcmMock",
             owner: owner

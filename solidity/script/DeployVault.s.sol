@@ -8,6 +8,7 @@ import {console} from "forge-std/Script.sol";
 import {FCMVault} from "../src/FCMVault.sol";
 import {YieldTokenOracle} from "../src/YieldTokenOracle.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
+import {ISwapRouter02} from "../src/interfaces/external/ISwapRouter02.sol";
 import {ConfiguredScript} from "./ConfiguredScript.s.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
@@ -34,6 +35,8 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 ///           MAX_TVL=... forge script script/DeployVault.s.sol \
 ///             --rpc-url flow_mainnet --broadcast --account "$ACCOUNT"
 contract DeployVault is ConfiguredScript {
+    ISwapRouter02 constant SWAP_ROUTER = ISwapRouter02(0xeEDC6Ff75e1b10B903D9013c358e446a73d35341);
+
     function run() public {
         Config memory c = _loadConfig();
         // Market memory m = _requireMarketExists(c);
@@ -78,6 +81,7 @@ contract DeployVault is ConfiguredScript {
                 marketLltv: c.marketLltv,
                 yieldOracle: IOracle(yieldOracle),
                 morpho: IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f),
+                swapRouter: SWAP_ROUTER,
                 owner: deployer,
                 name: name,
                 symbol: symbol

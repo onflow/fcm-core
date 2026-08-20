@@ -4,7 +4,6 @@ pragma solidity ^0.8.24;
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
 import {MorphoLib} from "../src/libraries/MorphoLib.sol";
-import {SwapLib} from "../src/libraries/SwapLib.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
@@ -157,8 +156,8 @@ contract FCMConstructorTest is Test, Deployers {
 
         assertEq(COLLATERAL_TOKEN.allowance(address(v), address(MORPHO)), type(uint256).max);
         assertEq(LOAN_TOKEN.allowance(address(v), address(MORPHO)), type(uint256).max);
-        assertEq(LOAN_TOKEN.allowance(address(v), address(SwapLib.SWAP_ROUTER)), type(uint256).max);
-        assertEq(YIELD_TOKEN.allowance(address(v), address(SwapLib.SWAP_ROUTER)), type(uint256).max);
-        assertEq(COLLATERAL_TOKEN.allowance(address(v), address(SwapLib.SWAP_ROUTER)), type(uint256).max);
+        assertEq(LOAN_TOKEN.allowance(address(v), address(v.SWAP_ROUTER())), type(uint256).max);
+        assertEq(YIELD_TOKEN.allowance(address(v), address(v.SWAP_ROUTER())), type(uint256).max);
+        assertEq(COLLATERAL_TOKEN.allowance(address(v), address(v.SWAP_ROUTER())), type(uint256).max);
     }
 }
