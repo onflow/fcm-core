@@ -14,6 +14,7 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
@@ -32,7 +33,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 /// - External Rebalancing: Exposes a external rebalance() function to adjust LTV, preserve 100% net collateral
 /// exposure, maximize yield spread, and keep the position clear of liquidation thresholds.
 /// - ERC-4626 Tokenized Vault: Yield is auto-compounded directly into share price appreciation.
-contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
+contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFlashLoanCallback {
     using SafeERC20 for IERC20;
     using Math for uint256;
     using MorphoLib for IMorpho;
@@ -228,19 +229,19 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     }
 
     /// @inheritdoc IFCMVault
-    function accrueFees() external {
+    function accrueFees() external nonReentrant {
         _accrueFees();
     }
 
     /// @inheritdoc IFCMVault
-    function rebalance() external logsVaultState {
+    function rebalance() external nonReentrant logsVaultState {
         require(!emergencyRecovered, EmergencyRecoveryActive());
         _accrueFees();
         _adjustLeverage();
     }
 
     /// @inheritdoc IFCMVault
-    function harvest(uint256 maximumYield) external notInRecovery logsVaultState {
+    function harvest(uint256 maximumYield) external nonReentrant notInRecovery logsVaultState {
         _accrueFees();
         _harvest(maximumYield);
     }
@@ -291,6 +292,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     function deposit(uint256 assets, address receiver)
         external
         override
+        nonReentrant
         notInRecovery
         logsVaultState
         returns (uint256 shares)
@@ -332,6 +334,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     function redeem(uint256 shares, address receiver, address owner)
         external
         override
+        nonReentrant
         logsVaultState
         returns (uint256 assets)
     {
@@ -357,6 +360,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     /// @inheritdoc IFCMVault
     function redeemInKind(uint256 shares, address receiver, address owner)
         external
+        nonReentrant
         logsVaultState
         returns (uint256 collateralOut, uint256 yieldOut)
     {
