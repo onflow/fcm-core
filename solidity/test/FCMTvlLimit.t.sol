@@ -2,14 +2,14 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
-import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
 import {Test} from "forge-std/Test.sol";
 
 /// @notice Tests for the TVL limit on FCMVault.
 contract FCMTvlLimitTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
 
     // Mirror the contract's event so we can use vm.expectEmit.
     event MaxTvlSet(uint256 previousMaxTvl, uint256 newMaxTvl);
@@ -17,7 +17,7 @@ contract FCMTvlLimitTest is Test, Deployers {
 
     function setUp() public {
         deployVault();
-        vault.grantFundApprove(alice, 1 ether);
+        grantFundApprove(alice, 1 ether);
     }
 
     function test_tvlLimit_defaultsToZero() public view {

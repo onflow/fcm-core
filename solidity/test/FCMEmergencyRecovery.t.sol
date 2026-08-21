@@ -3,16 +3,16 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {MorphoLib} from "../src/libraries/MorphoLib.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
-import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
 import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
 contract FCMEmergencyRecoveryTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
     bytes errorBobUnauthorized = Errors.ownableUnauthorizedAccount(address(bob));
     bytes errorNotReady = Errors.emergencyRecoveryNotReady();
     bytes errorActive = Errors.emergencyRecoveryActive();
@@ -22,7 +22,7 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
 
         vm.prank(owner);
         vault.setMaxTvl(1e21);
-        vault.grantFundApprove(alice, 1 ether);
+        grantFundApprove(alice, 1 ether);
     }
 
     function test_emergencyRecovery_onlyOwner() public {

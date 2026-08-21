@@ -3,14 +3,14 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
-import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
 import {Test} from "forge-std/Test.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 contract FCMDepositTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
     using Math for uint256;
     bytes errorActive = Errors.emergencyRecoveryActive();
 
@@ -18,8 +18,8 @@ contract FCMDepositTest is Test, Deployers {
         deployVault();
         vm.prank(owner);
         vault.setMaxTvl(100 ether);
-        vault.grantFundApprove(alice, 1 ether);
-        vault.grantFundApprove(bob, 1 ether);
+        grantFundApprove(alice, 1 ether);
+        grantFundApprove(bob, 1 ether);
     }
 
     function test_deposit_firstDepositMintsDecimalOffsetShares() public {
@@ -42,7 +42,7 @@ contract FCMDepositTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
 
-        uint256 debt = vaultHarness.exposed_debt();
+        uint256 debt = vault.debt();
         assertGt(debt, 0);
     }
 
@@ -174,7 +174,7 @@ contract FCMDepositTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(0.5 ether, alice);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 originalDebt = vaultHarness.exposed_debt();
+        uint256 originalDebt = vault.debt();
 
         setCollateralPrice(COLLATERAL_PRICE.mulDiv(1000, 100));
 
@@ -182,7 +182,7 @@ contract FCMDepositTest is Test, Deployers {
         vault.deposit(0.5 ether, alice);
 
         uint256 newYield = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 newDebt = vaultHarness.exposed_debt();
+        uint256 newDebt = vault.debt();
         uint256 expectedYield = originalYield * 11;
         uint256 expectedDebt = originalDebt * 11;
         assertApproxEqRel(newYield, expectedYield, 0.0001e18);
@@ -199,13 +199,13 @@ contract FCMDepositTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 originalDebt = vaultHarness.exposed_debt();
+        uint256 originalDebt = vault.debt();
 
         setCollateralPrice(COLLATERAL_PRICE.mulDiv(50, 100));
         vm.prank(bob);
         vault.deposit(1 ether, bob);
 
-        assertEq(vaultHarness.exposed_debt(), originalDebt);
+        assertEq(vault.debt(), originalDebt);
         assertEq(YIELD_TOKEN.balanceOf(address(vault)), originalYield);
     }
 
@@ -275,7 +275,7 @@ contract FCMDepositTest is Test, Deployers {
 
         uint256 collBefore = vault.collateral();
         uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 debtBefore = vaultHarness.exposed_debt();
+        uint256 debtBefore = vault.debt();
         uint256 hfBefore = vault.healthFactor();
 
         vault.harvest(type(uint256).max);
@@ -283,7 +283,7 @@ contract FCMDepositTest is Test, Deployers {
 
         assertApproxEqAbs(vault.collateral(), collBefore, 1);
         assertApproxEqAbs(YIELD_TOKEN.balanceOf(address(vault)), yieldBefore, 1);
-        assertApproxEqAbs(vaultHarness.exposed_debt(), debtBefore, 1);
+        assertApproxEqAbs(vault.debt(), debtBefore, 1);
         assertApproxEqAbs(vault.healthFactor(), hfBefore, 1e15);
     }
 

@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
-
+import {FCMVault} from "../src/FCMVault.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {IMorpho, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
-
-import {FCMVault} from "../src/FCMVault.sol";
-import {VaultHelpers} from "../test/utils/FCMVaultHelpers.sol";
+import {Script, console} from "forge-std/Script.sol";
 
 /// @title Rebalance
 /// @notice Drives a LIVE FCMVault's leveraged Morpho position back inside its
@@ -36,7 +34,7 @@ import {VaultHelpers} from "../test/utils/FCMVaultHelpers.sol";
 contract Rebalance is Script {
     using MarketParamsLib for MarketParams;
     using SharesMathLib for uint256;
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
 
     function run() public {
         FCMVault vault = FCMVault(vm.envAddress("VAULT"));

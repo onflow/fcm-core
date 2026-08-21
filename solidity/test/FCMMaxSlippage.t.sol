@@ -2,13 +2,13 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
-import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract FCMMaxSlippageTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
 
     function setUp() public {
         deployVault();

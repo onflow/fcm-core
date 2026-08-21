@@ -2,12 +2,12 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../../src/FCMVault.sol";
+import {FCMHelpers} from "../../src/libraries/FCMHelpers.sol";
 import {Deployers} from "../utils/Deployers.sol";
-import {VaultHelpers} from "../utils/FCMVaultHelpers.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract FCMGasSnapshotsTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
 
     function setUp() public {
         deployVault();
@@ -15,7 +15,7 @@ contract FCMGasSnapshotsTest is Test, Deployers {
         vault.setMaxTvl(100 ether);
         vault.setMaxSlippageBps(100);
         vm.stopPrank();
-        vault.grantFundApprove(alice, 1 ether);
+        grantFundApprove(alice, 1 ether);
         vm.startPrank(alice);
     }
 

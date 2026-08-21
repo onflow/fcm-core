@@ -2,16 +2,16 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {MorphoLib} from "../src/libraries/MorphoLib.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
-import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
 import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {Test} from "forge-std/Test.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 contract FCMHarvestTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
     using Math for uint256;
     using MorphoLib for MarketParams;
 
@@ -21,7 +21,7 @@ contract FCMHarvestTest is Test, Deployers {
         vault.setMaxTvl(100 ether);
         vault.setMaxSlippageBps(100); // 1% — harvest/rebalance swaps use swapLimit, which no-ops at 0
         vm.stopPrank();
-        vault.grantFundApprove(alice, 1 ether);
+        grantFundApprove(alice, 1 ether);
     }
 
     function test_harvest_harvestsSurplusAsCollateral() public {
@@ -43,7 +43,7 @@ contract FCMHarvestTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 originalDebt = vaultHarness.exposed_debt();
+        uint256 originalDebt = vault.debt();
 
         vm.prank(owner);
         vault.setMaxSlippageBps(slippageBps);
@@ -53,7 +53,7 @@ contract FCMHarvestTest is Test, Deployers {
         vault.harvest(type(uint256).max);
         uint256 yieldSold = originalYield - YIELD_TOKEN.balanceOf(address(vault));
         assertGt(yieldSold, 0);
-        assertEq(vaultHarness.exposed_debt(), originalDebt);
+        assertEq(vault.debt(), originalDebt);
     }
 
     function test_harvest_skipsMispricedYield() public {
@@ -72,7 +72,7 @@ contract FCMHarvestTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 debtBefore = vaultHarness.exposed_debt();
+        uint256 debtBefore = vault.debt();
 
         setYieldPrice(YIELD_PRICE.mulDiv(200, 100));
         uint256 collateralPrice = COLLATERAL_PRICE.mulDiv(200, 100);
@@ -82,14 +82,14 @@ contract FCMHarvestTest is Test, Deployers {
 
         assertEq(vault.collateral(), 1 ether);
         assertLt(YIELD_TOKEN.balanceOf(address(vault)), yieldBefore);
-        assertLt(vaultHarness.exposed_debt(), debtBefore);
+        assertLt(vault.debt(), debtBefore);
     }
 
     function test_harvest_mispricedCollateralLeftoverDebt() public {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 debtBefore = vaultHarness.exposed_debt();
+        uint256 debtBefore = vault.debt();
 
         setYieldPrice(YIELD_PRICE.mulDiv(1000, 100));
         uint256 collateralPrice = COLLATERAL_PRICE.mulDiv(200, 100);
@@ -101,14 +101,14 @@ contract FCMHarvestTest is Test, Deployers {
         vault.harvest(1e10);
         assertEq(vault.collateral(), 1 ether);
         assertLt(YIELD_TOKEN.balanceOf(address(vault)), yieldBefore);
-        assertLt(vaultHarness.exposed_debt(), debtBefore);
+        assertLt(vault.debt(), debtBefore);
     }
 
     function test_harvest_smallSwapLimitIsDustUntilLargeEnough() public {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 debtBefore = vaultHarness.exposed_debt();
+        uint256 debtBefore = vault.debt();
         uint256 collateralBefore = vault.collateral();
 
         setYieldPrice(YIELD_PRICE * 10);
@@ -117,7 +117,7 @@ contract FCMHarvestTest is Test, Deployers {
 
         uint256 yieldAfter = YIELD_TOKEN.balanceOf(address(vault));
         assertEq(yieldAfter + 101, yieldBefore);
-        assertEq(vaultHarness.exposed_debt(), debtBefore);
+        assertEq(vault.debt(), debtBefore);
         assertEq(vault.collateral(), collateralBefore);
 
         // 200 is enough to harvest the dust
@@ -134,13 +134,13 @@ contract FCMHarvestTest is Test, Deployers {
         setYieldPrice(0.02e36);
 
         uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 debtBefore = vaultHarness.exposed_debt();
+        uint256 debtBefore = vault.debt();
         uint256 collateralBefore = vault.collateral();
         vault.harvest(1);
 
         uint256 yieldAfter = YIELD_TOKEN.balanceOf(address(vault));
         assertEq(yieldAfter + 1, yieldBefore);
-        assertEq(vaultHarness.exposed_debt(), debtBefore);
+        assertEq(vault.debt(), debtBefore);
         assertEq(vault.collateral(), collateralBefore);
     }
 
@@ -214,13 +214,13 @@ contract FCMHarvestTest is Test, Deployers {
     function test_harvest_repaysPartialDebtWhenLeftoverWithinDebt() public {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
-        uint256 debtBefore = vaultHarness.exposed_debt();
+        uint256 debtBefore = vault.debt();
         uint256 collBefore = vault.collateral();
 
         // Light liquidation: seize/repay 20% each, so the yield surplus (~20% of the
         // debt's worth) stays comfortably below the 80% of debt that remains.
         MORPHO.liquidate(vault.market(), address(vault), collBefore * 20 / 100, debtBefore * 20 / 100);
-        uint256 debtAfterLiquidation = vaultHarness.exposed_debt();
+        uint256 debtAfterLiquidation = vault.debt();
         assertGt(debtAfterLiquidation, 0);
 
         // Push the collateral pool past its slippage bound so leg 2 (loan->collateral) is
@@ -229,8 +229,8 @@ contract FCMHarvestTest is Test, Deployers {
 
         vault.harvest(type(uint256).max); // must not revert: leftover <= outstanding debt
 
-        assertLt(vaultHarness.exposed_debt(), debtAfterLiquidation);
-        assertGt(vaultHarness.exposed_debt(), 0);
+        assertLt(vault.debt(), debtAfterLiquidation);
+        assertGt(vault.debt(), 0);
         assertEq(LOAN_TOKEN.balanceOf(address(vault)), 0);
         assertApproxEqAbs(vault.collateral(), collBefore * 80 / 100, 1);
     }
@@ -239,7 +239,7 @@ contract FCMHarvestTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 debtBefore = vaultHarness.exposed_debt();
+        uint256 debtBefore = vault.debt();
 
         // Yield surplus (yield price doubles) plus a shallow, price-impacted collateral
         // pool: leg 1 fills, leg 2 partial-fills, and the residue is repaid as debt.
@@ -250,7 +250,7 @@ contract FCMHarvestTest is Test, Deployers {
 
         assertLt(YIELD_TOKEN.balanceOf(address(vault)), yieldBefore);
         assertGt(vault.collateral(), 1 ether);
-        assertLt(vaultHarness.exposed_debt(), debtBefore);
+        assertLt(vault.debt(), debtBefore);
         assertEq(LOAN_TOKEN.balanceOf(address(vault)), 0);
     }
 }

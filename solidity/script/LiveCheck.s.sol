@@ -9,7 +9,7 @@ import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
 
 import {FCMVault} from "../src/FCMVault.sol";
-import {VaultHelpers} from "../test/utils/FCMVaultHelpers.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 
 /// @title LiveCheck
 /// @notice End-to-end integration check against a LIVE FCMVault deployment:
@@ -40,7 +40,7 @@ import {VaultHelpers} from "../test/utils/FCMVaultHelpers.sol";
 contract LiveCheck is Script {
     using MarketParamsLib for MarketParams;
     using SharesMathLib for uint256;
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
 
     function run() public {
         FCMVault vault = FCMVault(vm.envAddress("VAULT"));
