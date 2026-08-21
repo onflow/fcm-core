@@ -420,7 +420,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
     /// @inheritdoc IFCMVault
     function maxRedeem(address owner) external view returns (uint256) {
-        if (_market().healthFactor() > HEALTH_FACTOR_MAX) return 0;
+        if (_market().healthFactor() < HEALTH_FACTOR_MIN) return 0;
         return balanceOf(owner);
     }
 

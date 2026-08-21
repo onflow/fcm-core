@@ -33,16 +33,26 @@ contract FCMMaxRedeemTest is Test, Deployers {
         assertEq(vault.maxRedeem(alice), shares);
     }
 
-    function test_maxRedeem_zeroWhenHealthFactorAboveMax() public {
+    function test_maxRedeem_zeroWhenUnhealthy() public {
         vm.prank(alice);
         uint256 shares = vault.deposit(1 ether, alice);
         assertGt(shares, 0);
 
-        setCollateralPrice(COLLATERAL_PRICE * 3); // HF well above MAX
-        assertGt(vault.healthFactor(), HEALTH_FACTOR_MAX);
+        setCollateralPrice(COLLATERAL_PRICE / 2);
+        assertLt(vault.healthFactor(), HEALTH_FACTOR_MIN);
 
         assertEq(vault.maxRedeem(alice), 0);
-        assertGt(vault.balanceOf(alice), 0);
+    }
+
+    function test_maxRedeem_veryHealthy() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        assertGt(shares, 0);
+
+        setCollateralPrice(COLLATERAL_PRICE * 10);
+        assertGt(vault.healthFactor(), HEALTH_FACTOR_MIN);
+
+        assertEq(vault.maxRedeem(alice), shares);
     }
 
     function test_maxRedeem_perOwnerIndependence() public {
@@ -55,22 +65,5 @@ contract FCMMaxRedeemTest is Test, Deployers {
         assertEq(vault.maxRedeem(alice), aliceShares);
         assertEq(vault.maxRedeem(bob), bobShares);
         assertEq(vault.maxRedeem(stranger), 0);
-    }
-
-    // ERC4626 consistency gap: `redeem()` does NOT enforce `maxRedeem` /
-    // `ERC4626ExceededMaxRedeem` — its only HF gate is `>= HEALTH_FACTOR_MIN`. So when
-    // `hf > HEALTH_FACTOR_MAX` but `hf >= HEALTH_FACTOR_MIN`, `maxRedeem` reports 0
-    // yet `redeem()` still succeeds. This pins that divergence.
-    function test_maxRedeem_reportsZeroButRedeemStillSucceeds() public {
-        vm.prank(alice);
-        uint256 shares = vault.deposit(1 ether, alice);
-
-        setCollateralPrice(COLLATERAL_PRICE * 3); // HF above MAX (> MIN too)
-        assertGt(vault.healthFactor(), HEALTH_FACTOR_MAX);
-        assertEq(vault.maxRedeem(alice), 0);
-
-        vm.prank(alice);
-        uint256 assetsOut = vault.redeem(shares, alice, alice);
-        assertGt(assetsOut, 0);
     }
 }
