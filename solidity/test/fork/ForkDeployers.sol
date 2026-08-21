@@ -48,7 +48,7 @@ contract ForkDeployers is Test {
     address internal alice = makeAddr("alice");
 
     function _forkSetup() internal {
-        vm.createSelectFork("http://localhost:8545");
+        vm.createSelectFork("flow_mainnet");
 
         setCollateralPrice(ORACLE_PRICE);
         setYieldPrice(YIELD_ORACLE_PRICE);
