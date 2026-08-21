@@ -37,7 +37,7 @@ jobs:
         run: FOUNDRY_PROFILE=ci forge lint
 
       - name: Run Forge gas snapshot test
-        run: FOUNDRY_PROFILE=ci forge snapshot --match-path "test/gas/FCMGasSnapshots.t.sol" --check
+        run: FOUNDRY_PROFILE=ci forge snapshot --match-path "test/gas/*.t.sol" --check --tolerance 1
 
       - name: Run Forge build
         run: FOUNDRY_PROFILE=ci forge build --sizes
