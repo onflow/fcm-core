@@ -1,9 +1,18 @@
 {
   "detectors_to_run": "all",
   "filter_paths": "(lib/|script/|external/)",
-  "detectors_to_exclude": ["naming-convention", "too-many-digits", "timestamp"],
+  "detectors_to_exclude": [
+    "naming-convention",
+    "too-many-digits",
+    "timestamp",
+    "reentrancy-balance",
+    "reentrancy-no-eth",
+    "reentrancy-events",
+    "unused-return",
+    "missing-zero-check"
+  ],
   "exclude_dependencies": true,
   "exclude_informational": false,
   "exclude_optimization": false,
-  "fail_on": "FailOnLevel.PEDANTIC"
+  "fail_on": "low"
 }

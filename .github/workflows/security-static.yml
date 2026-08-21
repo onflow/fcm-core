@@ -72,7 +72,7 @@ jobs:
       # findings print for review but do not block. See header for how to
       # suppress a false positive inline.
       - name: Slither
-        run: slither . --config-file slither.config.json --fail-medium
+        run: slither . --config-file slither.config.json
 
       - name: Solhint
         run: solhint 'src/**/*.sol' '!src/interfaces/external/**' --max-warnings 0

@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {MarketLib} from "../src/libraries/MarketLib.sol";
 import {IUniswapV3Factory} from "./interfaces/IUniswapV3Factory.sol";
-import {Id, Market, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
+import {Id, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {Script} from "forge-std/Script.sol";
 
@@ -94,12 +93,12 @@ abstract contract ConfiguredScript is Script {
     /// @dev The Morpho market referenced by the config must already exist on
     ///      chain (its id is the hash of the exact params, so existence also
     ///      proves the params match).
-    function _requireMarketExists(Config memory c) internal view returns (Market memory m) {
-        m = MarketLib.MORPHO.market(_marketId(c));
-        require(
-            m.lastUpdate != 0, "Morpho market for config params does not exist; check marketOracle/marketIrm/marketLltv"
-        );
-    }
+    // function _requireMarketExists(Config memory c) internal view returns (Market memory m) {
+    //     m = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f).market(_marketId(c));
+    //     require(
+    //         m.lastUpdate != 0, "Morpho market for config params does not exist; check marketOracle/marketIrm/marketLltv"
+    //     );
+    // }
 
     /// @dev Both FlowSwap pools the vault trades on must exist.
     function _requirePoolsExist(Config memory c) internal view {

@@ -1,74 +1,70 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-
 import {Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-/// @title MarketLib
+/// @title MorphoLib
 /// @author Flow Foundation
-/// @notice Read + write helpers around a Morpho Blue market on Flow EVM mainnet. Hardcodes the Morpho singleton so
-/// callers operate purely on a `MarketParams`. All prices follow Morpho's IOracle convention (1e36-scaled
-/// collateral->debt).
+/// @notice Read + write helpers around a Morpho Blue market. The `IMorpho` singleton is passed as a parameter,
+/// not hardcoded. All prices follow Morpho's IOracle convention (1e36-scaled collateral->debt).
 /// Callers MUST call `accrueInterest` in the same tx before reading `debt` - this lib reads `position` +
 /// `market` directly instead of going through Morpho's `expectedBorrowAssets` periphery.
-library MarketLib {
+library MorphoLib {
     using Math for uint256;
     using MarketParamsLib for MarketParams;
-
-    /// @custom:security non-reentrant
-    IMorpho internal constant MORPHO = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
 
     uint256 internal constant ORACLE_PRICE_SCALE = 1e36;
     uint256 internal constant WAD = 1e18;
     uint256 internal constant VIRTUAL_SHARES = 1e6;
     uint256 internal constant VIRTUAL_ASSETS = 1;
 
-    // -- writes ----------------------------
-
     /// @notice Settles accrued interest on the given market into Morpho's stored state.
     /// @dev Must be called in the same tx before any read that depends on up-to-the-block debt (e.g. `debt`,
     /// `healthFactor`, `maxBorrowAtHealthFactor`). Without this, reads reflect the last-touched block's state.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
-    function accrueInterest(MarketParams memory market) internal {
-        MORPHO.accrueInterest(market);
+    function accrueInterest(IMorpho morpho, MarketParams memory market) internal {
+        morpho.accrueInterest(market);
     }
 
     /// @notice Supplies `assets` of collateral token from this contract to the market on behalf of itself.
     /// @dev Assumes the caller has already approved the Morpho singleton for `assets` of the collateral token.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     /// @param assets Amount of collateral to supply, in token units.
-    function supplyCollateral(MarketParams memory market, uint256 assets) internal {
-        MORPHO.supplyCollateral(market, assets, address(this), "");
+    function supplyCollateral(IMorpho morpho, MarketParams memory market, uint256 assets) internal {
+        morpho.supplyCollateral(market, assets, address(this), "");
     }
 
     /// @notice Borrows `assets` of loan token against this contract's collateral, with the loan tokens sent to itself.
     /// @dev Passes `shares = 0` so Morpho interprets the call as an asset-denominated borrow. Reverts inside Morpho if
     /// the resulting position would exceed LLTV.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     /// @param assets Amount of loan token to borrow, in token units.
-    function borrow(MarketParams memory market, uint256 assets) internal {
+    function borrow(IMorpho morpho, MarketParams memory market, uint256 assets) internal {
         // slither-disable-next-line unused-return -> asset-denominated borrow (shares=0)
-        MORPHO.borrow(market, assets, 0, address(this), address(this));
+        morpho.borrow(market, assets, 0, address(this), address(this));
     }
 
     /// @notice Repay `assets` units of the loan token to Morpho, reducing this contract's debt on the market.
-    ///
     /// @dev `onBehalf = address(this)` repays this contract's own position; the trailing `""` is Morpho's callback
     /// data, unused.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     /// @param assets Amount of loan token to repay, in token units.
     /// @return assetsRepaid Mirrors `assets` (Morpho's return convention).
     /// @return sharesRepaid Borrow shares burned by this repayment.
-    function repay(MarketParams memory market, uint256 assets)
+    function repay(IMorpho morpho, MarketParams memory market, uint256 assets)
         internal
         returns (uint256 assetsRepaid, uint256 sharesRepaid)
     {
         // slither-disable-next-line unused-return -> return is forwarded but no caller consumes it
-        return MORPHO.repay(market, assets, 0, address(this), "");
+        return morpho.repay(market, assets, 0, address(this), "");
     }
 
     /// @notice Repay the entire borrow position, by shares, so the debt is zeroed exactly.
@@ -76,13 +72,14 @@ library MarketLib {
     /// an asset amount back to shares either over-shoots (repaying `debt()` over-burns -> revert) or under-shoots
     /// (leaving dust borrow shares that block a full-collateral withdrawal). Repaying by shares clears it precisely.
     /// Morpho pulls the required loan token from this contract's balance, so the caller must pre-fund it.
-    /// @return assetsRepaid Loan token consumed to clear the position.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
-    function repayAll(MarketParams memory market) internal returns (uint256 assetsRepaid) {
-        uint256 borrowShares = uint256(MORPHO.position(market.id(), address(this)).borrowShares);
+    /// @return assetsRepaid Loan token consumed to clear the position.
+    function repayAll(IMorpho morpho, MarketParams memory market) internal returns (uint256 assetsRepaid) {
+        uint256 borrowShares = uint256(morpho.position(market.id(), address(this)).borrowShares);
         if (borrowShares == 0) return 0;
         // slither-disable-next-line unused-return -> sharesRepaid intentionally dropped; only assetsRepaid is needed
-        (assetsRepaid,) = MORPHO.repay(market, 0, borrowShares, address(this), "");
+        (assetsRepaid,) = morpho.repay(market, 0, borrowShares, address(this), "");
     }
 
     /// @notice Withdraw `assets` units of the collateral token from this contract's Morpho position back to this
@@ -91,18 +88,18 @@ library MarketLib {
     ///
     /// Both the `onBehalf` and `receiver` arguments to Morpho are `address(this)`: the collateral belongs to
     /// this contract.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     /// @param assets Amount of collateral to withdraw, in token units.
-    function withdrawCollateral(MarketParams memory market, uint256 assets) internal {
-        MORPHO.withdrawCollateral(market, assets, address(this), address(this));
+    function withdrawCollateral(IMorpho morpho, MarketParams memory market, uint256 assets) internal {
+        morpho.withdrawCollateral(market, assets, address(this), address(this));
     }
 
-    // -- reads -----------------------------
-
     /// @notice Returns this contract's collateral balance in the given market, in raw collateral-token units.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
-    function collateral(MarketParams memory market) internal view returns (uint256) {
-        return uint256(MORPHO.position(market.id(), address(this)).collateral);
+    function collateral(IMorpho morpho, MarketParams memory market) internal view returns (uint256) {
+        return uint256(morpho.position(market.id(), address(this)).collateral);
     }
 
     /// @notice Returns this contract's current debt in the given Morpho market, denominated in raw loan-token units.
@@ -117,11 +114,12 @@ library MarketLib {
     /// so the first borrower cannot manipulate it. They must be included in every conversion to match Morpho's internal
     /// accounting.
     /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
-    function debt(MarketParams memory market) internal view returns (uint256) {
-        Position memory pos = MORPHO.position(market.id(), address(this));
+    function debt(IMorpho morpho, MarketParams memory market) internal view returns (uint256) {
+        Position memory pos = morpho.position(market.id(), address(this));
         if (pos.borrowShares == 0) return 0;
-        Market memory mkt = MORPHO.market(market.id());
+        Market memory mkt = morpho.market(market.id());
         return uint256(pos.borrowShares)
             .mulDiv(
                 uint256(mkt.totalBorrowAssets) + VIRTUAL_ASSETS,
@@ -172,9 +170,10 @@ library MarketLib {
 
     /// @notice Returns the maximum loan-token amount borrowable against this contract's current collateral balance.
     /// @dev Convenience wrapper over `maxBorrowFor(collateral(market))`.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
-    function maxBorrow(MarketParams memory market) internal view returns (uint256) {
-        return maxBorrowFor(market, collateral(market));
+    function maxBorrow(IMorpho morpho, MarketParams memory market) internal view returns (uint256) {
+        return maxBorrowFor(market, collateral(morpho, market));
     }
 
     /// @notice Returns this contract's health factor in the given market, scaled by WAD (1e18).
@@ -184,11 +183,12 @@ library MarketLib {
     /// an unborrowed position cannot be liquidated.
     /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required, since `debt` reads stored
     /// state and does not include unaccrued interest.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
-    function healthFactor(MarketParams memory market) internal view returns (uint256) {
-        uint256 debtAmount = debt(market);
+    function healthFactor(IMorpho morpho, MarketParams memory market) internal view returns (uint256) {
+        uint256 debtAmount = debt(morpho, market);
         if (debtAmount == 0) return type(uint256).max;
-        return maxBorrow(market).mulDiv(WAD, debtAmount);
+        return maxBorrow(morpho, market).mulDiv(WAD, debtAmount);
     }
 
     /// @notice Returns the additional loan-token amount this contract can borrow to reach `targetHealthFactor`.
@@ -196,15 +196,16 @@ library MarketLib {
     /// implies a health factor at or below the target (i.e. borrowing more would push the position deeper toward
     /// liquidation than requested).
     /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required.
+    /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     /// @param targetHealthFactor WAD-scaled target health factor (WAD = liquidation threshold).
-    function maxBorrowAtHealthFactor(MarketParams memory market, uint256 targetHealthFactor)
+    function maxBorrowAtHealthFactor(IMorpho morpho, MarketParams memory market, uint256 targetHealthFactor)
         internal
         view
         returns (uint256)
     {
-        uint256 targetDebt = maxBorrow(market).mulDiv(WAD, targetHealthFactor);
-        uint256 currentDebt = debt(market);
+        uint256 targetDebt = maxBorrow(morpho, market).mulDiv(WAD, targetHealthFactor);
+        uint256 currentDebt = debt(morpho, market);
         return targetDebt > currentDebt ? targetDebt - currentDebt : 0;
     }
 }

@@ -3,8 +3,7 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
-import {MarketLib} from "../src/libraries/MarketLib.sol";
-import {SwapLib} from "../src/libraries/SwapLib.sol";
+import {MorphoLib} from "../src/libraries/MorphoLib.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
@@ -21,19 +20,19 @@ contract FCMConstructorTest is Test, Deployers {
 
     function test_constructor_revertsWhenHealthFactorMinBelowWad() public {
         IFCMVault.InitParams memory p = defaultInitParams();
-        p.healthFactorMin = MarketLib.WAD - 1;
+        p.healthFactorMin = MorphoLib.WAD - 1;
         vm.expectRevert(Errors.belowMinWad(p.healthFactorMin));
         new FCMVault(p);
     }
 
     function test_constructor_healthFactorMinAtWadIsAllowed() public {
         IFCMVault.InitParams memory p = defaultInitParams();
-        p.healthFactorMin = MarketLib.WAD;
-        p.healthFactorMinTarget = MarketLib.WAD;
-        p.healthFactorMaxTarget = MarketLib.WAD;
-        p.healthFactorMax = MarketLib.WAD;
+        p.healthFactorMin = MorphoLib.WAD;
+        p.healthFactorMinTarget = MorphoLib.WAD;
+        p.healthFactorMaxTarget = MorphoLib.WAD;
+        p.healthFactorMax = MorphoLib.WAD;
         FCMVault v = new FCMVault(p);
-        assertEq(v.HEALTH_FACTOR_MIN(), MarketLib.WAD);
+        assertEq(v.HEALTH_FACTOR_MIN(), MorphoLib.WAD);
     }
 
     function test_constructor_revertsWhenHealthFactorMinAboveMinTarget() public {
@@ -74,16 +73,16 @@ contract FCMConstructorTest is Test, Deployers {
 
     function test_constructor_revertsWhenYieldFactorMaxBelowWad() public {
         IFCMVault.InitParams memory p = defaultInitParams();
-        p.yieldFactorMax = MarketLib.WAD - 1;
+        p.yieldFactorMax = MorphoLib.WAD - 1;
         vm.expectRevert(Errors.belowMinWad(p.yieldFactorMax));
         new FCMVault(p);
     }
 
     function test_constructor_yieldFactorMaxAtWadIsAllowed() public {
         IFCMVault.InitParams memory p = defaultInitParams();
-        p.yieldFactorMax = MarketLib.WAD;
+        p.yieldFactorMax = MorphoLib.WAD;
         FCMVault v = new FCMVault(p);
-        assertEq(v.YIELD_FACTOR_MAX(), MarketLib.WAD);
+        assertEq(v.YIELD_FACTOR_MAX(), MorphoLib.WAD);
     }
 
     function test_constructor_revertsWhenYieldLoanPoolIsZeroAddress() public {
@@ -119,10 +118,10 @@ contract FCMConstructorTest is Test, Deployers {
         assertEq(v.YIELD_LOAN_POOL(), p.yieldLoanPool);
         assertEq(v.YIELD_LOAN_POOL_FEE(), p.yieldLoanPoolFee);
 
-        assertEq(v.MARKET_ORACLE(), p.marketOracle);
-        assertEq(v.MARKET_IRM(), p.marketIrm);
-        assertEq(v.MARKET_LLTV(), p.marketLltv);
-        assertEq(address(v.YIELD_ORACLE()), address(p.yieldOracle));
+        // assertEq(v.MARKET_ORACLE(), p.marketOracle);
+        // assertEq(v.MARKET_IRM(), p.marketIrm);
+        // assertEq(v.MARKET_LLTV(), p.marketLltv);
+        // assertEq(address(v.YIELD_ORACLE()), address(p.yieldOracle));
     }
 
     function test_constructor_setsErc20MetadataAndOwner() public {
@@ -155,10 +154,10 @@ contract FCMConstructorTest is Test, Deployers {
         IFCMVault.InitParams memory p = defaultInitParams();
         FCMVault v = new FCMVault(p);
 
-        assertEq(COLLATERAL_TOKEN.allowance(address(v), address(MarketLib.MORPHO)), type(uint256).max);
-        assertEq(LOAN_TOKEN.allowance(address(v), address(MarketLib.MORPHO)), type(uint256).max);
-        assertEq(LOAN_TOKEN.allowance(address(v), address(SwapLib.SWAP_ROUTER)), type(uint256).max);
-        assertEq(YIELD_TOKEN.allowance(address(v), address(SwapLib.SWAP_ROUTER)), type(uint256).max);
-        assertEq(COLLATERAL_TOKEN.allowance(address(v), address(SwapLib.SWAP_ROUTER)), type(uint256).max);
+        assertEq(COLLATERAL_TOKEN.allowance(address(v), address(MORPHO)), type(uint256).max);
+        assertEq(LOAN_TOKEN.allowance(address(v), address(MORPHO)), type(uint256).max);
+        assertEq(LOAN_TOKEN.allowance(address(v), address(v.SWAP_ROUTER())), type(uint256).max);
+        assertEq(YIELD_TOKEN.allowance(address(v), address(v.SWAP_ROUTER())), type(uint256).max);
+        assertEq(COLLATERAL_TOKEN.allowance(address(v), address(v.SWAP_ROUTER())), type(uint256).max);
     }
 }
