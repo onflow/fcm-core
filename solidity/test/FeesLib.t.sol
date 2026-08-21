@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.25;
+pragma solidity ^0.8.24;
 
 import {FeesLib} from "../src/libraries/FeesLib.sol";
 import {MarketLib} from "../src/libraries/MarketLib.sol";
@@ -15,7 +15,7 @@ contract FeesLibTest is Test {
         vm.warp(0);
     }
 
-    function test_FeesToMint_ZeroBeforeElapsed() public view {
+    function test_feesLib_feesToMintZeroBeforeElapsed() public view {
         (,, uint256 shares) = FeesLib.feesToMint({
             nav: 100e18,
             claims: 100e18,
@@ -27,7 +27,7 @@ contract FeesLibTest is Test {
         assertEq(shares, 0);
     }
 
-    function test_FeesToMint_ZeroWhenNavIsZero() public {
+    function test_feesLib_feesToMintZeroWhenNavIsZero() public {
         skip(1000);
         (,, uint256 shares) = FeesLib.feesToMint({
             nav: 0,
@@ -40,7 +40,7 @@ contract FeesLibTest is Test {
         assertEq(shares, 0);
     }
 
-    function test_FeesToMint_ZeroWhenMgmtAndPerfAreZero() public {
+    function test_feesLib_feesToMintZeroWhenMgmtAndPerfAreZero() public {
         skip(1000);
         (,, uint256 shares) = FeesLib.feesToMint({
             nav: 100e18,
@@ -53,7 +53,7 @@ contract FeesLibTest is Test {
         assertEq(shares, 0);
     }
 
-    function test_FeesToMint_ManagementFeeOnly() public {
+    function test_feesLib_feesToMintManagementFeeOnly() public {
         skip(365 days);
         (uint256 managementFee,, uint256 shares) = FeesLib.feesToMint({
             nav: 100e18,
@@ -67,7 +67,7 @@ contract FeesLibTest is Test {
         assertApproxEqRel(shares, uint256(100e18) / 99, 1);
     }
 
-    function test_FeesToMint_PerformanceFeeOnlyNoGain() public view {
+    function test_feesLib_feesToMintPerformanceFeeOnlyNoGain() public view {
         (,, uint256 shares) = FeesLib.feesToMint({
             nav: 100e18,
             claims: 100e18,
@@ -79,7 +79,7 @@ contract FeesLibTest is Test {
         assertEq(shares, 0);
     }
 
-    function test_FeesToMint_PerformanceFeeOnlyWithGain() public view {
+    function test_feesLib_feesToMintPerformanceFeeOnlyWithGain() public view {
         (, uint256 performanceFee, uint256 shares) = FeesLib.feesToMint({
             nav: 110e18,
             claims: 100e18,
@@ -92,7 +92,7 @@ contract FeesLibTest is Test {
         assertApproxEqRel(shares, uint256(100e18) / 109, 1);
     }
 
-    function test_FeesToMint_BothFeeTypes() public {
+    function test_feesLib_feesToMintBothFeeTypes() public {
         skip(365 days);
         (uint256 managementFee, uint256 performanceFee, uint256 shares) = FeesLib.feesToMint({
             nav: 110e18,
@@ -108,7 +108,7 @@ contract FeesLibTest is Test {
         assertApproxEqRel(shares, uint256(2100e18) / 1079, 1);
     }
 
-    function test_FeesToMintMax() public {
+    function test_feesLib_feesToMintMax() public {
         skip(365 days);
         (uint256 managementFee, uint256 performanceFee, uint256 shares) = FeesLib.feesToMint({
             nav: 100e18,
@@ -123,10 +123,7 @@ contract FeesLibTest is Test {
         assertApproxEqRel(shares, uint256(600e18) / 4, 1);
     }
 
-    // Tests that FeesLib returns 0 shares when calculated management fees would exceed the vault NAV
-    // (should never occur in practice). This guards against pathological fee scenarios and ensures the protocol does
-    // not revert, brick, or behave unexpectedly if ever triggered.
-    function test_FeesToMintBiggerNav_ManagementFeeOnly() public {
+    function test_feesLib_feesToMintZeroWhenMgmtFeeExceedsNav() public {
         skip(365 days);
         // mgmt fee (101.101e18) exceeds nav (101e18) -> hits the unreachable
         // `feeAssets > nav` branch, which must zero all three returns.
@@ -138,15 +135,12 @@ contract FeesLibTest is Test {
             perfHighWaterMark: 1e18,
             lastFeeAccrual: 0
         });
-        assertEq(managementFee, 0, "managementFee zeroed");
-        assertEq(performanceFee, 0, "performanceFee zeroed");
-        assertEq(shares, 0, "feeShares zeroed");
+        assertEq(managementFee, 0);
+        assertEq(performanceFee, 0);
+        assertEq(shares, 0);
     }
 
-    // Tests that FeesLib returns 0 shares when calculated performance fees would exceed the vault NAV
-    // (should never occur in practice). This guards against pathological fee scenarios and ensures the protocol does
-    // not revert, brick, or behave unexpectedly if ever triggered.
-    function test_FeesToMintBiggerNav_PerformanceFeeOnly() public view {
+    function test_feesLib_feesToMintZeroWhenPerfFeeExceedsNav() public view {
         (uint256 managementFee, uint256 performanceFee, uint256 shares) = FeesLib.feesToMint({
             nav: 100e18,
             claims: 100e18,
@@ -155,12 +149,12 @@ contract FeesLibTest is Test {
             perfHighWaterMark: 0,
             lastFeeAccrual: 0
         });
-        assertEq(managementFee, 0, "managementFee zeroed");
-        assertEq(performanceFee, 0, "performanceFee zeroed");
-        assertEq(shares, 0, "feeShares zeroed");
+        assertEq(managementFee, 0);
+        assertEq(performanceFee, 0);
+        assertEq(shares, 0);
     }
 
-    function test_FeesToMint_Compounding() public {
+    function test_feesLib_feesToMintCompounding() public {
         uint256 claims = 100e18;
         uint256 nav = 100e18;
         uint256 lastFeeAccrual = 0;
@@ -185,7 +179,7 @@ contract FeesLibTest is Test {
     // with 100$ in the protocol fees will accrue after 10 seconds.
     // with 1s of elapsed time, rounding errors will lead to no fees.
     // 100$ and 10 seconds is well within reasonable bounds.
-    function test_FeesToMint_USDC() public {
+    function test_feesLib_feesToMintUSDC() public {
         skip(10);
         (,, uint256 shares) = FeesLib.feesToMint({
             nav: 100e6,
@@ -198,7 +192,7 @@ contract FeesLibTest is Test {
         assertGt(shares, 0);
     }
 
-    function testFuzz_FeesToMint_UnreachableNeverHit(
+    function testFuzz_feesLib_feesToMintUnreachableNeverHit(
         uint256 nav,
         uint256 claims,
         uint16 managementFeeBps,
@@ -206,13 +200,11 @@ contract FeesLibTest is Test {
         uint256 perfHighWaterMark,
         uint256 elapsed
     ) public {
-        // 1. Bound inputs to realistic protocol limits
         nav = bound(nav, 1e12, 100_000_000e18);
         claims = bound(claims, 1e12, 100_000_000e18);
 
-        // Bound fees to your vault's MAX allowed BPS caps
-        managementFeeBps = uint16(bound(managementFeeBps, 1, 1000)); // Max 10%
-        performanceFeeBps = uint16(bound(performanceFeeBps, 1, 5000)); // Max 50%
+        managementFeeBps = uint16(bound(managementFeeBps, 1, 1000));
+        performanceFeeBps = uint16(bound(performanceFeeBps, 1, 5000));
 
         uint256 pricePerShare = nav.mulDiv(MarketLib.WAD, claims);
         perfHighWaterMark = bound(perfHighWaterMark, 0, pricePerShare);

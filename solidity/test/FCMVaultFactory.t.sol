@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test} from "forge-std/Test.sol";
@@ -13,8 +13,8 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockIrm} from "./mocks/MockIrm.sol";
 import {MockMorpho} from "./mocks/MockMorpho.sol";
 import {MockOracle} from "./mocks/MockOracle.sol";
+import {MockPool} from "./mocks/MockPool.sol";
 import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
-import {MockUniswapV3Pool} from "./mocks/MockUniswapV3Pool.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 
 contract FCMVaultFactoryTest is Test {
@@ -33,8 +33,8 @@ contract FCMVaultFactoryTest is Test {
     FCMVaultFactory internal factory;
     MockOracle internal marketOracle;
     MockOracle internal yieldOracle;
-    MockUniswapV3Pool internal collateralLoanPool;
-    MockUniswapV3Pool internal yieldLoanPool;
+    MockPool internal collateralLoanPool;
+    MockPool internal yieldLoanPool;
     IFCMVault.InitParams internal initParams;
     bytes32 internal salt = bytes32(uint256(0xA11CE));
     bytes32 internal salt2 = bytes32(uint256(0xB0B));
@@ -51,8 +51,8 @@ contract FCMVaultFactoryTest is Test {
 
         marketOracle = new MockOracle(WETH_PRICE);
         yieldOracle = new MockOracle(YIELD_PRICE);
-        yieldLoanPool = new MockUniswapV3Pool();
-        collateralLoanPool = new MockUniswapV3Pool();
+        yieldLoanPool = new MockPool();
+        collateralLoanPool = new MockPool();
 
         factory = new FCMVaultFactory();
 
@@ -79,16 +79,15 @@ contract FCMVaultFactoryTest is Test {
         });
     }
 
-    function test_CreateVault_DeploysVault() public {
+    function test_vaultFactory_createVaultDeploysVault() public {
         vm.prank(deployer);
         address vault = factory.createVault(initParams, salt);
 
-        // Deployed address is non-zero and has code.
         assertTrue(vault != address(0));
         assertGt(vault.code.length, 0);
     }
 
-    function test_CreateVault_EmitsEvent() public {
+    function test_vaultFactory_createVaultEmitsEvent() public {
         address expected = factory.computeAddress(initParams, salt);
 
         vm.prank(deployer);
@@ -98,7 +97,7 @@ contract FCMVaultFactoryTest is Test {
         factory.createVault(initParams, salt);
     }
 
-    function test_ComputeAddress_MatchesDeployed() public {
+    function test_vaultFactory_computeAddressMatchesDeployed() public {
         address predicted = factory.computeAddress(initParams, salt);
 
         vm.prank(deployer);
@@ -107,18 +106,17 @@ contract FCMVaultFactoryTest is Test {
         assertEq(predicted, deployed);
     }
 
-    function test_ComputeAddress_DifferentSaltDifferentAddress() public view {
+    function test_vaultFactory_computeAddressDifferentSaltDifferentAddress() public view {
         address predicted1 = factory.computeAddress(initParams, salt);
         address predicted2 = factory.computeAddress(initParams, salt2);
 
         assertTrue(predicted1 != predicted2);
     }
 
-    function test_CreateVault_SameSaltReverts() public {
+    function test_vaultFactory_createVaultSameSaltReverts() public {
         vm.prank(deployer);
         factory.createVault(initParams, salt);
 
-        // CREATE2 with the same salt and bytecode reverts.
         vm.prank(deployer);
         vm.expectRevert();
         factory.createVault(initParams, salt);

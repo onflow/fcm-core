@@ -36,9 +36,8 @@ jobs:
       - name: Run Forge lint
         run: FOUNDRY_PROFILE=ci forge lint
 
-      # Remove until we create proper gas tests
-      # - name: Run Forge gas snapshot test
-      #   run: FOUNDRY_PROFILE=ci forge snapshot --check
+      - name: Run Forge gas snapshot test
+        run: FOUNDRY_PROFILE=ci forge snapshot --match-path test/gas/*.sol --check
 
       - name: Run Forge build
         run: FOUNDRY_PROFILE=ci forge build --sizes

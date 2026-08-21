@@ -201,7 +201,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
     /// @inheritdoc IFCMVault
     function setFeeRecipient(address newRecipient) external onlyOwner {
-        require(newRecipient != address(0), ZeroAddress());
         _accrueFees();
         emit FeeRecipientSet(feeRecipient, newRecipient);
         feeRecipient = newRecipient;
@@ -287,6 +286,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
         logsVaultState
         returns (uint256 shares)
     {
+        if (assets == 0) return 0;
         // Accrue fees first so the deposit prices in at the post-fee share price.
         _accrueFees();
 
@@ -420,7 +420,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
 
     /// @inheritdoc IFCMVault
     function maxRedeem(address owner) external view returns (uint256) {
-        if (_market().healthFactor() > HEALTH_FACTOR_MAX) return 0;
+        if (_market().healthFactor() < HEALTH_FACTOR_MIN) return 0;
         return balanceOf(owner);
     }
 
@@ -697,9 +697,10 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     /// @param currentDebt Current outstanding debt.
     /// @return repaid Amount of loan token repaid to Morpho in this call.
     function _rebalanceDelever(uint256 maxBorrow, uint256 currentDebt) internal returns (uint256) {
-        // conceptually, target debt is maxBorrow / HEALTH_FACTOR_MIN_TARGET
         uint256 targetDebt = maxBorrow.mulDiv(MarketLib.WAD, HEALTH_FACTOR_MIN_TARGET, Math.Rounding.Floor);
-        if (targetDebt >= currentDebt) return 0;
+        // No underflow guard: `_rebalanceDelever` is only reached when `hf < MIN`,
+        // i.e. `currentDebt > maxBorrow * WAD / MIN`. Since `MIN < MIN_TARGET`, `maxBorrow / MIN >
+        // maxBorrow / MIN_TARGET >= targetDebt`, so `currentDebt > targetDebt` always holds here.
         uint256 repayAmount = currentDebt - targetDebt;
 
         uint256 yieldPrice = IOracle(YIELD_ORACLE).price();
@@ -830,7 +831,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, IMorphoFlashLoanCallback {
     /// Protocol-wide rebalancing (driving the whole position back inside the band regardless of new collateral size) is
     /// the job of `rebalance`, not `deposit`.
     function _targetBorrowAgainst(uint256 newCollaterals) internal view returns (uint256) {
-        if (newCollaterals == 0) return 0;
         uint256 targetHf = _depositTargetHf();
         uint256 capFromNewCollateral =
             _market().maxBorrowFor(newCollaterals).mulDiv(MarketLib.WAD, targetHf, Math.Rounding.Floor);

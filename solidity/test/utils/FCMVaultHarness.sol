@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
-import {FCMVault} from "../src/FCMVault.sol";
+import {FCMVault} from "../../src/FCMVault.sol";
+import {MarketLib} from "../../src/libraries/MarketLib.sol";
 
 /// @dev Exposes the vault's internal price-limit math so the security-critical
 ///      oracle -> `sqrtPriceLimitX96` conversion can be asserted directly.
@@ -9,7 +10,7 @@ contract FCMVaultHarness is FCMVault {
     constructor(FCMVault.InitParams memory p) FCMVault(p) {}
 
     // forge-lint: disable-next-item(mixed-case-function)
-    function exposed_yieldLoanSwapLimit(address tokenIn) external view returns (uint160, bool) {
-        return _yieldLoanSwapLimit(tokenIn);
+    function exposed_debt() external view returns (uint256) {
+        return MarketLib.debt(_market());
     }
 }

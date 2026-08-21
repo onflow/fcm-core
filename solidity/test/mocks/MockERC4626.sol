@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
@@ -25,7 +25,6 @@ contract MockERC4626 {
     }
 
     function convertToAssets(uint256 shares) external view returns (uint256) {
-        // return shares * assetsPerWholeShare / 10 ** decimals;
         return Math.mulDiv(shares, numerator, denominator);
     }
 }
