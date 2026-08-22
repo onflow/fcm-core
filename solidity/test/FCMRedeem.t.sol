@@ -48,6 +48,7 @@ contract FCMRedeemTest is Test, Deployers {
         assertEq(COLLATERAL_TOKEN.balanceOf(carol), assetsOut);
         assertApproxEqAbs(COLLATERAL_TOKEN.balanceOf(carol), 1 ether, 2);
         assertEq(vault.balanceOf(alice), 0);
+        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN);
     }
 
     function test_redeem_partialRedeemUnwindsProportionalSlice() public {
@@ -56,6 +57,7 @@ contract FCMRedeemTest is Test, Deployers {
 
         uint256 debtBefore = vault.debt();
         uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
+        uint256 hfBefore = vault.healthFactor();
 
         vm.prank(alice);
         uint256 assetsOut = vault.redeem(shares / 2, alice, alice);
@@ -65,6 +67,8 @@ contract FCMRedeemTest is Test, Deployers {
         assertApproxEqAbs(COLLATERAL_TOKEN.balanceOf(address(alice)), assetsOut, 1);
         assertApproxEqRel(vault.debt(), debtBefore / 2, 1);
         assertApproxEqRel(YIELD_TOKEN.balanceOf(address(vault)), yieldBefore / 2, 1);
+        // Pro-rata unwind halves collateral and debt together, so HF is unchanged.
+        assertApproxEqAbs(vault.healthFactor(), hfBefore, 1e15);
     }
 
     function test_redeem_twoDepositorsIndependentRedeem() public {

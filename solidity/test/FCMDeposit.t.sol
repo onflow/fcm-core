@@ -36,14 +36,17 @@ contract FCMDepositTest is Test, Deployers {
         assertEq(COLLATERAL_TOKEN.balanceOf(alice), 0);
         assertEq(vault.collateral(), 1 ether);
         assertEq(COLLATERAL_TOKEN.balanceOf(address(vault)), 0);
+        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        assertLe(vault.healthFactor(), HEALTH_FACTOR_MAX);
     }
 
     function test_deposit_takesOutLoan() public {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
 
-        uint256 debt = vault.debt();
-        assertGt(debt, 0);
+        assertGt(vault.debt(), 0);
+        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        assertLe(vault.healthFactor(), HEALTH_FACTOR_MAX);
     }
 
     function test_deposit_blockedDuringEmergencyRecovery() public {

@@ -5,14 +5,15 @@ import {FCMVault} from "../../src/FCMVault.sol";
 import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
 import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
 import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
-import {IMorpho, Id, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
+import {FCMHelpers} from "../../src/libraries/FCMHelpers.sol";
+import {IMorpho, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
-import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract ForkDeployers is Test {
+    using FCMHelpers for FCMVault;
     IERC20 constant WBTC = IERC20(0x717DAE2BaF7656BE9a9B01deE31d571a9d4c9579);
     IERC20 constant PYUSD0 = IERC20(0x99aF3EeA856556646C98c8B9b2548Fe815240750);
     IERC20 constant FUSDEV = IERC20(0xd069d989e2F44B70c65347d1853C0c67e10a9F8D);
@@ -39,7 +40,6 @@ contract ForkDeployers is Test {
 
     FCMVault internal vault;
     MarketParams internal mp;
-    Id internal marketId;
     address internal collateralLoanPool;
     uint160 internal cleanSpot;
 
@@ -63,7 +63,6 @@ contract ForkDeployers is Test {
             irm: MARKET_IRM,
             lltv: MARKET_LLTV
         });
-        marketId = MarketParamsLib.id(mp);
 
         _supplyMorphoLiquidity(100_000_000_000e6);
 
@@ -176,33 +175,6 @@ contract ForkDeployers is Test {
 
     function _tvlUsd() internal view returns (uint256) {
         return Math.mulDiv(vault.totalAssets(), IOracle(MARKET_ORACLE).price(), 1e36);
-    }
-
-    function _hf() internal view returns (uint256) {
-        Position memory pos = MORPHO.position(marketId, address(vault));
-        if (pos.borrowShares == 0) return type(uint256).max;
-        Market memory mkt = MORPHO.market(marketId);
-        uint256 debt = Math.mulDiv(
-            uint256(pos.borrowShares),
-            uint256(mkt.totalBorrowAssets) + 1,
-            uint256(mkt.totalBorrowShares) + 1e6,
-            Math.Rounding.Ceil
-        );
-        uint256 maxBorrow =
-            Math.mulDiv(uint256(pos.collateral), Math.mulDiv(IOracle(MARKET_ORACLE).price(), MARKET_LLTV, 1e36), 1e18);
-        return Math.mulDiv(maxBorrow, 1e18, debt);
-    }
-
-    function _debt() internal view returns (uint256) {
-        Position memory pos = MORPHO.position(marketId, address(vault));
-        if (pos.borrowShares == 0) return 0;
-        Market memory mkt = MORPHO.market(marketId);
-        return Math.mulDiv(
-            uint256(pos.borrowShares),
-            uint256(mkt.totalBorrowAssets) + 1,
-            uint256(mkt.totalBorrowShares) + 1e6,
-            Math.Rounding.Ceil
-        );
     }
 
     function _getPool(address factory, address tokenA, address tokenB, uint24 fee) internal view returns (address) {

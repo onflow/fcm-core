@@ -3,17 +3,14 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
-import {MorphoLib} from "../src/libraries/MorphoLib.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
-import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {Test} from "forge-std/Test.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 contract FCMHarvestTest is Test, Deployers {
     using FCMHelpers for FCMVault;
     using Math for uint256;
-    using MorphoLib for MarketParams;
 
     function setUp() public {
         deployVault();
@@ -28,6 +25,7 @@ contract FCMHarvestTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
+        uint256 hfBefore = vault.healthFactor();
 
         setYieldPrice(YIELD_PRICE.mulDiv(200, 100));
         vault.harvest(type(uint256).max);
@@ -36,6 +34,9 @@ contract FCMHarvestTest is Test, Deployers {
         assertLt(YIELD_TOKEN.balanceOf(address(vault)), yieldBefore);
         assertEq(COLLATERAL_TOKEN.balanceOf(address(vault)), 0);
         assertEq(LOAN_TOKEN.balanceOf(address(vault)), 0);
+        // Harvest only adds collateral (debt unchanged), so HF must strictly increase and stay healthy.
+        assertGt(vault.healthFactor(), hfBefore);
+        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN);
     }
 
     function testFuzz_harvest_partialYieldFill(uint16 slippageBps) public {
