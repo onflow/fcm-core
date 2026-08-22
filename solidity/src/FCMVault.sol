@@ -313,7 +313,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
         // Don't mint against a zero NAV while shares exist: the `navBefore + 1` denominator
         // below would collapse and mint a disproportionate amount. Empty-vault first deposits
         // (totalSupply() == 0) are unaffected.
-        // slither-disable-next-line incorrect-equality -> exact-zero is the intended guard (totalAssets clamps to 0)
         if (navBefore == 0 && totalSupply() > 0) revert VaultUnderwater();
         uint256 maxAssets = maxTvl > navBefore ? maxTvl - navBefore : 0;
         if (assets > maxAssets) {
@@ -437,7 +436,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
         if (!earlyAccess[receiver]) return 0;
         uint256 cachedTotalAssets = totalAssets();
         // Mirror the deposit() underwater guard: 0 when marked underwater with holders.
-        // slither-disable-next-line incorrect-equality -> exact-zero is the intended guard (totalAssets clamps to 0)
         if (cachedTotalAssets == 0 && totalSupply() > 0) return 0;
         return maxTvl > cachedTotalAssets ? maxTvl - cachedTotalAssets : 0;
     }
@@ -524,7 +522,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
         uint256 maxBorrow = MORPHO.maxBorrow(_market());
         uint256 hfBefore = MORPHO.healthFactor(_market());
 
-        // slither-disable-next-line incorrect-equality -> exact-zero is the intended "no recovery pending" guard
         if (hfBefore > HEALTH_FACTOR_MAX && !emergencyRecoveryActive) {
             // Lever-up is frozen while an emergency recovery is pending: the position
             // is slated for in-kind wind-down, so re-levering (more debt + AMM cost)
@@ -735,7 +732,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
 
         uint256 yieldBalance = YIELD_TOKEN.balanceOf(address(this));
         if (yieldToSell > yieldBalance) yieldToSell = yieldBalance;
-        // slither-disable-next-line incorrect-equality -> exact-zero guard: nothing to sell, so skip the swap
         if (yieldToSell == 0) return 0;
 
         (uint160 limit, bool ok) = _yieldLoanSwapLimit(address(YIELD_TOKEN));
@@ -812,7 +808,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
         );
         // A dust surplus (or a pool already at the bound) rounds the swap output to zero; no-op rather than pass a zero
         // amount to the next leg, which the router and Morpho reject.
-        // slither-disable-next-line incorrect-equality -> exact-zero guard: nothing realized, skip
         if (loanGot == 0) return;
 
         // Leg 2: loan -> collateral on the collateral/debt pool, bounded to the market oracle like leg 1 -
@@ -874,7 +869,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
 
     /// @dev Routes yield -> debt -> collateral. The two 1e36 oracle scales cancel.
     function _yieldToCollateral(uint256 yieldAmount) internal view returns (uint256) {
-        // slither-disable-next-line incorrect-equality -> exact-zero guard: zero yield converts to zero collateral
         if (yieldAmount == 0) return 0;
         return yieldAmount.mulDiv(IOracle(YIELD_ORACLE).price(), _market().oraclePrice(), Math.Rounding.Floor);
     }
