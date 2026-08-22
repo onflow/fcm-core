@@ -25,6 +25,17 @@ verbosity = 3
 fuzz.runs = 10_000
 deny = "notes"
 
+[profile.local-ci]
+no_match_path = "^$"
+via_ir = true
+optimizer_runs = 800
+verbosity = 3
+fuzz.runs = 10_000
+deny = "notes"
+[profile.local-ci.rpc_endpoints]
+# anvil --fork-url https://mainnet.evm.nodes.onflow.org
+flow_mainnet = "http://localhost:8545"
+
 [fmt]
 number_underscore = "thousands"
 wrap_comments = true
