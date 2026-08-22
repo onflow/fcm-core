@@ -60,8 +60,9 @@ interface IFCMVault is IERC4626 {
     /// @param feeShares Shares minted to `recipient` (dilution).
     event FeesAccrued(uint256 managementFee, uint256 performanceFee, uint256 feeShares);
 
-    /// @notice Emitted when the harvest leg of `rebalance` sells surplus yield and redeploys it as collateral.
-    /// @param yieldSold Yield token sold (the surplus above debt backing).
+    /// @notice Emitted when `harvest` sells surplus yield and redeploys it as collateral.
+    /// @param yieldSold Yield token the pool actually consumed, which is less than the surplus offered when leg 1
+    /// partial-fills against its price bound.
     /// @param collateralAdded Collateral supplied from the swap proceeds.
     event Harvested(uint256 yieldSold, uint256 collateralAdded);
     /// @notice Emitted when the owner updates the management fee (old + new).

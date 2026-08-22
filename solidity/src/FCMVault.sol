@@ -836,7 +836,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
         // slither-disable-next-line unused-return -> repay amount is known (leftover); Morpho reverts on failure
         if (leftover > 0) MORPHO.repay(_market(), leftover);
 
-        emit Harvested(yieldToHarvest, collateralAdded);
+        // Leg 1 partial-fills, so report what the pool actually consumed rather than what was offered.
+        emit Harvested(yieldBalance - YIELD_TOKEN.balanceOf(address(this)), collateralAdded);
     }
 
     /// @dev The health factor `deposit` levers fresh collateral toward: the midpoint of the rebalance band. `rebalance`
@@ -939,7 +940,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
             (uint256 managementFee, uint256 performanceFee, uint256 feeShares) = FeesLib.feesToMint({
                 nav: nav,
                 claims: claims,
-                // pricePerShare: pricePerShare,
                 managementFeeBps: managementFeeBps,
                 performanceFeeBps: performanceFeeBps,
                 perfHighWaterMark: perfHighWaterMark,
