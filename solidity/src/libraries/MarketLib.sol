@@ -3,21 +3,19 @@ pragma solidity ^0.8.24;
 
 import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
-import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title MarketLib
 /// @author Flow Foundation
 /// @notice Price and amount-conversion helpers around a Morpho Blue market's oracle. All prices follow Morpho's
 /// `IOracle` convention (1e36-scaled collateral -> debt), and conversions do not apply LLTV unless stated.
+/// @dev Everything here reads only `MarketParams` config and the market's oracle - never the Morpho singleton. Helpers
+/// that need the singleton (positions, balances, debt) live in `MorphoLib` and take `IMorpho` as their first argument.
 library MarketLib {
     using Math for uint256;
-    using MarketParamsLib for MarketParams;
 
     uint256 internal constant ORACLE_PRICE_SCALE = 1e36;
     uint256 internal constant WAD = 1e18;
-    uint256 internal constant VIRTUAL_SHARES = 1e6;
-    uint256 internal constant VIRTUAL_ASSETS = 1;
 
     /// @notice Returns the price of 1 unit of collateral token quoted in loan token, scaled by 1e36.
     /// @dev The returned price has `36 + loanDecimals - collateralDecimals` decimals of precision, so that
