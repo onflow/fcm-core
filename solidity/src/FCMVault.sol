@@ -579,9 +579,12 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
     /// singleton for us), so flashing loan token would depend on other
     /// suppliers' liquidity and fail at high utilization. Flashing the
     /// redeemer's own `collSlice` - already in the singleton - is
-    /// self-collateralized and always available. That self-sufficiency is the
-    /// entire reason to use a flash here: a deterministic unwind at any HF with
-    /// no dependence on external loan-token liquidity (see `onMorphoFlashLoan`).
+    /// self-collateralized. That self-sufficiency is the entire reason to use a
+    /// flash here: a deterministic unwind at any HF with no dependence on
+    /// external loan-token liquidity (see `onMorphoFlashLoan`).
+    /// Flash + withdraw draw the singleton twice before it is repaid once, so a
+    /// Case-B redeem needs `2 * collSlice` on hand - caps one call at ~50% of
+    /// the position (docs/architecture.md).
     ///
     /// Rounding favors the vault: pro-rata slices are computed with mulDiv
     /// rounding down.

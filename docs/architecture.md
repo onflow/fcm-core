@@ -202,13 +202,30 @@ sequenceDiagram
 #### Pros
 
 - Deterministic unwind at any HF — debt is cleared before collateral moves.
-- **Self-collateralized** — flashes the vault's _own_ collateral slice, so it needs no external loan-token liquidity. The vault is a net borrower of loan token (none sits idle in the Morpho singleton for it to draw on), so flashing loan token would depend on other suppliers' liquidity and fail at high utilization; flashing the collateral, already in the singleton, cannot. **This self-sufficiency is the whole reason the flash path exists.**
+- **Self-collateralized** — flashes the vault's _own_ collateral slice, so it needs no external loan-token liquidity. The vault is a net borrower of loan token (none sits idle in the Morpho singleton for it to draw on), so flashing loan token would depend on other suppliers' liquidity and fail at high utilization; flashing the collateral, already in the singleton, does not. **This self-sufficiency is the whole reason the flash path exists.**
 
 #### Cons
 
 - Most complex: callback-based reentry, encoded calldata, extra Morpho roundtrip.
 - Larger attack surface — callback must validate msg.sender and decode data correctly.
 - Still depends on DEX for the yield sale and reconcile legs (liquidity, fees/slippage)
+- Draws the singleton twice per redemption, which bounds the size of a single call — see below.
+
+#### Why flash at all, and what it costs
+
+Options A and B have the same structural problem: the debt must be repaid before the collateral can be withdrawn, and the only money available to repay it is the yield leg. When the yield sale under-delivers — a thin pool, an adverse tick, a depegged inner share — the vault holds less than the debt slice, cannot repay it, and therefore cannot free the collateral. The redemption reverts, and it reverts hardest exactly when the position is nearest its LLTV, because that is when the collateral is worth least relative to the debt it carries. That is a bad failure mode for a withdrawal path: it strands holders precisely in the scenario they most want out of.
+
+Flashing removes the ordering constraint. The vault borrows the redeemer's own collateral slice, sells just enough of it to cover the shortfall, repays the full debt slice, and only then withdraws. Because the repayment happens before the withdrawal, the withdrawal is health-factor-neutral and Morpho permits it at any HF. The unwind becomes deterministic instead of conditional on the yield leg's execution price.
+
+The choice of *what* to flash matters as much as the decision to flash. Flashing loan token would be the obvious move — it is what the vault needs — but the vault is a net borrower of loan token, so none of its own sits in the singleton. It would be drawing on other suppliers' deposits, and would fail exactly when the market is fully utilized, which correlates with the stressed conditions that push a redemption into Case B. Flashing the collateral instead draws on the vault's own supplied position, which is always in the singleton by construction.
+
+The cost of that choice is a **double draw**. Morpho's `flashLoan` transfers the assets out, invokes the callback, and only reclaims them via `transferFrom` after the callback returns. So during the callback the singleton is already down `collSlice`, and the callback's `withdrawCollateral(collSlice)` asks it for another. The pair needs `2 × collSlice` of the collateral token on hand at that instant.
+
+Where the vault shares its market with other collateral suppliers, their deposits provide the headroom and this is invisible. In a dedicated market where the vault is the dominant or only supplier, the singleton holds roughly what the vault supplied, and the constraint binds at `collSlice ≤ 50%` of the position. Above that the withdrawal reverts on an insufficient balance.
+
+This is a bound on call *size*, not on total withdrawable value. Each redemption removes collateral from the singleton and from the vault's position in equal measure, so the ratio is preserved and the next call is again capped at ~50% of what remains: a handful of successive calls drain all but a dust residue. `redeemInKind` avoids the flash entirely and has no such cap, at the cost of the caller sourcing the loan token themselves. Case A — the yield sale covers the debt slice — never flashes and is unaffected.
+
+We accept the bound rather than restructure the callback. The alternative shapes (withdraw before flashing, or flash a smaller slice and loop) either reintroduce the ordering constraint the flash exists to remove, or add iteration to the one path that has to work under stress. A size cap that callers can trivially work around by splitting is the cheaper trade.
 
 #### LTV Limit Edge Case
 
