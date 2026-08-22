@@ -127,6 +127,12 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
         _;
     }
 
+    /// @dev Reverts if the vault executed emergency recovery.
+    modifier notRecovered() {
+        _notRecovered();
+        _;
+    }
+
     /// @dev Emits a `VaultState` snapshot after the wrapped function body runs. Placed after `_;` so the event reflects
     /// post-call state. Modifying entry points accrue market interest before mutating, so the debt read here is fresh.
     modifier logsVaultState() {
@@ -235,8 +241,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
     }
 
     /// @inheritdoc IFCMVault
-    function rebalance() external nonReentrant logsVaultState {
-        require(!emergencyRecovered, EmergencyRecoveryActive());
+    function rebalance() external nonReentrant logsVaultState notRecovered {
         _accrueFees();
         _adjustLeverage();
     }
@@ -336,6 +341,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
         external
         override
         nonReentrant
+        notRecovered
         logsVaultState
         returns (uint256 assets)
     {
@@ -362,6 +368,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
     function redeemInKind(uint256 shares, address receiver, address owner)
         external
         nonReentrant
+        notRecovered
         logsVaultState
         returns (uint256 collateralOut, uint256 yieldOut)
     {
@@ -982,5 +989,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
 
     function _notInRecovery() internal view {
         require(!emergencyRecoveryActive, EmergencyRecoveryActive());
+    }
+
+    function _notRecovered() internal view {
+        require(!emergencyRecovered, EmergencyRecoveryActive());
     }
 }
