@@ -135,7 +135,7 @@ interface IFCMVault is IERC4626 {
     error EmergencyRecoveryNotReady();
     /// @dev Thrown when a fee rate above its hard cap is set.
     error InvalidFee();
-    /// @dev Thrown when a slippage tolerance >= 100% (10_000 bps) is set.
+    /// @dev Thrown when a slippage tolerance above the hard cap (10%, 1_000 bps) is set.
     error InvalidSlippage();
     /// @dev Deposit blocked while the vault is marked underwater with shares outstanding.
     error VaultUnderwater();
@@ -215,7 +215,7 @@ interface IFCMVault is IERC4626 {
     /// @param newBps New management fee rate in basis points.
     function setManagementFeeBps(uint256 newBps) external;
     /// @notice Set the max slippage tolerance applied to the rebalance swaps.
-    /// @param newBps Tolerance in basis points; must be < 100% (10_000) so the floor can never be fully disabled.
+    /// @param newBps Tolerance in basis points; capped at 10% (1_000) so the floor can never be widened away.
     function setMaxSlippageBps(uint256 newBps) external;
     /// @notice Set the TVL limit. Default at deploy time is 0 (no deposits).
     /// @param newMaxTvl the new TVL limit; applies only to new deposits.

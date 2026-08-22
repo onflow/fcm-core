@@ -242,7 +242,7 @@ sequenceDiagram
       Note over Lender: Always succeeds — full debt slice repaid first
 
       Outer->>Lender: repay flashloan collSlice (outerAsset)
-      Note over Outer: Withdrawn slice repays the flash;<br/>unsold remainder = user's pro-rata value
+      Note over Outer: Withdrawn slice repays the flash<br/>unsold remainder = user's pro-rata value
 
       Outer-->>User: outerAsset
       deactivate Outer
@@ -275,6 +275,20 @@ Because it delivers the yield leg in kind instead of selling it, it needs no swa
 ## Rebalancing
 
 See **TODO LINK TO REBALANCING SPEC**
+
+### Idle InnerAsset After a Favorable Delever
+
+The delever branch sizes its swap from the oracle: it sells `yieldToSell = repayAmount * 1e36 / yieldPrice` of `innerShare` to raise the `repayAmount` of `innerAsset` that lands the position back at `healthFactorMinTarget`. When the pool fills that sale at a materially better price than the oracle quoted, the swap returns more `innerAsset` than the sizing assumed. If the overshoot is large enough that the realized amount exceeds the vault's **entire** outstanding debt, `repayAll` clears the position by shares and the excess stays behind as idle `innerAsset`.
+
+That residue is invisible to NAV. `totalAssets()` values exactly three things — collateral supplied to Morpho, the `innerShare` balance, and Morpho debt — and idle `innerAsset` is not among them. No later flow spends it either: `redeem` and `harvest` both measure `innerAsset` as a balance *delta*, so they neither credit nor consume a pre-existing balance, and `redeemInKind` distributes only collateral and yield. It is only reachable through emergency recovery, which sweeps it to the owner.
+
+This is deliberate. All alternatives are worse:
+
+- **Revert on the overshoot.** Delever is the safety-critical branch — it is what pulls an over-levered position back from liquidation. Failing it on a *favorable* fill would block de-risking exactly when the vault needs it. Health wins over accounting neatness.
+- **Count idle balances in NAV.** Adding `innerAsset.balanceOf(vault)` to `totalAssets()` makes NAV donation-sensitive. NAV feeds share minting on deposit (measured as a NAV delta), fee accrual, and the performance high-water mark — so anyone could move all three by transferring tokens to the vault. That is a permanent widening of the attack surface traded against a residue that only appears on a rare favorable fill.
+- **Swap the excess back to collateral.** Draws the same objection as reverting: it adds a second swap, a second price bound, and a second failure mode inside the one branch that must always complete.
+
+The residue is bounded by the overshoot itself. In normal operation the delever targets `healthFactorMinTarget`, so `repayAmount` is a fraction of the debt and the realized amount has to beat the oracle by a wide margin to exceed 100% of it. The leak is real but small and infrequent, and it is accepted in exchange for a delever path that always completes.
 
 ## Custom Behaviour
 

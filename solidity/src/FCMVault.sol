@@ -748,7 +748,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
         if (loanGot > currentDebt) {
             // This case occurs when the swap pool returns a better price than the oracle, resulting in more loan tokens
             // than needed. We happily accept the favorable outcome, even if that means some loan tokens will get lost
-            // as idle loan tokens in the vault.
+            // as idle loan tokens in the vault (trade-off in docs/architecture.md).
             return MORPHO.repayAll(_market());
         }
         // slither-disable-next-line unused-return -> repay amount is known (repaid); Morpho reverts on failure
