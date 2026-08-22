@@ -444,6 +444,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
 
     /// @inheritdoc IFCMVault
     function maxRedeem(address owner) external view returns (uint256) {
+        if (emergencyRecovered) return 0;
         if (MORPHO.healthFactor(_market()) < HEALTH_FACTOR_MIN) return 0;
         return balanceOf(owner);
     }

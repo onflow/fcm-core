@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {FCMVault} from "../src/FCMVault.sol";
 import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
+import {Errors} from "./utils/Errors.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract FCMMaxRedeemTest is Test, Deployers {
@@ -17,10 +18,38 @@ contract FCMMaxRedeemTest is Test, Deployers {
         grantFundApprove(bob, 1 ether);
     }
 
-    function test_maxRedeem_zeroWhenActiveEmergencyRecovery() public {
+    /// @dev Redeem deliberately stays open while a recovery is only pending, so `maxRedeem` must too.
+    function test_maxRedeem_unchangedWhilePendingEmergencyRecovery() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+
         vm.prank(owner);
         vault.scheduleEmergencyRecovery();
-        assertEq(vault.maxRedeem(alice), 0);
+
+        assertEq(vault.maxRedeem(alice), shares, "pending recovery does not close the exit");
+        vm.prank(alice);
+        assertGt(vault.redeem(shares, alice, alice), 0, "and redeem still works");
+    }
+
+    function test_maxRedeem_zeroAfterExecutedEmergencyRecovery() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+
+        vm.startPrank(owner);
+        vault.scheduleEmergencyRecovery();
+        vm.warp(vault.emergencyRecoveryValidAt());
+        LOAN_TOKEN.mint(owner, 1e10 ether);
+        LOAN_TOKEN.approve(address(MORPHO), type(uint256).max);
+        MORPHO.repay(vault.market(), 0, vault.position().borrowShares, address(vault), "");
+        vault.executeEmergencyRecovery();
+        vm.stopPrank();
+
+        assertGt(vault.balanceOf(alice), 0, "alice still holds shares");
+        assertEq(vault.maxRedeem(alice), 0, "but maxRedeem reports zero, matching redeem's revert");
+
+        vm.expectRevert(Errors.emergencyRecoveryActive());
+        vm.prank(alice);
+        vault.redeem(shares, alice, alice);
     }
 
     function test_maxRedeem_zeroWhenNoBalance() public view {
