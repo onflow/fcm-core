@@ -156,7 +156,8 @@ interface IFCMVault is IERC4626 {
     /// @param lower The lower bound that violated the inequality.
     /// @param upper The upper bound that was exceeded.
     error InvalidHealthFactorBounds(uint256 lower, uint256 upper);
-    /// @notice Thrown when there is leftover debt after the harvest.
+    /// @notice Thrown when a harvest realizes more loan token than the outstanding debt can absorb, which would leave
+    /// the excess idle and uncounted by `totalAssets`.
     error LeftoverDebt();
     /// @notice Thrown during redeem when the vault is unhealthy.
     error VaultUnhealthy();

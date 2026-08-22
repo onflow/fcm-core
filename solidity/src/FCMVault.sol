@@ -756,21 +756,23 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
         return loanGot;
     }
 
-    /// @dev Harvest leg of `rebalance` (internal; runs first). Realize surplus yield: sell the yield held above what
-    /// the debt needs and supply the proceeds as collateral. NAV-neutral apart from swap costs. Add-only (no withdraw,
-    /// no borrow) - it never increases leverage, so no flash loan is needed and it cannot push the position toward
-    /// liquidation. No-op when the yield factor `rho = yieldValue / debt` is within the band (`rho <= YIELD_FACTOR_MAX`
-    /// - before enough surplus accrues, or a yield depeg), or while a recovery is pending.
+    /// @dev Realize surplus yield: sell the yield held above what the debt needs and supply the proceeds as
+    /// collateral. NAV-neutral apart from swap costs. Add-only (no withdraw, no borrow) - it never increases leverage,
+    /// so no flash loan is needed and it cannot push the position toward liquidation. No-op when the yield factor
+    /// `rho = yieldValue / debt` is within the band (`rho <= YIELD_FACTOR_MAX` - before enough surplus accrues, or a
+    /// yield depeg).
     /// Both legs (yield->loan, then loan->collateral) swap under an oracle-derived `sqrtPriceLimitX96`
-    /// (`maxSlippageBps` price-impact bound): each pool partial-fills up to its limit and the leg is skipped when the
-    /// pool is already past it, so harvest never reverts the rebalance or blocks the delever leg. Any surplus the
-    /// second leg does not convert to collateral is repaid as debt, capped at the debt outstanding - loan token idles
-    /// only in the extreme where the realized surplus exceeds the whole debt.
+    /// (`maxSlippageBps` price-impact bound): each pool partial-fills up to its limit, and a pool already past its
+    /// bound makes that leg a no-op rather than a revert.
     /// The two legs treat a partial fill differently. Leg 1's unsold surplus stays as yield and is retried next
     /// harvest; leg 2's is one-way - loan it cannot convert is repaid as debt, so that round the surplus deleverages
     /// the position instead of growing collateral. That is value-preserving (a debt paydown, NAV ~flat); the vault is
     /// left underlevered until the health factor drifts above the band and the lever leg re-levers. Leg 2's throughput
     /// tracks collateral/debt pool depth, which `maxTvl` bounds and which `redeemInKind` sidesteps entirely for exits.
+    /// Reverts `LeftoverDebt` when leg 2 leaves more loan token behind than the outstanding debt can absorb: the
+    /// excess has nowhere to go, and idle loan token is not counted by `totalAssets`, so stranding it would silently
+    /// cut NAV. Retry with a smaller `maximumYield`, or once leg 2's pool is back inside its bound. Reachable mainly
+    /// at near-zero debt, where `yieldForDebt` collapses and the whole yield balance counts as surplus.
     function _harvest(uint256 maximumYield) internal {
         uint256 currentDebt = MORPHO.debt(_market());
 
@@ -792,8 +794,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
 
         // Leg 1: sell surplus yield -> loan on the yield/debt pool, bounded by an oracle-derived price limit
         // (`maxSlippageBps` of price impact). The pool partial-fills up to the limit; when it is already past the bound
-        // the swap is skipped. Best-effort either way - harvest never reverts the rebalance or blocks the delever leg.
-        // Same mechanism as `_rebalanceDelever`.
+        // the swap is skipped and the harvest no-ops. Same mechanism as `_rebalanceDelever`.
         (uint160 yieldLoanPriceLimit, bool ok) = _yieldLoanSwapLimit(address(YIELD_TOKEN));
         if (!ok) return;
         uint256 loanGot = SwapLib.swapExactInToLimit(
@@ -826,8 +827,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
         // if/when hf later drifts above the band.
         if (collateralAdded > 0) MORPHO.supplyCollateral(_market(), collateralAdded, address(this), "");
 
-        // Repay whatever leg 2 did not convert (a partial fill, or all of it when skipped), capped at the debt so it
-        // cannot over-repay; only a remainder beyond the whole debt is left idle as loan.
+        // Repay whatever leg 2 did not convert (a partial fill, or all of it when skipped). More than the outstanding
+        // debt cannot be repaid and would sit idle - uncounted by `totalAssets` - so refuse the harvest instead.
         uint256 leftover = LOAN_TOKEN.balanceOf(address(this)) - loanBefore;
         if (leftover > currentDebt) {
             revert LeftoverDebt();
