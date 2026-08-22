@@ -37,4 +37,28 @@ contract FCMOwnerTest is Test, Deployers {
         vault.setMaxTvl(1000);
         assertEq(vault.maxTvl(), 1000);
     }
+
+    /// @dev `renounceOwnership` is intentionally left inherited
+    function test_owner_renounceOwnershipIsAllowedAndPermanent() public {
+        vm.prank(owner);
+        vault.setMaxTvl(1e21);
+
+        vm.prank(owner);
+        vault.renounceOwnership();
+        assertEq(vault.owner(), address(0));
+
+        vm.startPrank(owner);
+        vm.expectRevert(errorOwnerUnauthorized);
+        vault.setMaxTvl(1000);
+        vm.expectRevert(errorOwnerUnauthorized);
+        vault.grantEarlyAccess(bob);
+        vm.expectRevert(errorOwnerUnauthorized);
+        vault.scheduleEmergencyRecovery();
+        vm.stopPrank();
+
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        vm.prank(alice);
+        assertGt(vault.redeem(shares, alice, alice), 0);
+    }
 }
