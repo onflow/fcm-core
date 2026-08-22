@@ -378,6 +378,8 @@ interface IFCMVault is IERC4626 {
     function maxDeposit(address receiver) external view override(IERC4626) returns (uint256 maxAssets);
 
     /// @notice Deposit `assets` of the underlying asset into the vault and mint vault shares to `receiver`.
+    /// @dev WARNING: Standard ERC-4626 deposit does not provide slippage protection. Direct calls are vulnerable to
+    /// sandwich attacks; call via a router enforcing `minSharesOut`.
     /// @dev Expansion sequence (see docs/architecture.md). Let `navBefore` be the vault NAV before this deposit:
     /// 1. Accrue market interest so `navBefore` and the post-deposit NAV measurement are both fresh.
     /// 2. Pull `assets` from the caller and supply them as collateral to the Morpho market.
@@ -402,6 +404,8 @@ interface IFCMVault is IERC4626 {
     /// @notice Redeem `shares` of this vault for the underlying asset. The owner's shares are burned, a proportional
     /// slice of the underlying leveraged position is unwound through the AMM, and the resulting asset is delivered to
     /// `receiver`.
+    /// @dev WARNING: Standard ERC-4626 redeem does not provide slippage protection. Direct calls are vulnerable to
+    /// sandwich attacks; call via a router enforcing `minAssetsOut`.
     /// @dev Unwind sequence (AMM-mediated, see docs/architecture.md). Let `p = shares /
     /// _totalClaims()`, the redeemed fraction of the total claim pool (existing supply + virtual-share offset), and
     /// `d* = p * debt`, the pro-rata debt slice. The unwind:
