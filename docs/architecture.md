@@ -296,6 +296,21 @@ See [here](https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/co
 
 ## Security
 
+### Deployment Trust Model & Constructor Validation
+
+`FCMVaultFactory.createVault` is permissionless: anyone can deploy an `FCMVault` with any `InitParams`. **Deployment through the canonical factory is not an endorsement.** The factory fixes the bytecode and makes the address deterministic; it says nothing about whether the parameters describe a sane vault. A vault must be judged on its own configuration — tokens, Morpho market, pools, oracles, owner — exactly as any directly deployed contract would be.
+
+The constructor validates what is cheap and locally decidable: the health-factor band ordering (`healthFactorMin <= healthFactorMinTarget <= healthFactorMaxTarget <= healthFactorMax`, with `healthFactorMin >= 1e18`), `yieldFactorMax >= 1e18`, and non-zero pool addresses. The `forceApprove` calls incidentally reject a zero or non-contract `collateralToken`, `loanToken`, `yieldToken`, `morpho`, or `swapRouter`.
+
+It deliberately stops short of a full correctness check, because a constructor cannot perform one. Whether the yield oracle really prices `innerShare` in `innerAsset`, whether the configured pool is the pool the router will route through, whether the inner vault is solvent — these are properties of external contracts and of live state, not of the arguments. A partial on-chain check would mostly buy false confidence.
+
+The bar we hold instead: **a misconfigured vault must be unusable, never quietly wrong.** A vault that reverts on every deposit is an acceptable outcome of a fat-fingered deployment; one that accepts deposits while silently mispricing them is not. Two structural properties do most of that work:
+
+- **Morpho validates the market tuple for us.** The market id is `keccak256(loanToken, collateralToken, marketOracle, marketIrm, marketLltv)`, and every Morpho entry point requires `market[id].lastUpdate != 0`. Get any one of those five wrong and the derived id points at a market that was never created, so `supplyCollateral`, `borrow`, `repay`, and `withdrawCollateral` all revert. The vault is dead on arrival rather than quietly operating against the wrong market.
+- **The swap price bound is oracle-derived, not pool-derived.** `SwapLib.swapLimit` builds `sqrtPriceLimitX96` from the oracle rate discounted by `maxSlippageBps`; the configured pool address is read only for the `slot0` spot check that decides whether to attempt the swap at all. The router resolves the pool it actually trades against from `(tokenIn, tokenOut, fee)` and the pool enforces the limit natively. So a mismatched `yieldLoanPool` / `collateralLoanPool` corrupts the go/skip decision — spurious skips leaving rebalance a no-op, or attempts the pool rejects with `SPL` — but it cannot make a swap execute outside the oracle-derived bound.
+
+What is left unvalidated therefore lands in "unusable" rather than "exploitable": a wrong or zero `yieldOracle` reverts the first time `price()` is decoded, a wrong market tuple reverts on the first Morpho call, and a wrong pool degrades rebalancing instead of unbounding it. The residual risk sits with whoever chooses to deposit into a given vault — the same place it sits for any permissionlessly deployed contract.
+
 ### Donation/Inflation Attack
 
 See [explanation from OpenZeppelin](https://docs.openzeppelin.com/contracts/5.x/erc4626#security-concern-inflation-attack).

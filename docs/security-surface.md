@@ -17,31 +17,27 @@ config/logic-only). The three tokens (collateral, loan, yield) are omitted (see 
 | `setFeeRecipient(address)` | owner | `MORPHO.accrueInterest` | M(A/B) |
 | `accrueFees()` | public | `MORPHO.accrueInterest` | M(A/B) |
 | `deposit(uint256 assets, address receiver)` | early-access | `MORPHO.accrueInterest`, `collateral.safeTransferFrom`, `MORPHO.supplyCollateral`, `MORPHO.borrow`, `Router.exactInputSingle` | M(A/B), R(A/B) |
-| `redeem(uint256 shares, address receiver, address owner)` | public | `MORPHO.accrueInterest`, `Router.exactInputSingle`, `MORPHO.repay`, `MORPHO.withdrawCollateral`, `collateral.safeTransfer` | M(A/B), R(A/B) |
+| `redeem(uint256 shares, address receiver, address owner)` | public | `MORPHO.accrueInterest`, `Router.exactInputSingle`, `MORPHO.repay`, `MORPHO.withdrawCollateral`, `MORPHO.flashLoan` (Case B), `collateral.safeTransfer` | M(A/B), R(A/B) |
 | `redeemInKind(uint256 shares, address receiver, address owner)` | public | `MORPHO.accrueInterest`, `loan.safeTransferFrom`, `MORPHO.repay`, `MORPHO.withdrawCollateral`, `collateral.safeTransfer`, `yield.safeTransfer` | M(A/B) |
 | `rebalance()` | public | `MORPHO.accrueInterest`, `MORPHO.borrow`, `Router.exactInputSingle`, `MORPHO.repay` | M(A/B), R(A/B) |
+| `harvest(uint256 maximumYield)` | public | `MORPHO.accrueInterest`, `Router.exactInputSingle`, `MORPHO.supplyCollateral`, `MORPHO.repay` | M(A/B), R(A/B) |
+| `onMorphoFlashLoan(uint256, bytes)` | Morpho only | `Router.exactOutputSingle`, `MORPHO.repay`, `MORPHO.withdrawCollateral` | M(A/B), R(A/B) |
+| `grantEarlyAccess(address)` | owner | *(none — storage + event only)* | — |
+| `revokeEarlyAccess(address)` | owner | *(none — storage + event only)* | — |
 | `setMaxTvl(uint256)` | owner | *(none — storage + event only)* | — |
 | `scheduleEmergencyRecovery()` | owner | *(none — storage + event only)* | — |
 | `cancelEmergencyRecovery()` | owner | *(none — storage + event only)* | — |
-| `executeEmergencyRecovery()` | owner | `MORPHO.accrueInterest`, `loan.safeTransferFrom`, `MORPHO.repay` (via `repayAll`), `MORPHO.withdrawCollateral`, `collateral.safeTransfer`, `yield.safeTransfer`, `loan.safeTransfer` | M(A/B) |
+| `executeEmergencyRecovery()` | owner | `MORPHO.withdrawCollateral`, `collateral.safeTransfer`, `yield.safeTransfer`, `loan.safeTransfer` | M(A/B) |
 
 ### 1b. Inherited — ERC20 (share token)
 
 _Assumed safe:_ these run OpenZeppelin's audited ERC20 accounting unchanged; the only vault-specific logic is the `_update` allowlist hook, which can only _restrict_ who holds shares.
 
-- `transfer(address,uint256)` — gated by `_update` (both parties need `EARLY_ACCESS_ROLE`; burns exempt)
+- `transfer(address,uint256)` — gated by `_update` (both parties need `earlyAccess`; burns exempt)
 - `transferFrom(address,address,uint256)` — same gating
 - `approve(address,uint256)`
 
-### 1c. Inherited — AccessControl
-
-_Assumed safe:_ these run OpenZeppelin's audited role machinery and have no functionality specific to FCMVault.
-
-- `grantRole(bytes32,address)`
-- `revokeRole(bytes32,address)`
-- `renounceRole(bytes32,address)`
-
-### 1d. Inherited — Ownable2Step
+### 1c. Inherited — Ownable2Step
 
 _Assumed safe:_ these run OpenZeppelin's audited two-step ownership handshake and have no functionality specific to FCMVault.
 
@@ -64,7 +60,7 @@ capability and its outcome:
 - **deposits halted**
 - **rebalancing halted**
 
-### **Morpho Blue singleton** — `IMorpho` at `0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f` (via `MarketLib`)
+### **Morpho Blue singleton** — `IMorpho` at `0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f` (via `MorphoLib`)
 
 - `accrueInterest(MarketParams)`
 - `supplyCollateral(MarketParams, uint256, address, bytes)`
