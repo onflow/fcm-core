@@ -5,6 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {Id, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IMorphoFlashLoanCallback} from "@morpho-blue/interfaces/IMorphoCallbacks.sol";
+import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 
 import {MockERC20} from "./MockERC20.sol";
@@ -19,11 +20,11 @@ contract MockMorpho {
     mapping(Id => Market) public market;
     /// @notice Test-only cap on total outstanding debt for a market, 0 = uncapped.
     mapping(Id => uint256) public borrowCap;
-    /// @notice Test-only floor on a position's collateral, 0 = unconstrained.
-    mapping(Id => mapping(address => uint256)) public minCollateral;
 
     uint256 internal constant VIRTUAL_SHARES = 1e6;
     uint256 internal constant VIRTUAL_ASSETS = 1;
+    uint256 internal constant ORACLE_PRICE_SCALE = 1e36;
+    uint256 internal constant WAD = 1e18;
 
     function setBorrowCap(MarketParams memory mp, uint256 cap) external {
         borrowCap[mp.id()] = cap;
@@ -78,6 +79,8 @@ contract MockMorpho {
         m.totalBorrowShares += SafeCast.toUint128(newShares);
         m.totalBorrowAssets += SafeCast.toUint128(assets);
 
+        require(_isHealthy(mp, id, onBehalf), "insufficient collateral");
+
         MockERC20(mp.loanToken).mint(receiver, assets);
 
         return (assets, newShares);
@@ -118,16 +121,15 @@ contract MockMorpho {
         return (assets, sharesToBurn);
     }
 
-    /// @dev Reverts if the withdrawal would take the position below its opt-in `minCollateral` floor (see
-    /// `setMinCollateral`); 0 is always satisfied, so tests that never set a floor keep unconstrained behavior.
     function withdrawCollateral(MarketParams memory mp, uint256 assets, address onBehalf, address receiver) external {
+        require(assets != 0, "zero assets");
         Id id = mp.id();
         Position storage pos = position[id][onBehalf];
-        uint256 newCollateral = uint256(pos.collateral) - assets;
 
-        require(newCollateral >= minCollateral[id][onBehalf], "INSUFFICIENT_COLLATERAL");
+        pos.collateral = SafeCast.toUint128(uint256(pos.collateral) - assets);
 
-        pos.collateral = SafeCast.toUint128(newCollateral);
+        require(_isHealthy(mp, id, onBehalf), "insufficient collateral");
+
         IERC20(mp.collateralToken).safeTransfer(receiver, assets);
     }
 
@@ -164,10 +166,29 @@ contract MockMorpho {
         return (x * y + d - 1) / d;
     }
 
+    /// @dev Mirrors `Morpho._isHealthy`: debt rounded up (`toAssetsUp`), collateral valued down. Enforced on `borrow`
+    /// and `withdrawCollateral` exactly as on-chain, so LLTV violations surface here rather than only on a fork. Use
+    /// `liquidate` or an oracle move to construct an underwater position - neither goes through these checks.
+    function _isHealthy(MarketParams memory mp, Id id, address user) internal view returns (bool) {
+        Position storage pos = position[id][user];
+        if (pos.borrowShares == 0) return true;
+
+        Market storage m = market[id];
+        uint256 borrowed = _mulDivUp(
+            uint256(pos.borrowShares),
+            uint256(m.totalBorrowAssets) + VIRTUAL_ASSETS,
+            uint256(m.totalBorrowShares) + VIRTUAL_SHARES
+        );
+        uint256 maxBorrow = uint256(pos.collateral) * IOracle(mp.oracle).price() / ORACLE_PRICE_SCALE * mp.lltv / WAD;
+
+        return maxBorrow >= borrowed;
+    }
+
     /// @dev Lends from the singleton's own balance rather than minting, so a flash of a token it doesn't custody (e.g.
     /// the loan token, which the vault only borrows) reverts exactly as on-chain — letting tests prove redeem's
     /// Case-B flash is self-collateralized (draws only on supplied collateral, not idle loan).
     function flashLoan(address token, uint256 assets, bytes calldata data) external {
+        require(assets != 0, "zero assets");
         IERC20(token).safeTransfer(msg.sender, assets);
         IMorphoFlashLoanCallback(msg.sender).onMorphoFlashLoan(assets, data);
         IERC20(token).safeTransferFrom(msg.sender, address(this), assets);

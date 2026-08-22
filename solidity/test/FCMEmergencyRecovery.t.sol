@@ -131,6 +131,23 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
         vm.stopPrank();
     }
 
+    /// @dev The sweep withdraws all collateral without repaying, so Morpho's health check only clears it at zero
+    /// debt - the debt must be repaid out-of-band first. `EmergencyRecoveryFork.t.sol` pins the same on real Morpho.
+    function test_emergencyRecovery_executeRevertsWhileDebtOutstanding() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+        assertGt(vault.debt(), 0);
+        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN);
+
+        vm.startPrank(owner);
+        vault.scheduleEmergencyRecovery();
+        vm.warp(vault.emergencyRecoveryValidAt());
+
+        vm.expectRevert(bytes("insufficient collateral"));
+        vault.executeEmergencyRecovery();
+        vm.stopPrank();
+    }
+
     function test_emergencyRecovery_executeSweepsAllAssetsToOwner() public {
         uint256 originalCollateral = 1 ether;
         vm.prank(alice);
