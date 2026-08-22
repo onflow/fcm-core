@@ -144,7 +144,7 @@ contract FCMRebalanceTest is Test, Deployers {
     }
 
     function testFuzz_rebalance_leverPartialFill(uint16 slippageBps) public {
-        slippageBps = uint16(bound(slippageBps, 1, 9999));
+        slippageBps = uint16(bound(slippageBps, 1, 1000));
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
@@ -164,7 +164,7 @@ contract FCMRebalanceTest is Test, Deployers {
     }
 
     function testFuzz_rebalance_deleverPartialFill(uint16 slippageBps) public {
-        slippageBps = uint16(bound(slippageBps, 1, 9999));
+        slippageBps = uint16(bound(slippageBps, 1, 1000));
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));

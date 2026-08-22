@@ -33,6 +33,6 @@ contract FCMMaxSlippageTest is Test, Deployers {
     function test_maxSlippage_revertsOnInvalidSlippage() public {
         vm.expectRevert(Errors.invalidSlippage());
         vm.prank(owner);
-        vault.setMaxSlippageBps(10_000);
+        vault.setMaxSlippageBps(1001);
     }
 }

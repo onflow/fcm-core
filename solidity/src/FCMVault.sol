@@ -49,6 +49,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
     uint256 internal constant MAX_MANAGEMENT_FEE_BPS = 1000;
     /// @dev Hard cap on the performance fee (50%) - owner cannot exceed.
     uint256 internal constant MAX_PERFORMANCE_FEE_BPS = 5000;
+    /// @dev Hard cap on the maxSlippageBps (10%) - owner cannot exceed.
+    uint256 internal constant MAX_SLIPPAGE_BPS = 1000;
     /// @inheritdoc IFCMVault
     uint32 public constant EMERGENCY_RECOVERY_DELAY = 7 days;
 
@@ -195,7 +197,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
 
     /// @inheritdoc IFCMVault
     function setMaxSlippageBps(uint256 newBps) external onlyOwner {
-        if (newBps >= SwapLib.BPS) revert InvalidSlippage();
+        require(newBps <= MAX_SLIPPAGE_BPS, InvalidSlippage());
         emit MaxSlippageBpsSet(maxSlippageBps, newBps);
         maxSlippageBps = newBps;
     }
