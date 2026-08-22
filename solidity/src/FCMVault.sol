@@ -789,6 +789,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
         if (yieldBalance <= yieldForDebt.mulDiv(YIELD_FACTOR_MAX, MorphoLib.WAD, Math.Rounding.Floor)) return;
         uint256 yieldToHarvest = yieldBalance - yieldForDebt;
         yieldToHarvest = Math.min(yieldToHarvest, maximumYield);
+        if (yieldToHarvest == 0) return;
 
         uint256 loanBefore = LOAN_TOKEN.balanceOf(address(this));
 
