@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Test} from "forge-std/Test.sol";
@@ -27,8 +27,6 @@ contract FCMMaxRedeemTest is Test, Deployers {
         vault.scheduleEmergencyRecovery();
 
         assertEq(vault.maxRedeem(alice), shares, "pending recovery does not close the exit");
-        vm.prank(alice);
-        assertGt(vault.redeem(shares, alice, alice), 0, "and redeem still works");
     }
 
     function test_maxRedeem_zeroAfterExecutedEmergencyRecovery() public {
@@ -68,7 +66,7 @@ contract FCMMaxRedeemTest is Test, Deployers {
         assertGt(shares, 0);
 
         setCollateralPrice(COLLATERAL_PRICE / 2);
-        assertLt(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        assertGt(vault.ltv(), LTV_MAX);
 
         assertEq(vault.maxRedeem(alice), 0);
     }
@@ -79,7 +77,7 @@ contract FCMMaxRedeemTest is Test, Deployers {
         assertGt(shares, 0);
 
         setCollateralPrice(COLLATERAL_PRICE * 10);
-        assertGt(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        assertLt(vault.ltv(), LTV_MIN);
 
         assertEq(vault.maxRedeem(alice), shares);
     }

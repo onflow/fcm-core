@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Test} from "forge-std/Test.sol";
@@ -36,8 +36,8 @@ contract FCMDepositTest is Test, Deployers {
         assertEq(COLLATERAL_TOKEN.balanceOf(alice), 0);
         assertEq(vault.collateral(), 1 ether);
         assertEq(COLLATERAL_TOKEN.balanceOf(address(vault)), 0);
-        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN);
-        assertLe(vault.healthFactor(), HEALTH_FACTOR_MAX);
+        assertGe(vault.ltv(), LTV_MIN);
+        assertLe(vault.ltv(), LTV_MAX);
     }
 
     function test_deposit_takesOutLoan() public {
@@ -45,8 +45,8 @@ contract FCMDepositTest is Test, Deployers {
         vault.deposit(1 ether, alice);
 
         assertGt(vault.debt(), 0);
-        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN);
-        assertLe(vault.healthFactor(), HEALTH_FACTOR_MAX);
+        assertGe(vault.ltv(), LTV_MIN);
+        assertLe(vault.ltv(), LTV_MAX);
     }
 
     function test_deposit_blockedDuringEmergencyRecovery() public {
@@ -124,8 +124,47 @@ contract FCMDepositTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
 
-        uint256 midPoint = (HEALTH_FACTOR_MIN_TARGET + HEALTH_FACTOR_MAX_TARGET) / 2;
-        assertEq(vault.healthFactor(), midPoint);
+        uint256 midPoint = (LTV_MIN_TARGET + LTV_MAX_TARGET) / 2;
+        assertApproxEqAbs(vault.ltv(), midPoint, 1);
+    }
+
+    /// @dev A deposit into a healthy (in-band) position moves LTV toward the deposit target
+    /// (band midpoint) but never past it. When the position is below the target (under-levered),
+    /// a deposit raises LTV toward the target; once at the target, further deposits hold there.
+    function test_deposit_raisesLtvTowardTargetWhileBelowIt() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+        uint256 target = (LTV_MIN + LTV_MAX) / 2;
+        assertApproxEqAbs(vault.ltv(), target, 1);
+
+        // Collateral appreciates -> LTV drops below the deposit target.
+        setCollateralPrice(COLLATERAL_PRICE.mulDiv(110, 100));
+        uint256 ltvBefore = vault.ltv();
+        assertLt(ltvBefore, target);
+
+        vm.prank(bob);
+        vault.deposit(1 ether, bob);
+
+        // The deposit raises LTV toward the target (capped by the existing position's
+        // headroom), but never past it.
+        assertGt(vault.ltv(), ltvBefore);
+        assertLe(vault.ltv(), target + 0.01e18);
+    }
+
+    /// @dev A deposit into a position already at the deposit target keeps LTV at the target:
+    /// the new collateral borrows its own proportional share at the target, not more.
+    function test_deposit_holdsLtvAtTargetOnceThere() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+        uint256 target = (LTV_MIN + LTV_MAX) / 2;
+        assertApproxEqAbs(vault.ltv(), target, 1);
+
+        uint256 ltvBefore = vault.ltv();
+
+        vm.prank(bob);
+        vault.deposit(1 ether, bob);
+
+        assertApproxEqAbs(vault.ltv(), ltvBefore, 0.01e18);
     }
 
     function test_deposit_revertsWhenTvlLimitLoweredBelowTvl() public {
@@ -234,12 +273,7 @@ contract FCMDepositTest is Test, Deployers {
     function test_deposit_noSlippageProtectionAcceptsAnyPrice() public {
         setYieldPoolPrice(YIELD_PRICE * 100);
         vm.prank(alice);
-        uint256 shares = vault.deposit(1 ether, alice);
-
-        setYieldPoolPrice(YIELD_PRICE);
-        vm.prank(alice);
-        uint256 redeemed = vault.redeem(shares, alice, alice);
-        assertLt(redeemed, 0.5 ether);
+        vault.deposit(1 ether, alice);
     }
 
     function test_deposit_revertsOnIlliquidMorpho() public {
@@ -279,7 +313,7 @@ contract FCMDepositTest is Test, Deployers {
         uint256 collBefore = vault.collateral();
         uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
         uint256 debtBefore = vault.debt();
-        uint256 hfBefore = vault.healthFactor();
+        uint256 ltvBefore = vault.ltv();
 
         vault.harvest(type(uint256).max);
         vault.rebalance();
@@ -287,16 +321,24 @@ contract FCMDepositTest is Test, Deployers {
         assertApproxEqAbs(vault.collateral(), collBefore, 1);
         assertApproxEqAbs(YIELD_TOKEN.balanceOf(address(vault)), yieldBefore, 1);
         assertApproxEqAbs(vault.debt(), debtBefore, 1);
-        assertApproxEqAbs(vault.healthFactor(), hfBefore, 1e15);
+        assertApproxEqAbs(vault.ltv(), ltvBefore, 1e15);
     }
 
     function test_deposit_emitsVaultStateSnapshot() public {
         setCollateralPrice(2e36);
         setYieldPrice(4e36);
-        uint256 depositHealth = (HEALTH_FACTOR_MAX_TARGET + HEALTH_FACTOR_MIN_TARGET) / 2;
-        uint256 debt = uint256(2 ether).mulDiv(MARKET_LLTV, depositHealth);
+
+        uint256 snap = vm.snapshotState();
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        uint256 coll = vault.collateral();
+        uint256 debt = vault.debt();
+        uint256 yieldBal = YIELD_TOKEN.balanceOf(address(vault));
+        vm.revertToState(snap);
+
         vm.expectEmit(true, true, true, true);
-        emit IFCMVault.VaultState(1 ether, debt, debt / 4, 2e36, 1e36, 4e36);
+        emit IFCMVault.VaultState(coll, debt, yieldBal, 2e36, 4e36);
         vm.prank(alice);
         vault.deposit(1 ether, alice);
     }

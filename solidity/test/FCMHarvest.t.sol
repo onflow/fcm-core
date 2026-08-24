@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Test} from "forge-std/Test.sol";
@@ -27,7 +27,7 @@ contract FCMHarvestTest is Test, Deployers {
         vault.deposit(1 ether, alice);
         uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
         uint256 collateralBefore = vault.collateral();
-        uint256 hfBefore = vault.healthFactor();
+        uint256 ltvBefore = vault.ltv();
 
         setYieldPrice(YIELD_PRICE.mulDiv(200, 100));
 
@@ -46,9 +46,9 @@ contract FCMHarvestTest is Test, Deployers {
         assertLt(YIELD_TOKEN.balanceOf(address(vault)), yieldBefore);
         assertEq(COLLATERAL_TOKEN.balanceOf(address(vault)), 0);
         assertEq(LOAN_TOKEN.balanceOf(address(vault)), 0);
-        // Harvest only adds collateral (debt unchanged), so HF must strictly increase and stay healthy.
-        assertGt(vault.healthFactor(), hfBefore);
-        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        // Harvest only adds collateral (debt unchanged), so LTV must strictly decrease and stay healthy.
+        assertLt(vault.ltv(), ltvBefore);
+        assertLe(vault.ltv(), LTV_MAX);
     }
 
     function testFuzz_harvest_partialYieldFill(uint16 slippageBps) public {
@@ -187,11 +187,11 @@ contract FCMHarvestTest is Test, Deployers {
         assertGe(redeemed, (1 ether - seizedCollateral).mulDiv(999, 1000));
     }
 
-    function test_harvest_noopBelowYieldFactorMax() public {
+    function test_harvest_noopBelowYieldToLoanMax() public {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
 
-        setYieldPrice(YIELD_PRICE.mulDiv(YIELD_FACTOR_MAX, 1e18));
+        setYieldPrice(YIELD_PRICE.mulDiv(YIELD_TO_LOAN_MAX, 1e18));
         vault.harvest(type(uint256).max);
         assertEq(vault.collateral(), 1 ether);
 
@@ -200,11 +200,11 @@ contract FCMHarvestTest is Test, Deployers {
         assertEq(vault.collateral(), 1 ether);
     }
 
-    function test_harvest_harvestsTinySurplusAboveYieldFactorMax() public {
+    function test_harvest_harvestsTinySurplusAboveYieldToLoanMax() public {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
 
-        setYieldPrice(YIELD_PRICE.mulDiv(YIELD_FACTOR_MAX + 1, 1e18));
+        setYieldPrice(YIELD_PRICE.mulDiv(uint256(YIELD_TO_LOAN_MAX) + 1, 1e18));
         vault.harvest(type(uint256).max);
         assertGt(vault.collateral(), 1 ether);
     }
@@ -277,5 +277,14 @@ contract FCMHarvestTest is Test, Deployers {
         assertGt(vault.collateral(), 1 ether);
         assertLt(vault.debt(), debtBefore);
         assertEq(LOAN_TOKEN.balanceOf(address(vault)), 0);
+    }
+
+    function test_harvest_zeroYieldIsNoOp() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        setYieldPrice(YIELD_PRICE * 2);
+        vault.harvest(0);
+        assertEq(vault.collateral(), 1 ether);
     }
 }

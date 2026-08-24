@@ -16,18 +16,18 @@ interface IFCMVault is IERC4626 {
         IERC20 loanToken;
         IERC20 yieldToken;
 
-        uint256 healthFactorMin;
-        uint256 healthFactorMinTarget;
-        uint256 healthFactorMax;
-        uint256 healthFactorMaxTarget;
-        uint256 yieldFactorMax;
+        uint128 ltvMin;
+        uint128 ltvMinTarget;
+        uint128 ltvMax;
+        uint128 ltvMaxTarget;
+        uint128 yieldToLoanMax;
 
         address collateralLoanPool;
         uint24 collateralLoanPoolFee;
         address yieldLoanPool;
         uint24 yieldLoanPoolFee;
 
-        address marketOracle;
+        IOracle collateralOracle;
         address marketIrm;
         uint256 marketLltv;
         IOracle yieldOracle;
@@ -81,11 +81,11 @@ interface IFCMVault is IERC4626 {
     /// @param oldBps Previous performance fee rate, in basis points.
     /// @param newBps New performance fee rate, in basis points.
     event PerformanceFeeSet(uint256 oldBps, uint256 newBps);
-    /// @notice Emitted whenever the vault is re-balanced
+    /// @notice Emitted whenever the vault is re-balanced.
     /// @param caller Address that invoked `rebalance`.
-    /// @param healthFactorBefore Health factor at the start of the call (WAD-scaled).
-    /// @param healthFactorAfter Health factor after the rebalance (WAD-scaled).
-    event Rebalanced(address indexed caller, uint256 healthFactorBefore, uint256 healthFactorAfter);
+    /// @param ltvBefore LTV at the start of the call (1e18-scaled).
+    /// @param ltvAfter LTV after the rebalance (1e18-scaled).
+    event Rebalanced(address indexed caller, uint256 ltvBefore, uint256 ltvAfter);
     /// @notice Emitted on a `redeemInKind` (escape hatch): `owner`'s `shares` burned, `caller` repaid `debtRepaid`
     /// loanToken, `receiver` got `collateralOut` collateral + `yieldOut` yield in kind.
     /// @param caller Account that
@@ -113,10 +113,9 @@ interface IFCMVault is IERC4626 {
     /// @param debt Outstanding loan-token debt, raw token units.
     /// @param yield Yield token held by the vault, raw token units.
     /// @param collateralPrice Collateral price in loan token, 1e36-scaled.
-    /// @param debtPrice Loan-token price in loan token (the 1e36 scale).
     /// @param yieldPrice Yield-token price in loan token, 1e36-scaled.
     event VaultState(
-        uint256 collateral, uint256 debt, uint256 yield, uint256 collateralPrice, uint256 debtPrice, uint256 yieldPrice
+        uint256 collateral, uint256 debt, uint256 yield, uint256 collateralPrice, uint256 yieldPrice
     );
     /// @notice Emitted when early access is granted to an account.
     /// @param account The account that was granted early access.
@@ -127,9 +126,6 @@ interface IFCMVault is IERC4626 {
 
     /// @dev Attempted to deposit more assets than the max amount for `receiver`.
     error ERC4626ExceededMaxDeposit(address receiver, uint256 assets, uint256 max);
-    /// @dev Attempted to withdraw more assets than the max amount for `owner`.
-    // error ERC4626ExceededMaxWithdraw(address owner, uint256 assets, uint256 max);
-
     /// @dev Deposits are frozen while a recovery is pending or after it executes.
     error EmergencyRecoveryActive();
     /// @dev `executeEmergencyRecovery` reverts before recovery is scheduled or before its delay elapses.
@@ -140,7 +136,7 @@ interface IFCMVault is IERC4626 {
     error InvalidSlippage();
     /// @dev Deposit blocked while the vault is marked underwater with shares outstanding.
     error VaultUnderwater();
-    /// @dev Thrown when an unauthorized action is attempted in `onMorphoFlashLoan`.
+    /// @dev Thrown when `onMorphoRepay` is called by an address other than Morpho.
     error Unauthorized();
     /// @dev Thrown when an account without early access attempts to perform an action that requires early access.
     /// @param account The address without early access, can be receiver or sender.
@@ -149,14 +145,10 @@ interface IFCMVault is IERC4626 {
     error NotImplemented();
     /// @notice Thrown when an input address is set to address(0).
     error ZeroAddress();
-    /// @notice Thrown when a scalar factor is strictly less than 1e18 (WAD).
-    /// @dev WAD precision is scaled to 10**18.
-    error BelowMinWad(uint256 value);
-    /// @notice Thrown when health factor constraints break the required ordering:
-    /// @dev Enforces: min <= minTarget <= maxTarget <= max.
-    /// @param lower The lower bound that violated the inequality.
-    /// @param upper The upper bound that was exceeded.
-    error InvalidHealthFactorBounds(uint256 lower, uint256 upper);
+    /// @dev Thrown when the LTV band is invalid or `ltvMax >= MARKET_LLTV`.
+    error InvalidLtv();
+    /// @dev Thrown when `yieldToLoanMax < 1e18`.
+    error InvalidYieldFactor();
     /// @notice Thrown when a harvest realizes more loan token than the outstanding debt can absorb, which would leave
     /// the excess idle and uncounted by `totalAssets`.
     error LeftoverDebt();
@@ -166,7 +158,7 @@ interface IFCMVault is IERC4626 {
     /// @notice Permissionlessly accrue fees up to the current block (mints fee shares to the recipient). Lets a keeper
     /// tick the management fee during idle stretches so it tracks NAV-over-time more closely.
     function accrueFees() external;
-    /// @notice Drive the vault's leveraged Morpho position back inside the `[healthFactorMin, healthFactorMax]` band.
+    /// @notice Drive the vault's leveraged Morpho position back inside the `[LTV_MIN, LTV_MAX]` band.
     /// @dev Leverage adjustment only; harvest is a separate entry point.
     function rebalance() external;
     /// @notice Harvest surplus yield into collateral. Separate from `rebalance` so the keeper can control the maximum
@@ -207,24 +199,23 @@ interface IFCMVault is IERC4626 {
         returns (uint256 collateralOut, uint256 yieldOut);
 
     /// @notice Set the fee recipient. Accrues to the old recipient first.
-    /// @dev The recipient must hold `EARLY_ACCESS_ROLE` to receive minted fee shares; if it doesn't, accrual silently
-    /// skips (see `_accrueFees`).
+    /// @dev The recipient must have early access to receive minted fee shares; if not, accrual silently skips.
     /// @param newRecipient New fee recipient address.
     function setFeeRecipient(address newRecipient) external;
     /// @notice Set the management fee rate (basis points), capped at `MAX_MANAGEMENT_FEE_BPS`.
     /// @dev Accrues at the OLD rate first so the change isn't retroactive.
     /// @param newBps New management fee rate in basis points.
-    function setManagementFeeBps(uint256 newBps) external;
-    /// @notice Set the max slippage tolerance applied to the rebalance swaps.
-    /// @param newBps Tolerance in basis points; capped at 10% (1_000) so the floor can never be widened away.
-    function setMaxSlippageBps(uint256 newBps) external;
-    /// @notice Set the TVL limit. Default at deploy time is 0 (no deposits).
-    /// @param newMaxTvl the new TVL limit; applies only to new deposits.
-    function setMaxTvl(uint256 newMaxTvl) external;
+    function setManagementFeeBps(uint16 newBps) external;
     /// @notice Set the performance fee rate (basis points), capped at `MAX_PERFORMANCE_FEE_BPS`.
     /// @dev Accrues at the OLD rate first so the change isn't retroactive.
     /// @param newBps New performance fee rate in basis points.
-    function setPerformanceFeeBps(uint256 newBps) external;
+    function setPerformanceFeeBps(uint16 newBps) external;
+    /// @notice Set the max slippage tolerance applied to the rebalance swaps.
+    /// @param newBps Tolerance in basis points; capped at 10% (1_000) so the floor can never be widened away.
+    function setMaxSlippageBps(uint16 newBps) external;
+    /// @notice Set the TVL limit. Default at deploy time is 0 (no deposits).
+    /// @param newMaxTvl the new TVL limit; applies only to new deposits.
+    function setMaxTvl(uint256 newMaxTvl) external;
     /// @notice Grant early access to an account.
     /// @param account The account to grant early access to.
     function grantEarlyAccess(address account) external;
@@ -242,31 +233,27 @@ interface IFCMVault is IERC4626 {
     /// @dev The yield token is the inner vault's share token and the yield leg of the position.
     function YIELD_TOKEN() external view returns (IERC20);
 
-    /// @notice Minimum health factor below which `rebalance` delevers (sells yield to repay debt).
-    /// @dev WAD-scaled. Positions below this threshold are over-levered.
-    function HEALTH_FACTOR_MIN() external view returns (uint256);
-    /// @notice Re-entry target for a delever: when `hf < healthFactorMin`, `rebalance` repays just enough debt to raise
-    /// the health factor to this value, which sits just above the lower bound. Landing here rather than exactly on
-    /// `healthFactorMin` leaves a small margin so routine drift does not immediately re-trigger.
-    /// @dev WAD-scaled.
-    function HEALTH_FACTOR_MIN_TARGET() external view returns (uint256);
-    /// @notice Health factor above which `rebalance` will lever up (borrow more debt and swap to yield). The position
-    /// is under-levered above this bound.
-    /// @dev WAD-scaled.
-    /// @return healthFactorMax The maximum health factor threshold.
-    function HEALTH_FACTOR_MAX() external view returns (uint256);
-    /// @notice Re-entry target for a lever-up: when `hf > healthFactorMax`, `rebalance` borrows just enough to lower
-    /// the health factor to this value, which sits just below the upper bound. WAD-scaled. The four health factors must
-    /// satisfy `WAD <= healthFactorMin <= healthFactorMinTarget <= healthFactorMaxTarget <= healthFactorMax`.
-    /// @dev WAD-scaled.
-    /// @return healthFactorMaxTarget The re-entry target for a lever-up, WAD-scaled.
-    function HEALTH_FACTOR_MAX_TARGET() external view returns (uint256);
-    /// @notice The yield factor is `yieldValue / debt`, WAD-scaled (WAD = the yield exactly repays the debt). It is NOT
-    /// a yield rate. `yieldFactorMax` is the upper edge of its band: `rebalance`'s harvest leg fires only when the
-    /// yield factor exceeds it, so it does not act on sub-threshold surplus. Must be `>= WAD`. Immutable, like the
-    /// health-factor band bounds.
-    /// @dev WAD-scaled.
-    function YIELD_FACTOR_MAX() external view returns (uint256);
+    /// @notice Minimum LTV below which `rebalance` levers up (borrows more debt and swaps to yield). The position is
+    /// under-levered below this bound.
+    /// @dev 1e18-scaled.
+    function LTV_MIN() external view returns (uint128);
+    /// @notice Re-entry target for a lever-up: when `ltv < LTV_MIN`, `rebalance` borrows just enough to raise the LTV
+    /// to this value, which sits just above the lower bound.
+    /// @dev 1e18-scaled.
+    function LTV_MIN_TARGET() external view returns (uint128);
+    /// @notice Maximum LTV above which `rebalance` delevers (sells yield to repay debt). The position is over-levered
+    /// above this bound.
+    /// @dev 1e18-scaled.
+    function LTV_MAX() external view returns (uint128);
+    /// @notice Re-entry target for a delever: when `ltv > LTV_MAX`, `rebalance` repays just enough debt to lower the
+    /// LTV to this value, which sits just below the upper bound.
+    /// @dev 1e18-scaled.
+    function LTV_MAX_TARGET() external view returns (uint128);
+    /// @notice The yield-to-loan ratio is `yieldValue / debt`, 1e18-scaled (1e18 = the yield exactly repays the debt).
+    /// `YIELD_TO_LOAN_MAX` is the upper edge of its band: `harvest` fires only when the ratio exceeds it. Must be
+    /// `>= 1e18`. Immutable.
+    /// @dev 1e18-scaled.
+    function YIELD_TO_LOAN_MAX() external view returns (uint128);
 
     /// @notice Address of the FlowSwap V3 SwapRouter02.
     function SWAP_ROUTER() external view returns (ISwapRouter02);
@@ -282,10 +269,10 @@ interface IFCMVault is IERC4626 {
     /// @notice Address of the Morpho Blue singleton.
     function MORPHO() external view returns (IMorpho);
     /// @notice Address of the oracle for the market.
-    function MARKET_ORACLE() external view returns (address);
+    function COLLATERAL_ORACLE() external view returns (IOracle);
     /// @notice Address of the interest rate model for the market.
     function MARKET_IRM() external view returns (address);
-    /// @notice Loan-to-value ratio for the market, WAD-scaled.
+    /// @notice Loan-to-value ratio for the market, 1e18-scaled.
     function MARKET_LLTV() external view returns (uint256);
     /// @notice Address of the oracle for the yield token.
     function YIELD_ORACLE() external view returns (IOracle);
@@ -319,20 +306,20 @@ interface IFCMVault is IERC4626 {
     /// price impact, not the pool's fixed LP fee. Applies only to vault-initiated rebalances - deposit/redeem
     /// slippage is the caller's responsibility, set via the ERC4626 router. Defaults to 0 (off) at deploy time -
     /// rebalance/harvest swaps no-op until the owner sets a non-zero tolerance. Owner-adjustable.
-    function maxSlippageBps() external view returns (uint256);
+    function maxSlippageBps() external view returns (uint16);
     /// @notice Flat yearly management fee on NAV, in basis points. 0 = off.
     /// @dev Linear accrual of the annual rate; bounded by the 10% cap.
-    function managementFeeBps() external view returns (uint256);
+    function managementFeeBps() external view returns (uint16);
     /// @notice Performance fee on per-share gains above the high-water mark, in basis points. 0 = off.
     /// @dev Crystallizes on UNREALIZED, oracle-marked NAV and is triggerable by anyone via `accrueFees`; bounded by the
     /// all-time HWM and the 50% cap.
-    function performanceFeeBps() external view returns (uint256);
-    /// @notice Recipient of minted fee shares. Must hold `EARLY_ACCESS_ROLE` to receive them; if unset or not
-    /// allowlisted, fee accrual is skipped (never reverts) so core flows can't be bricked.
+    function performanceFeeBps() external view returns (uint16);
+    /// @notice Recipient of minted fee shares. Must have early access to receive them; if unset or not allowlisted,
+    /// fee accrual is skipped (never reverts) so core flows can't be bricked.
     function feeRecipient() external view returns (address);
     /// @notice Timestamp of the last fee accrual, for the time-based management fee.
-    function lastFeeAccrual() external view returns (uint256);
-    /// @notice High-water mark for the performance fee, as asset-per-share scaled by WAD (`NAV * WAD / claims`).
+    function lastFeeAccrual() external view returns (uint64);
+    /// @notice High-water mark for the performance fee, as asset-per-share scaled by 1e18 (`NAV * 1e18 / claims`).
     /// Flow-neutral, strict all-time peak. Vault-wide (one mark for all holders): a depositor entering below it rides
     /// the recovery back up fee-free - accepted by design in lieu of per-user-HWM accounting.
     function perfHighWaterMark() external view returns (uint256);
@@ -382,16 +369,8 @@ interface IFCMVault is IERC4626 {
     /// @notice Deposit `assets` of the underlying asset into the vault and mint vault shares to `receiver`.
     /// @dev WARNING: Standard ERC-4626 deposit does not provide slippage protection. Direct calls are vulnerable to
     /// sandwich attacks; call via a router enforcing `minSharesOut`.
-    /// @dev Expansion sequence (see docs/architecture.md). Let `navBefore` be the vault NAV before this deposit:
-    /// 1. Accrue market interest so `navBefore` and the post-deposit NAV measurement are both fresh.
-    /// 2. Pull `assets` from the caller and supply them as collateral to the Morpho market.
-    /// 3. Borrow `toBorrow = _targetBorrowAgainst(assets)` loan token and swap it into yield token on FlowSwap V3. The
-    /// borrow is capped so this deposit cannot drag the existing position's health factor down to the target - small
+    /// @dev The borrow is capped so this deposit cannot drag the existing position's LTV past the target - small
     /// deposits never rebalance the whole protocol.
-    /// 4. Mint shares pro-rata to the NAV contribution.
-    ///
-    /// Rounding favors the vault: the share computation rounds down, so any residual NAV accrues to existing
-    /// shareholders rather than the new depositor.
     /// @param assets Amount of underlying asset to deposit.
     /// @param receiver Account to credit with newly minted shares.
     /// @return shares Vault shares minted to `receiver`.
@@ -408,21 +387,14 @@ interface IFCMVault is IERC4626 {
     /// `receiver`.
     /// @dev WARNING: Standard ERC-4626 redeem does not provide slippage protection. Direct calls are vulnerable to
     /// sandwich attacks; call via a router enforcing `minAssetsOut`.
-    /// @dev Unwind sequence (AMM-mediated, see docs/architecture.md). Let `p = shares /
-    /// _totalClaims()`, the redeemed fraction of the total claim pool (existing supply + virtual-share offset), and
-    /// `d* = p * debt`, the pro-rata debt slice. The unwind:
-    /// 1. Sell exactly `p * yieldToken` for loanToken on FlowSwap V3. Call the realized loanToken output `loanGot`.
-    /// 2. If `loanGot >= d*` (Case A - fair or favorable AMM execution): repay `d*`, withdraw `p * collateral` of the
-    /// asset, and swap the surplus `loanGot - d*` loanToken to the asset.
-    /// 3. If `loanGot < d*` (Case B - yield underperformed): flash-borrow the shortfall `d* - loanGot` in loanToken,
-    /// repay the full `d*`, withdraw the full `p * collateral`, and sell just enough of that collateral to repay the
-    /// flash. The redeemer takes home their full pro-rata value; the collateral sold covers the debt the yield leg
-    /// could not.
-    /// 4. Burn shares and transfer the new asset balance to receiver.
+    /// @dev Unwind sequence (see docs/architecture.md):
+    /// 1. Sell the pro-rata yield slice for loan token on FlowSwap V3.
+    /// 2. Repay the pro-rata debt slice by borrow shares via Morpho's `onMorphoRepay` callback, which withdraws the
+    /// pro-rata collateral slice and reconciles the realized swap output against the debt: selling collateral for any
+    /// shortfall, or swapping surplus loan token back to collateral.
+    /// 3. Burn shares and transfer the resulting collateral balance to `receiver`.
     ///
-    /// Rounding favors the vault: all pro-rata slices round down, so residuals accrue to remaining shareholders rather
-    /// than leaking to the redeemer.
-    /// Reverts if `msg.sender != owner` and allowance is insufficient.
+    /// Reverts with `VaultUnhealthy` if the position's LTV exceeds `LTV_MAX`.
     /// @param shares Vault shares to burn.
     /// @param receiver Account to credit with the asset payout.
     /// @param owner Account whose shares are burned.

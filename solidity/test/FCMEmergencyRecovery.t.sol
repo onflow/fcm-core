@@ -3,11 +3,10 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Test} from "forge-std/Test.sol";
-import {Vm} from "forge-std/Vm.sol";
 
 contract FCMEmergencyRecoveryTest is Test, Deployers {
     using FCMHelpers for FCMVault;
@@ -137,7 +136,7 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         assertGt(vault.debt(), 0);
-        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        assertGe(vault.ltv(), LTV_MIN);
 
         vm.startPrank(owner);
         vault.scheduleEmergencyRecovery();
@@ -168,35 +167,25 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
         LOAN_TOKEN.approve(address(MORPHO), type(uint256).max);
         MORPHO.repay(vault.market(), 0, vault.position().borrowShares, address(vault), "");
         assertEq(vault.debt(), 0);
-        assertEq(vault.healthFactor(), type(uint256).max);
+        assertEq(vault.ltv(), 0);
 
-        vm.recordLogs();
+        uint256 snap = vm.snapshotState();
         vault.executeEmergencyRecovery();
-        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        uint256 collateralOut = COLLATERAL_TOKEN.balanceOf(owner);
+        uint256 yieldOut = YIELD_TOKEN.balanceOf(owner);
+        vm.revertToState(snap);
+
+        vm.expectEmit(false, false, false, true);
+        emit IFCMVault.EmergencyRecoveryExecuted(collateralOut, yieldOut, 0);
+        vault.executeEmergencyRecovery();
 
         assertEq(COLLATERAL_TOKEN.balanceOf(address(vault)), 0);
         assertEq(YIELD_TOKEN.balanceOf(address(vault)), 0);
         assertEq(vault.collateral(), 0);
         assertEq(vault.debt(), 0);
-
-        uint256 collateralOut = COLLATERAL_TOKEN.balanceOf(owner);
-        uint256 yieldOut = YIELD_TOKEN.balanceOf(owner);
-
-        assertEq(collateralOut, originalCollateral);
-        assertEq(yieldOut, originalYield);
-
-        for (uint256 i = 0; i < entries.length; i++) {
-            if (entries[i].topics[0] == IFCMVault.EmergencyRecoveryExecuted.selector) {
-                (uint256 collateralOutRecorded, uint256 yieldOutRecorded, uint256 loanOutRecorded) =
-                    abi.decode(entries[i].data, (uint256, uint256, uint256));
-
-                assertEq(collateralOut, collateralOutRecorded);
-                assertEq(yieldOut, yieldOutRecorded);
-                assertEq(0, loanOutRecorded);
-                return;
-            }
-        }
-        revert("EmergencyRecoveryExecuted event not found");
+        assertEq(COLLATERAL_TOKEN.balanceOf(owner), originalCollateral);
+        assertEq(YIELD_TOKEN.balanceOf(owner), originalYield);
     }
 
     function test_emergencyRecovery_unaccountedTokens() public {

@@ -3,11 +3,11 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Position} from "@morpho-blue/interfaces/IMorpho.sol";
-import {Test, console} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 contract FCMRedeemTest is Test, Deployers {
@@ -48,7 +48,7 @@ contract FCMRedeemTest is Test, Deployers {
         assertEq(COLLATERAL_TOKEN.balanceOf(carol), assetsOut);
         assertApproxEqAbs(COLLATERAL_TOKEN.balanceOf(carol), 1 ether, 2);
         assertEq(vault.balanceOf(alice), 0);
-        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        assertEq(vault.ltv(), 0);
     }
 
     function test_redeem_partialRedeemUnwindsProportionalSlice() public {
@@ -57,7 +57,7 @@ contract FCMRedeemTest is Test, Deployers {
 
         uint256 debtBefore = vault.debt();
         uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 hfBefore = vault.healthFactor();
+        uint256 ltvBefore = vault.ltv();
 
         vm.prank(alice);
         uint256 assetsOut = vault.redeem(shares / 2, alice, alice);
@@ -67,8 +67,8 @@ contract FCMRedeemTest is Test, Deployers {
         assertApproxEqAbs(COLLATERAL_TOKEN.balanceOf(address(alice)), assetsOut, 1);
         assertApproxEqRel(vault.debt(), debtBefore / 2, 1);
         assertApproxEqRel(YIELD_TOKEN.balanceOf(address(vault)), yieldBefore / 2, 1);
-        // Pro-rata unwind halves collateral and debt together, so HF is unchanged.
-        assertApproxEqAbs(vault.healthFactor(), hfBefore, 1e15);
+        // Pro-rata unwind halves collateral and debt together, so LTV is unchanged.
+        assertApproxEqAbs(vault.ltv(), ltvBefore, 1e15);
     }
 
     function test_redeem_twoDepositorsIndependentRedeem() public {
@@ -148,7 +148,7 @@ contract FCMRedeemTest is Test, Deployers {
         vm.prank(alice);
         uint256 assetsOut = vault.redeem(shares, alice, alice);
 
-        assertGt(assetsOut, 1 ether);
+        assertGt(assetsOut, 1.05 ether);
     }
 
     function test_redeem_fillsYieldShortfallFromCollateral() public {
@@ -168,7 +168,7 @@ contract FCMRedeemTest is Test, Deployers {
         uint256 shares = vault.deposit(1 ether, alice);
 
         setYieldPrice(1);
-        setCollateralPrice(COLLATERAL_PRICE.mulDiv(100, 115));
+        setCollateralPrice(COLLATERAL_PRICE.mulDiv(95, 100));
 
         MORPHO.drainLiquidity(vault.market(), COLLATERAL_TOKEN.balanceOf(address(MORPHO)));
         vm.expectRevert();
@@ -189,28 +189,19 @@ contract FCMRedeemTest is Test, Deployers {
         assertEq(assetsOut, 0);
     }
 
-    function testFuzz_redeem_rebalanceAfterDebtDustDonation(uint256 depositAmount) public {
-        // A debt-dust donation can make redeem revert, so a rebalance may be needed.
-        vm.prank(owner);
-        vault.setMaxSlippageBps(100);
+    function testFuzz_redeem_Dust(uint256 depositAmount) public {
         depositAmount = bound(depositAmount, 1, 1e18);
 
         vm.prank(alice);
         uint256 shares = vault.deposit(depositAmount, alice);
 
         Position memory position = vault.position();
-        console.log("position.borrowShares", position.borrowShares);
         LOAN_TOKEN.mint(address(this), 1e30);
         LOAN_TOKEN.approve(address(MORPHO), type(uint256).max);
         MORPHO.repay(vault.market(), 0, position.borrowShares - 1, address(vault), "");
 
         vm.startPrank(alice);
-        try vault.redeem(shares, alice, alice) {
-            return;
-        } catch {
-            vault.rebalance();
-            vault.redeem(shares, alice, alice);
-        }
+        vault.redeem(shares, alice, alice);
     }
 
     function test_redeem_noSlippageProtectionAcceptsAnyPrice() public {
@@ -257,10 +248,17 @@ contract FCMRedeemTest is Test, Deployers {
         vm.prank(alice);
         uint256 shares = vault.deposit(1 ether, alice);
 
-        uint256 depositHealth = (HEALTH_FACTOR_MAX_TARGET + HEALTH_FACTOR_MIN_TARGET) / 2;
-        uint256 debt = uint256(1 ether).mulDiv(MARKET_LLTV, depositHealth);
+        uint256 snap = vm.snapshotState();
+        vm.prank(alice);
+        vault.redeem(shares / 2, alice, alice);
+
+        uint256 coll = vault.collateral();
+        uint256 debt = vault.debt();
+        uint256 yieldBal = YIELD_TOKEN.balanceOf(address(vault));
+        vm.revertToState(snap);
+
         vm.expectEmit(true, true, true, true);
-        emit IFCMVault.VaultState(0.5 ether + 1, debt + 1, debt / 4 + 1, 2e36, 1e36, 4e36);
+        emit IFCMVault.VaultState(coll, debt, yieldBal, 2e36, 4e36);
         vm.prank(alice);
         vault.redeem(shares / 2, alice, alice);
     }
@@ -280,10 +278,9 @@ contract FCMRedeemTest is Test, Deployers {
         setCollateralPrice(1e36); // 1:1 so debtToCollateral matches the mock swap
         vm.prank(alice);
         uint256 shares = vault.deposit(1 ether, alice);
-        // Deep Case B: burn 60% of the vault's yield so the held yield can't cover the slice.
+        // Deep shortfall: burn 60% of the vault's yield so the held yield can't cover the slice.
         YIELD_TOKEN.burn(address(vault), YIELD_TOKEN.balanceOf(address(vault)) * 6 / 10);
-        // Buffer only collateral in the singleton; keep loan at zero so a loan-token flash
-        // could not be served here.
+        // Buffer only collateral in the singleton; keep loan at zero.
         COLLATERAL_TOKEN.mint(address(MORPHO), 2 ether);
         assertEq(LOAN_TOKEN.balanceOf(address(MORPHO)), 0);
         uint256 fairValue = vault.convertToAssets(shares);
@@ -292,6 +289,53 @@ contract FCMRedeemTest is Test, Deployers {
         uint256 assetsOut = vault.redeem(shares, alice, alice);
 
         assertApproxEqRel(assetsOut, fairValue, 0.02e18);
+        assertEq(vault.balanceOf(alice), 0);
+    }
+
+    function test_redeem_noDebt() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+
+        LOAN_TOKEN.mint(address(this), 1e30);
+        LOAN_TOKEN.approve(address(MORPHO), type(uint256).max);
+        MORPHO.repay(vault.market(), 0, vault.position().borrowShares, address(vault), "");
+        assertEq(vault.debt(), 0);
+
+        vm.prank(alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+
+        assertGt(assetsOut, 0);
+        assertEq(vault.balanceOf(alice), 0);
+    }
+
+    function test_redeem_noCollateral() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+
+        LOAN_TOKEN.mint(address(this), 1e30);
+        LOAN_TOKEN.approve(address(MORPHO), type(uint256).max);
+        MORPHO.repay(vault.market(), 0, vault.position().borrowShares, address(vault), "");
+        MORPHO.withdrawCollateral(vault.market(), vault.collateral(), address(vault), address(this));
+        assertEq(vault.collateral(), 0);
+
+        vm.prank(alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+
+        assertGt(assetsOut, 0);
+        assertEq(vault.balanceOf(alice), 0);
+    }
+
+    function test_redeem_noYield() public {
+        setCollateralPrice(1e36);
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        YIELD_TOKEN.burn(address(vault), YIELD_TOKEN.balanceOf(address(vault)));
+        assertEq(YIELD_TOKEN.balanceOf(address(vault)), 0);
+
+        vm.prank(alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+
+        assertGt(assetsOut, 0);
         assertEq(vault.balanceOf(alice), 0);
     }
 

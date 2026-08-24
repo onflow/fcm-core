@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../../src/FCMVault.sol";
 import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
-import {FCMHelpers} from "../../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../../src/libraries/periphery/FCMHelpers.sol";
 import {ForkDeployers} from "./ForkDeployers.sol";
 
 /// @dev `executeEmergencyRecovery` withdraws all collateral without repaying, so real Morpho's
@@ -33,7 +33,7 @@ contract EmergencyRecoveryForkTest is ForkDeployers {
         _externalRepayFullDebt();
 
         assertEq(vault.debt(), 0, "debt cleared by the external repayer");
-        assertEq(vault.healthFactor(), type(uint256).max, "no debt -> unliquidatable");
+        assertEq(vault.ltv(), type(uint256).max, "no debt -> unliquidatable");
 
         uint256 expectedCollateralOut = WBTC.balanceOf(address(vault)) + vault.collateral();
         uint256 expectedYieldOut = FUSDEV.balanceOf(address(vault));
@@ -63,7 +63,7 @@ contract EmergencyRecoveryForkTest is ForkDeployers {
 
     function test_emergencyRecoveryFork_executeRevertsWhileDebtOutstanding() public {
         assertGt(vault.debt(), 0, "vault carries debt");
-        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN, "position is healthy, not distressed");
+        assertGe(vault.ltv(), LTV_MIN, "position is healthy, not distressed");
 
         vault.scheduleEmergencyRecovery();
         vm.warp(vault.emergencyRecoveryValidAt());
@@ -71,7 +71,7 @@ contract EmergencyRecoveryForkTest is ForkDeployers {
         vm.expectRevert(bytes("insufficient collateral"));
         vault.executeEmergencyRecovery();
 
-        // rebalance only delevers to HEALTH_FACTOR_MIN_TARGET, so it cannot unblock the sweep.
+        // rebalance only delevers to LTV_MAX_TARGET, so it cannot unblock the sweep.
         vault.rebalance();
         _arbPoolToSpot();
         assertGt(vault.debt(), 0, "rebalance cannot reach zero debt");

@@ -12,15 +12,15 @@ import {MockERC20} from "./MockERC20.sol";
 /// `enablePriceImpact`): a constant-product (x*y=k) curve using `setReserves` that honors `sqrtPriceLimitX96` like a
 /// real Uniswap V3 pool, partial-filling up to the limit and consuming only the input used — this is what exercises
 /// the vault's price-limit-based partial rebalancing. Implements `slot0()` so `SwapLib.swapLimit` can read the marginal
-/// price. Price convention: `setPrice` is WAD-scaled (1e18 = 1:1); `sqrtPriceX96 = sqrt(token1/token0) * Q96`.
+/// price. Price convention: `setPrice` is 1e18-scaled (1e18 = 1:1); `sqrtPriceX96 = sqrt(token1/token0) * Q96`.
 contract MockPool {
     uint256 internal constant Q96 = 1 << 96;
-    uint256 internal constant WAD = 1e18;
+    uint256 internal constant LTV_SCALE = 1e18;
 
     /// @dev Virtual reserve per token, keyed by token address; only consulted in price-impact mode.
     mapping(address => uint256) public reserveOf;
 
-    /// @dev Flat rate (tokenOut per tokenIn, WAD-scaled) keyed by keccak256(tokenIn, tokenOut); only consulted in flat
+    /// @dev Flat rate (tokenOut per tokenIn, 1e18-scaled) keyed by keccak256(tokenIn, tokenOut); only consulted in flat
     /// mode. 0 = worthless (or unset); 1e18 = 1:1.
     mapping(bytes32 => uint256) internal flatPrice;
 
@@ -36,11 +36,11 @@ contract MockPool {
     }
 
     /// @dev Sets the rate for `tokenIn -> tokenOut` in the Morpho IOracle convention: `oraclePrice` is 1e36-scaled
-    /// (loan-per-tokenIn, 1e36 = 1:1, 0 = worthless). Internally converts to the WAD flat rate (`oraclePrice / 1e18`)
+    /// (loan-per-tokenIn, 1e36 = 1:1, 0 = worthless). Internally converts to the 1e18 flat rate (`oraclePrice / 1e18`)
     /// and derives `sqrtPriceX96` so `slot0()` matches what `SwapLib.swapLimit` derives from the oracle. The inverse
     /// direction is auto-derived in `_resolvePrice` — only one direction needs setting.
     function setPrice(address tokenIn, address tokenOut, uint256 oraclePrice) external {
-        flatPrice[_pairKey(tokenIn, tokenOut)] = oraclePrice / 1e18; // 1e36-scaled -> WAD-scaled
+        flatPrice[_pairKey(tokenIn, tokenOut)] = oraclePrice / 1e18; // 1e36-scaled -> 1e18-scaled
         // sqrtPriceX96 = sqrt(token1/token0) * Q96 (token0 = min, token1 = max). Each branch computes spot for its own
         // direction; the zeroForOne/oneForZero spots are reciprocals scaled by 1e36, so using one formula for both
         // leaves the pool off-oracle for the other. oraclePrice == 0 -> sqrtPriceX96 = 0, which SwapLib.swapLimit
@@ -73,7 +73,7 @@ contract MockPool {
         if (!priceImpactEnabled) {
             // Flat: ignores sqrtPriceLimitX96; a 0 rate (worthless or unset) yields amountOut 0.
             uint256 price = _resolvePrice(p.tokenIn, p.tokenOut);
-            amountOut = p.amountIn * price / WAD;
+            amountOut = p.amountIn * price / LTV_SCALE;
             MockERC20(p.tokenIn).burn(msg.sender, p.amountIn);
             MockERC20(p.tokenOut).mint(p.recipient, amountOut);
             return amountOut;
@@ -115,7 +115,7 @@ contract MockPool {
         require(p.amountOut != 0, "AS");
         require(!priceImpactEnabled, "exactOutputSingle not implemented in price-impact mode");
         uint256 price = _resolvePrice(p.tokenOut, p.tokenIn);
-        amountIn = (p.amountOut * price + WAD - 1) / WAD;
+        amountIn = (p.amountOut * price + LTV_SCALE - 1) / LTV_SCALE;
         require(amountIn <= p.amountInMaximum, "Too much requested");
         MockERC20(p.tokenIn).burn(msg.sender, amountIn);
         MockERC20(p.tokenOut).mint(p.recipient, p.amountOut);

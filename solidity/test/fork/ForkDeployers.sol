@@ -5,7 +5,7 @@ import {FCMVault} from "../../src/FCMVault.sol";
 import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
 import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
 import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
-import {FCMHelpers} from "../../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../../src/libraries/periphery/FCMHelpers.sol";
 import {IMorpho, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -17,7 +17,7 @@ contract ForkDeployers is Test {
     IERC20 constant WBTC = IERC20(0x717DAE2BaF7656BE9a9B01deE31d571a9d4c9579);
     IERC20 constant PYUSD0 = IERC20(0x99aF3EeA856556646C98c8B9b2548Fe815240750);
     IERC20 constant FUSDEV = IERC20(0xd069d989e2F44B70c65347d1853C0c67e10a9F8D);
-    address constant MARKET_ORACLE = 0x5B3e0BA14443B444D557C0C2F85592d88B88f5c8;
+    IOracle constant COLLATERAL_ORACLE = IOracle(0x5B3e0BA14443B444D557C0C2F85592d88B88f5c8);
     address constant MARKET_IRM = 0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546;
     IOracle constant YIELD_ORACLE = IOracle(0x144F613490DD55C9844Ef139CFB9B63433dD349F);
     address constant SWAP_FACTORY = 0xca6d7Bb03334bBf135902e1d919a5feccb461632;
@@ -26,12 +26,12 @@ contract ForkDeployers is Test {
 
     address constant YIELD_LOAN_POOL = 0x9196e243b7562B0866309013f2F9EB63F83A690f;
 
-    uint256 constant HEALTH_FACTOR_MIN = 1_228_571_428_571_428_571;
-    uint256 constant HEALTH_FACTOR_MIN_TARGET = 1_230_329_041_487_839_771;
-    uint256 constant HEALTH_FACTOR_MAX = 1_433_333_333_333_333_333;
-    uint256 constant HEALTH_FACTOR_MAX_TARGET = 1_430_948_419_301_164_725;
+    uint128 constant LTV_MIN = 0.6e18;
+    uint128 constant LTV_MIN_TARGET = 0.61e18;
+    uint128 constant LTV_MAX_TARGET = 0.69e18;
+    uint128 constant LTV_MAX = 0.7e18;
     uint256 constant MARKET_LLTV = 0.86e18;
-    uint256 constant YIELD_FACTOR_MAX = 1.01e18;
+    uint128 constant YIELD_TO_LOAN_MAX = 1.01e18;
     uint24 constant COLLATERAL_LOAN_POOL_FEE = 3000;
     uint24 constant YIELD_LOAN_POOL_FEE = 100;
 
@@ -59,7 +59,7 @@ contract ForkDeployers is Test {
         mp = MarketParams({
             loanToken: address(PYUSD0),
             collateralToken: address(WBTC),
-            oracle: MARKET_ORACLE,
+            oracle: address(COLLATERAL_ORACLE),
             irm: MARKET_IRM,
             lltv: MARKET_LLTV
         });
@@ -73,16 +73,16 @@ contract ForkDeployers is Test {
                 collateralToken: WBTC,
                 loanToken: PYUSD0,
                 yieldToken: FUSDEV,
-                healthFactorMin: HEALTH_FACTOR_MIN,
-                healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
-                healthFactorMax: HEALTH_FACTOR_MAX,
-                healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
-                yieldFactorMax: YIELD_FACTOR_MAX,
+                ltvMin: LTV_MIN,
+                ltvMinTarget: LTV_MIN_TARGET,
+                ltvMax: LTV_MAX,
+                ltvMaxTarget: LTV_MAX_TARGET,
+                yieldToLoanMax: YIELD_TO_LOAN_MAX,
                 collateralLoanPool: collateralLoanPool,
                 collateralLoanPoolFee: COLLATERAL_LOAN_POOL_FEE,
                 yieldLoanPool: YIELD_LOAN_POOL,
                 yieldLoanPoolFee: YIELD_LOAN_POOL_FEE,
-                marketOracle: MARKET_ORACLE,
+                collateralOracle: COLLATERAL_ORACLE,
                 marketIrm: MARKET_IRM,
                 marketLltv: MARKET_LLTV,
                 yieldOracle: YIELD_ORACLE,
@@ -133,7 +133,7 @@ contract ForkDeployers is Test {
     }
 
     function setCollateralPrice(uint256 price) internal {
-        vm.mockCall(MARKET_ORACLE, abi.encodeWithSelector(IOracle.price.selector), abi.encode(price));
+        vm.mockCall(address(COLLATERAL_ORACLE), abi.encodeWithSelector(IOracle.price.selector), abi.encode(price));
     }
 
     function setYieldPrice(uint256 price) internal {
@@ -174,7 +174,7 @@ contract ForkDeployers is Test {
     }
 
     function _tvlUsd() internal view returns (uint256) {
-        return Math.mulDiv(vault.totalAssets(), IOracle(MARKET_ORACLE).price(), 1e36);
+        return Math.mulDiv(vault.totalAssets(), COLLATERAL_ORACLE.price(), 1e36);
     }
 
     function _getPool(address factory, address tokenA, address tokenB, uint24 fee) internal view returns (address) {

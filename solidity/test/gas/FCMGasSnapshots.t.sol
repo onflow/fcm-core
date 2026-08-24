@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../../src/FCMVault.sol";
-import {FCMHelpers} from "../../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "../utils/Deployers.sol";
 import {Test} from "forge-std/Test.sol";
 

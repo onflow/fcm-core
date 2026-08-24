@@ -51,12 +51,12 @@ library Errors {
         return abi.encodeWithSelector(IFCMVault.InvalidFee.selector);
     }
 
-    function belowMinWad(uint256 value) public pure returns (bytes memory) {
-        return abi.encodeWithSelector(IFCMVault.BelowMinWad.selector, value);
+    function invalidLtv() public pure returns (bytes memory) {
+        return abi.encodeWithSelector(IFCMVault.InvalidLtv.selector);
     }
 
-    function invalidHealthFactorBounds(uint256 lowerBound, uint256 upperBound) public pure returns (bytes memory) {
-        return abi.encodeWithSelector(IFCMVault.InvalidHealthFactorBounds.selector, lowerBound, upperBound);
+    function invalidYieldFactor() public pure returns (bytes memory) {
+        return abi.encodeWithSelector(IFCMVault.InvalidYieldFactor.selector);
     }
 
     function zeroAddress() public pure returns (bytes memory) {

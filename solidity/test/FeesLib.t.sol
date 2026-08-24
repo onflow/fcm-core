@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
+import "../src/libraries/ConstantsLib.sol";
 import {FeesLib} from "../src/libraries/FeesLib.sol";
-import {MorphoLib} from "../src/libraries/MorphoLib.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -206,7 +206,7 @@ contract FeesLibTest is Test {
         managementFeeBps = uint16(bound(managementFeeBps, 1, 1000));
         performanceFeeBps = uint16(bound(performanceFeeBps, 1, 5000));
 
-        uint256 pricePerShare = nav.mulDiv(MorphoLib.WAD, claims);
+        uint256 pricePerShare = nav.mulDiv(LTV_SCALE, claims);
         perfHighWaterMark = bound(perfHighWaterMark, 0, pricePerShare);
 
         elapsed = bound(elapsed, 1, 366 days);

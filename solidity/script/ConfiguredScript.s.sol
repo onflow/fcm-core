@@ -24,11 +24,11 @@ abstract contract ConfiguredScript is Script {
         address loanToken;
         address yieldToken;
 
-        uint256 healthFactorMin;
-        uint256 healthFactorMinTarget;
-        uint256 healthFactorMax;
-        uint256 healthFactorMaxTarget;
-        uint256 yieldFactorMax;
+        uint256 ltvMin;
+        uint256 ltvMinTarget;
+        uint256 ltvMax;
+        uint256 ltvMaxTarget;
+        uint256 yieldToLoanMax;
 
         address swapFactory;
         address collateralLoanPool;
@@ -57,11 +57,11 @@ abstract contract ConfiguredScript is Script {
         c.loanToken = vm.parseTomlAddress(toml, ".loanToken");
         c.yieldToken = vm.parseTomlAddress(toml, ".yieldToken");
 
-        c.healthFactorMin = vm.parseTomlUint(toml, ".healthFactorMin");
-        c.healthFactorMax = vm.parseTomlUint(toml, ".healthFactorMax");
-        c.healthFactorMinTarget = vm.parseTomlUint(toml, ".healthFactorMinTarget");
-        c.healthFactorMaxTarget = vm.parseTomlUint(toml, ".healthFactorMaxTarget");
-        c.yieldFactorMax = vm.parseTomlUint(toml, ".yieldFactorMax");
+        c.ltvMin = vm.parseTomlUint(toml, ".ltvMin");
+        c.ltvMax = vm.parseTomlUint(toml, ".ltvMax");
+        c.ltvMinTarget = vm.parseTomlUint(toml, ".ltvMinTarget");
+        c.ltvMaxTarget = vm.parseTomlUint(toml, ".ltvMaxTarget");
+        c.yieldToLoanMax = vm.parseTomlUint(toml, ".yieldToLoanMax");
 
         c.swapFactory = vm.parseTomlAddress(toml, ".swapFactory");
         c.collateralLoanPool =

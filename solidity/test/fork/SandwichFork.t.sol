@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {FCMVault} from "../../src/FCMVault.sol";
 import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
 import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
-import {FCMHelpers} from "../../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../../src/libraries/periphery/FCMHelpers.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
@@ -25,7 +25,7 @@ contract SandwichForkTest is ForkDeployers {
         int256 attackerProfit;
         uint256 debtAdded;
         uint256 yieldBought;
-        uint256 hfAfter;
+        uint256 ltvAfter;
         uint256 tvlUsd;
     }
 
@@ -40,7 +40,7 @@ contract SandwichForkTest is ForkDeployers {
         }
 
         setCollateralPrice(ORACLE_PRICE * 110 / 100);
-        assertGt(vault.healthFactor(), HEALTH_FACTOR_MAX, "HF above max after 10% rise -> lever path");
+        assertGt(vault.ltv(), LTV_MAX, "HF above max after 10% rise -> lever path");
 
         deal(address(PYUSD0), attacker, 100_000_000e6);
         deal(address(FUSDEV), attacker, 100_000_000e18);
@@ -56,7 +56,7 @@ contract SandwichForkTest is ForkDeployers {
         console.log("Yield oracle:", IOracle(YIELD_ORACLE).price());
         console.log("Pool spot:", uint256(cleanSpot));
         console.log("Pool liquidity:", uint256(IUniswapV3Pool(YIELD_LOAN_POOL).liquidity()));
-        console.log("HF after 10% rise:", vault.healthFactor() / 1e15);
+        console.log("HF after 10% rise:", vault.ltv() / 1e15);
         console.log("TVL ($):", _tvlUsd() / 1e6);
         console.log("---");
 
@@ -132,10 +132,10 @@ contract SandwichForkTest is ForkDeployers {
                 SandwichResult memory r = _singleSandwich(pushBps);
                 totalProfit += r.attackerProfit;
                 iterations = y + 1;
-                hfFinal = r.hfAfter;
+                hfFinal = r.ltvAfter;
                 tvlFinal = r.tvlUsd;
                 _arbPoolToSpot();
-                if (r.hfAfter <= HEALTH_FACTOR_MAX) break;
+                if (r.ltvAfter <= LTV_MAX) break;
             }
 
             string memory netStr = totalProfit >= 0
@@ -170,7 +170,7 @@ contract SandwichForkTest is ForkDeployers {
         for (uint256 y = 0; y < 100; y++) {
             SandwichResult memory r = _singleSandwich(100);
             totalProfit += r.attackerProfit;
-            hfFinal = r.hfAfter;
+            hfFinal = r.ltvAfter;
             debtAdded += r.debtAdded;
             _arbPoolToSpot();
         }
@@ -212,7 +212,7 @@ contract SandwichForkTest is ForkDeployers {
         vault.rebalance();
         r.debtAdded = vault.debt() - debtStart;
         r.yieldBought = FUSDEV.balanceOf(address(vault)) - yieldStart;
-        r.hfAfter = vault.healthFactor();
+        r.ltvAfter = vault.ltv();
         r.tvlUsd = _tvlUsd();
 
         if (yieldGotFront > 0) {

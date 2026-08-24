@@ -91,9 +91,8 @@ library SwapLib {
 
     /// @notice Swap `tokenIn` for exactly `amountOut` of `tokenOut`, reverting in the router if it would cost more than
     /// `amountInMaximum`.
-    /// @dev Exact-output single-hop; recipient is always `address(this)`. Used by redeem's Case-B
-    /// path to buy exactly the redeemer's debt shortfall from their collateral, spending no more than the
-    /// slippage-grossed collateral withdrawn for it.
+    /// @dev Exact-output single-hop; recipient is always `address(this)`. Used by redeem to buy exactly the
+    /// redeemer's debt shortfall from their collateral, spending no more than the collateral slice withdrawn for it.
     /// @param swapRouter The FlowSwap V3 SwapRouter02 instance.
     /// @param tokenIn Token being sold.
     /// @param tokenOut Token being bought.

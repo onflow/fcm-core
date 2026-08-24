@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {MorphoLib} from "./MorphoLib.sol";
+import "./ConstantsLib.sol";
 import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -35,7 +35,7 @@ library FeesLib {
         uint256 perfHighWaterMark,
         uint256 lastFeeAccrual
     ) external view returns (uint256 managementFee, uint256 performanceFee, uint256 feeShares) {
-        uint256 pricePerShare = nav.mulDiv(MorphoLib.WAD, claims);
+        uint256 pricePerShare = nav.mulDiv(LTV_SCALE, claims);
         // Bill exactly `rate * elapsed` since the last accrual, then advance the clock
         // (accrual is irregular: every interaction + permissionless accrueFees).
         // The billable gap is capped at one year, so the fee is
@@ -58,7 +58,7 @@ library FeesLib {
             // profit that later reverses - kept, not refunded. The mint goes to the
             // recipient, not the triggerer, so a permissionless accrueFees call can't
             // pay its caller; the strict HWM charges net all-time highs only.
-            uint256 gain = (pricePerShare - perfHighWaterMark).mulDiv(claims, MorphoLib.WAD);
+            uint256 gain = (pricePerShare - perfHighWaterMark).mulDiv(claims, LTV_SCALE);
             performanceFee = gain.mulDiv(performanceFeeBps, BPS);
         }
 

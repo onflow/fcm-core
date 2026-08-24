@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {FCMVault} from "../../src/FCMVault.sol";
 import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
 import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
-import {FCMHelpers} from "../../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../../src/libraries/periphery/FCMHelpers.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockIrm} from "../mocks/MockIrm.sol";
 import {MockMorpho} from "../mocks/MockMorpho.sol";
@@ -22,11 +22,11 @@ contract Deployers is Test {
     MockERC20 immutable LOAN_TOKEN = MockERC20(makeAddr("LOAN_TOKEN"));
     MockERC20 immutable YIELD_TOKEN = MockERC20(makeAddr("YIELD_TOKEN"));
 
-    uint256 constant HEALTH_FACTOR_MIN = 1.25e18;
-    uint256 constant HEALTH_FACTOR_MIN_TARGET = 1.3e18;
-    uint256 constant HEALTH_FACTOR_MAX = 1.65e18;
-    uint256 constant HEALTH_FACTOR_MAX_TARGET = 1.6e18;
-    uint256 constant YIELD_FACTOR_MAX = 1.01e18;
+    uint128 constant LTV_MIN = 0.6e18;
+    uint128 constant LTV_MIN_TARGET = 0.61e18;
+    uint128 constant LTV_MAX = 0.7e18;
+    uint128 constant LTV_MAX_TARGET = 0.69e18;
+    uint128 constant YIELD_TO_LOAN_MAX = 1.01e18;
 
     MockPool immutable COLLATERAL_LOAN_POOL = MockPool(makeAddr("COLLATERAL_LOAN_POOL"));
     uint24 constant COLLATERAL_LOAN_POOL_FEE = 3000;
@@ -58,7 +58,7 @@ contract Deployers is Test {
         MockSwapRouter(address(SWAP_ROUTER)).setPool(COLLATERAL_LOAN_POOL_FEE, COLLATERAL_LOAN_POOL);
         MockSwapRouter(address(SWAP_ROUTER)).setPool(YIELD_LOAN_POOL_FEE, YIELD_LOAN_POOL);
         vault = new FCMVault(defaultInitParams());
-        MORPHO.supplyLiquidity(vault.market(), 100 ether);
+        // MORPHO.supplyLiquidity(vault.market(), 100 ether);
     }
 
     function etchMocks() internal {
@@ -81,16 +81,16 @@ contract Deployers is Test {
             collateralToken: COLLATERAL_TOKEN,
             loanToken: LOAN_TOKEN,
             yieldToken: YIELD_TOKEN,
-            healthFactorMin: HEALTH_FACTOR_MIN,
-            healthFactorMinTarget: HEALTH_FACTOR_MIN_TARGET,
-            healthFactorMax: HEALTH_FACTOR_MAX,
-            healthFactorMaxTarget: HEALTH_FACTOR_MAX_TARGET,
-            yieldFactorMax: YIELD_FACTOR_MAX,
+            ltvMin: LTV_MIN,
+            ltvMinTarget: LTV_MIN_TARGET,
+            ltvMax: LTV_MAX,
+            ltvMaxTarget: LTV_MAX_TARGET,
+            yieldToLoanMax: YIELD_TO_LOAN_MAX,
             collateralLoanPool: address(COLLATERAL_LOAN_POOL),
             collateralLoanPoolFee: COLLATERAL_LOAN_POOL_FEE,
             yieldLoanPool: address(YIELD_LOAN_POOL),
             yieldLoanPoolFee: YIELD_LOAN_POOL_FEE,
-            marketOracle: address(MARKET_ORACLE),
+            collateralOracle: IOracle(address(MARKET_ORACLE)),
             marketIrm: address(MARKET_IRM),
             marketLltv: MARKET_LLTV,
             yieldOracle: IOracle(address(YIELD_ORACLE)),

@@ -114,7 +114,7 @@ This is an accepted trust assumption in the admin/owner key, not a contract defe
 
 None of that says the vault is safe to deposit into. The factory does not vet the parameters, and the constructor only checks what it can decide locally — it cannot verify that the yield oracle prices the right pair, that the configured pools match the tokens and fee tiers the router will use, or who holds the owner key. **Verify a specific vault's configuration before depositing; do not treat "deployed by the factory" as a signal.** In particular the `owner` is set from deploy-time parameters, so a factory-deployed vault can be owned by anyone — with all the powers in §10, including the emergency-recovery sweep.
 
-The design bar is that a misconfigured vault is *unusable* rather than quietly wrong: a wrong market tuple reverts on the first Morpho call, a wrong yield oracle reverts on first use, and a mismatched pool degrades rebalancing rather than removing the price bound (see [`architecture.md`](./architecture.md#deployment-trust-model--constructor-validation)). That bounds accidents. It does not protect against a vault configured adversarially on purpose, which is a matter of checking before you deposit.
+The design bar is that a misconfigured vault is _unusable_ rather than quietly wrong: a wrong market tuple reverts on the first Morpho call, a wrong yield oracle reverts on first use, and a mismatched pool degrades rebalancing rather than removing the price bound (see [`architecture.md`](./architecture.md#deployment-trust-model--constructor-validation)). That bounds accidents. It does not protect against a vault configured adversarially on purpose, which is a matter of checking before you deposit.
 
 ## References
 

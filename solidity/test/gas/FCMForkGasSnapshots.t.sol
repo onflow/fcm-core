@@ -2,8 +2,11 @@
 pragma solidity ^0.8.24;
 
 import {ForkDeployers} from "../fork/ForkDeployers.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract FCMForkGasSnapshotsTest is ForkDeployers {
+    using Math for uint256;
+
     function setUp() public {
         _forkSetup();
         _fundArb();
@@ -14,7 +17,7 @@ contract FCMForkGasSnapshotsTest is ForkDeployers {
     }
 
     function test_gasFork_deposit() public {
-        vault.deposit(1e8, arb);
+        vault.deposit(1e6, arb);
     }
 
     function test_gasFork_harvest() public {
@@ -37,7 +40,8 @@ contract FCMForkGasSnapshotsTest is ForkDeployers {
 
     function test_gasFork_redeem() public {
         vm.pauseGasMetering();
-        uint256 shares = vault.deposit(1e8, arb);
+        uint256 shares = vault.deposit(1e6, arb);
+        setYieldPrice(YIELD_ORACLE_PRICE.mulDiv(102, 100));
         vm.resumeGasMetering();
 
         vault.redeem(shares, arb, arb);
