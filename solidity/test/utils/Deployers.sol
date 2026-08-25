@@ -21,10 +21,7 @@ contract Deployers is Test {
     MockERC20 immutable YIELD_TOKEN = MockERC20(makeAddr("YIELD_TOKEN"));
 
     uint128 constant LTV_MIN = 0.6e18;
-    uint128 constant LTV_MIN_TARGET = 0.61e18;
     uint128 constant LTV_MAX = 0.7e18;
-    uint128 constant LTV_MAX_TARGET = 0.69e18;
-    uint128 constant YIELD_TO_LOAN_MAX = 1.01e18;
 
     MockPool immutable COLLATERAL_LOAN_POOL = MockPool(makeAddr("COLLATERAL_LOAN_POOL"));
     MockPool immutable YIELD_LOAN_POOL = MockPool(makeAddr("YIELD_LOAN_POOL"));
@@ -79,10 +76,7 @@ contract Deployers is Test {
             loanToken: address(LOAN_TOKEN),
             yieldToken: address(YIELD_TOKEN),
             ltvMin: LTV_MIN,
-            ltvMinTarget: LTV_MIN_TARGET,
             ltvMax: LTV_MAX,
-            ltvMaxTarget: LTV_MAX_TARGET,
-            yieldToLoanMax: YIELD_TO_LOAN_MAX,
             collateralLoanPool: address(COLLATERAL_LOAN_POOL),
             yieldLoanPool: address(YIELD_LOAN_POOL),
             collateralOracle: address(COLLATERAL_ORACLE),

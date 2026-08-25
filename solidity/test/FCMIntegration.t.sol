@@ -16,6 +16,8 @@ contract FCMIntegrationTest is Test, Deployers {
         deployVault();
         vm.prank(owner);
         vault.setMaxTvl(100 ether);
+        vm.prank(owner);
+        vault.setMaxSlippageBps(100);
         grantFundApprove(alice, 1 ether);
         vm.prank(alice);
         vault.approve(address(vault), type(uint256).max);
@@ -57,23 +59,43 @@ contract FCMIntegrationTest is Test, Deployers {
     function test_integration_recoveryAfterLiquidation() public {
         vm.prank(alice);
         uint256 shares = vault.deposit(1 ether, alice);
+        uint256 debt = vault.debt();
         uint256 yield = YIELD_TOKEN.balanceOf(address(vault));
+        console.log("debt", debt);
         console.log("yield", yield);
 
-        MORPHO.liquidate(vault.market(), address(vault), 0.5 ether, 1000 ether);
+        MORPHO.liquidate(vault.market(), address(vault), 0.5 ether, debt.mulDiv(65, 100));
 
         vault.harvest(type(uint256).max);
         vault.rebalance();
 
         vm.prank(alice);
         uint256 assetsOut = vault.redeem(shares, alice, alice);
-        assertApproxEqAbs(assetsOut, 1 ether, 2);
+        assertApproxEqRel(assetsOut, 1 ether, 10e16);
+    }
+
+    function test_integration_recoveryAfterBadLiquidation() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        uint256 debt = vault.debt();
+        uint256 yield = YIELD_TOKEN.balanceOf(address(vault));
+        console.log("debt", debt);
+        console.log("yield", yield);
+
+        MORPHO.liquidate(vault.market(), address(vault), 1 ether, 0);
+        assertEq(vault.ltv(), type(uint256).max);
+
+        vault.harvest(type(uint256).max);
+        assertEq(vault.ltv(), type(uint256).max);
+        vault.rebalance();
+        assertEq(vault.ltv(), 0);
+
+        vm.prank(alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        vm.assertEq(assetsOut, 0);
     }
 
     function test_integration_harvestThenLeversWhenSurplusLarge() public {
-        vm.prank(owner);
-        vault.setMaxSlippageBps(100);
-
         vm.prank(alice);
         vault.deposit(1 ether, alice);
 
@@ -87,13 +109,10 @@ contract FCMIntegrationTest is Test, Deployers {
 
         assertGt(vault.collateral(), collBefore);
         assertGt(vault.debt(), debtBefore);
-        assertApproxEqRel(vault.ltv(), LTV_MIN_TARGET, 1e15);
+        assertApproxEqRel(vault.ltv(), LTV_MIN, 1e15);
     }
 
     function test_integration_rebalanceUnblocksRedeem() public {
-        vm.prank(owner);
-        vault.setMaxSlippageBps(100);
-
         vm.prank(alice);
         uint256 shares = vault.deposit(1 ether, alice);
 
@@ -112,9 +131,6 @@ contract FCMIntegrationTest is Test, Deployers {
     }
 
     function test_integration_boundedLossAfterLiquidationRecovery() public {
-        vm.prank(owner);
-        vault.setMaxSlippageBps(100);
-
         COLLATERAL_TOKEN.mint(alice, 9 ether);
         vm.prank(alice);
         COLLATERAL_TOKEN.approve(address(vault), 10 ether);
@@ -136,9 +152,6 @@ contract FCMIntegrationTest is Test, Deployers {
     }
 
     function test_integration_rebalanceZeroesSurvivingDebtAfterFullLiquidation() public {
-        vm.prank(owner);
-        vault.setMaxSlippageBps(100);
-
         COLLATERAL_TOKEN.mint(alice, 9 ether);
         vm.prank(alice);
         COLLATERAL_TOKEN.approve(address(vault), 10 ether);

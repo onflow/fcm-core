@@ -275,7 +275,7 @@ contract FCMFeesTest is Test, Deployers {
         vm.stopPrank();
 
         vm.prank(alice);
-        uint256 shares = vault.deposit(.5 ether, alice);
+        uint256 shares = vault.deposit(0.5 ether, alice);
         vm.warp(block.timestamp + 365 days);
         vault.accrueFees();
 
@@ -287,7 +287,7 @@ contract FCMFeesTest is Test, Deployers {
         vm.warp(block.timestamp + 365 days);
         setYieldPrice(YIELD_PRICE * 2);
         vm.prank(alice);
-        vault.deposit(.5 ether, alice);
+        vault.deposit(0.5 ether, alice);
         vault.accrueFees();
 
         assertEq(vault.balanceOf(carol), 0);

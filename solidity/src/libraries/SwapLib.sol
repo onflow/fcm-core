@@ -5,6 +5,7 @@ import {ISwapRouter02} from "../interfaces/external/ISwapRouter02.sol";
 import {IUniswapV3Pool} from "../interfaces/external/IUniswapV3Pool.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @title SwapLib
 /// @author Flow Foundation
@@ -49,45 +50,39 @@ library SwapLib {
         );
     }
 
-    /// @notice Swap up to `amountIn` of `tokenIn` for `tokenOut`, stopping early if the pool's marginal price reaches
-    /// `sqrtPriceLimitX96`. The pool fills the swap natively up to that price bound and then stops without reverting,
-    /// so a swap too large to complete within the bound is a *partial fill* rather than a revert.
-    /// @dev This is the
-    /// canonical Uniswap V3 mechanism for a best-effort swap under a price bound: the pool's swap loop runs while input
-    /// remains AND the marginal price has not reached the limit, so the marginal (and therefore average) execution
-    /// price never crosses the limit. `amountOutMinimum` is left at 0 - protection comes entirely from the price
-    /// limit, and a non-zero minimum would revert a legitimate partial fill.
-    ///
-    /// IMPORTANT: on a partial fill the router consumes LESS than `amountIn` and leaves the unspent `tokenIn`
-    /// with the caller - the caller must account for the remainder (the vault repays it). `sqrtPriceLimitX96` MUST be
-    /// on the correct side of the current pool price (below it for a 0->1 swap, above it for 1->0), otherwise the pool
-    /// reverts `SPL`; callers check the live price first. Caller MUST have approved `SWAP_ROUTER` for `tokenIn`.
-    /// @param swapRouter The FlowSwap V3 SwapRouter02 instance.
+    /// @notice Swap up to `amountIn` of `tokenIn` for `tokenOut` directly on `pool`, stopping early if the pool's
+    /// marginal price reaches `sqrtPriceLimitX96`. The pool fills natively up to that bound and then stops without
+    /// reverting, so a swap too large to complete within the bound is a *partial fill* rather than a revert.
+    /// @dev Canonical Uniswap V3 best-effort swap under a price bound: the swap loop runs while input remains AND the
+    /// marginal price has not reached the limit, so the average execution price never crosses it. On a partial fill the
+    /// pool consumes LESS than `amountIn` and the unspent `tokenIn` stays with the caller - the caller must account for
+    /// the remainder. `sqrtPriceLimitX96` MUST sit on the side the price moves toward (below spot for 0->1, above for
+    /// 1->0), otherwise the pool reverts `SPL`; callers check the live price first via `swapLimit`. The pool calls this
+    /// contract's `uniswapV3SwapCallback` to pull `tokenIn`, so the caller MUST hold `amountIn` of `tokenIn`. Recipient
+    /// is `address(this)`.
+    /// @param pool The Uniswap V3 pool for the `tokenIn`/`tokenOut` pair.
     /// @param tokenIn Token being sold.
     /// @param tokenOut Token being bought.
-    /// @param fee Pool fee tier.
     /// @param amountIn Maximum amount of `tokenIn` to sell.
     /// @param sqrtPriceLimitX96 Q64.96 marginal-price bound the swap will not cross; the fill stops here if reached.
     /// @return amountOut Realized amount of `tokenOut` received.
     function swapExactInToLimit(
-        ISwapRouter02 swapRouter,
+        IUniswapV3Pool pool,
         IERC20 tokenIn,
         IERC20 tokenOut,
-        uint24 fee,
         uint256 amountIn,
         uint160 sqrtPriceLimitX96
     ) internal returns (uint256 amountOut) {
-        return swapRouter.exactInputSingle(
-            ISwapRouter02.ExactInputSingleParams({
-                tokenIn: address(tokenIn),
-                tokenOut: address(tokenOut),
-                fee: fee,
-                recipient: address(this),
-                amountIn: amountIn,
-                amountOutMinimum: 0,
-                sqrtPriceLimitX96: sqrtPriceLimitX96
-            })
-        );
+        bool zeroForOne = address(tokenIn) < address(tokenOut);
+        // `0` means "no limit": the router used to substitute the inclusive-adjacent bounds internally (MIN+1 / MAX-1,
+        // because the pool requires the limit to be STRICTLY inside `(MIN_SQRT_RATIO, MAX_SQRT_RATIO)`); `pool.swap`
+        // has no such convention and reverts `SPL` on 0 (and on the bare bounds), so mirror the router's substitution
+        // here.
+        uint160 limit =
+            sqrtPriceLimitX96 == 0 ? (zeroForOne ? MIN_SQRT_RATIO + 1 : MAX_SQRT_RATIO - 1) : sqrtPriceLimitX96;
+        (int256 amount0, int256 amount1) =
+            pool.swap(address(this), zeroForOne, SafeCast.toInt256(amountIn), limit, abi.encode(address(tokenIn)));
+        amountOut = zeroForOne ? uint256(-amount1) : uint256(-amount0);
     }
 
     /// @notice Swap `tokenIn` for exactly `amountOut` of `tokenOut`, reverting in the router if it would cost more than
@@ -120,6 +115,41 @@ library SwapLib {
                 sqrtPriceLimitX96: 0
             })
         );
+    }
+
+    /// @notice Swap `tokenIn` for up to `amountOutRequested` of `tokenOut` directly on `pool`, stopping early if the
+    /// pool's marginal price reaches `sqrtPriceLimitX96`. Reverts if the realized `amountIn` exceeds `maxAmountIn`.
+    /// @dev Exact-output via a negative `amountSpecified`. On a partial fill (price limit hit) `amountOut` is less than
+    /// `amountOutRequested` and `amountIn` is the corresponding spend. `sqrtPriceLimitX96` MUST sit on the side the
+    /// price moves toward (below spot for 0->1, above for 1->0), otherwise the pool reverts `SPL`; callers check the
+    /// live price first via `swapLimit`. The pool calls this contract's `uniswapV3SwapCallback` to pull `tokenIn`, so
+    /// the caller MUST hold at least `maxAmountIn` of `tokenIn`. Recipient is `address(this)`.
+    /// @param pool The Uniswap V3 pool for the `tokenIn`/`tokenOut` pair.
+    /// @param tokenIn Token being sold.
+    /// @param tokenOut Token being bought.
+    /// @param amountOutRequested Target amount of `tokenOut` to receive.
+    /// @param sqrtPriceLimitX96 Q64.96 marginal-price bound the swap will not cross.
+    /// @return amountIn Realized `tokenIn` spent.
+    /// @return amountOut Realized `tokenOut` received (<= `amountOutRequested`).
+    function swapExactOutToLimit(
+        IUniswapV3Pool pool,
+        IERC20 tokenIn,
+        IERC20 tokenOut,
+        uint256 amountOutRequested,
+        uint160 sqrtPriceLimitX96
+    ) internal returns (uint256 amountIn, uint256 amountOut) {
+        bool zeroForOne = address(tokenIn) < address(tokenOut);
+        // `0` means "no limit": the router used to substitute the inclusive-adjacent bounds internally (MIN+1 / MAX-1,
+        // because the pool requires the limit to be STRICTLY inside `(MIN_SQRT_RATIO, MAX_SQRT_RATIO)`); `pool.swap`
+        // has no such convention and reverts `SPL` on 0 (and on the bare bounds), so mirror the router's substitution
+        // here.
+        uint160 limit =
+            sqrtPriceLimitX96 == 0 ? (zeroForOne ? MIN_SQRT_RATIO + 1 : MAX_SQRT_RATIO - 1) : sqrtPriceLimitX96;
+        (int256 amount0, int256 amount1) = pool.swap(
+            address(this), zeroForOne, -SafeCast.toInt256(amountOutRequested), limit, abi.encode(address(tokenIn))
+        );
+        amountIn = zeroForOne ? uint256(amount0) : uint256(amount1);
+        amountOut = zeroForOne ? uint256(-amount1) : uint256(-amount0);
     }
 
     /// @notice Resolve the `sqrtPriceLimitX96` and a go/skip flag for a swap selling `tokenIn` for `tokenOut` on

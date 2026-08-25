@@ -18,10 +18,7 @@ interface IFCMVault is IERC4626 {
         address yieldToken;
 
         uint128 ltvMin;
-        uint128 ltvMinTarget;
         uint128 ltvMax;
-        uint128 ltvMaxTarget;
-        uint128 yieldToLoanMax;
 
         address collateralLoanPool;
         address yieldLoanPool;
@@ -82,9 +79,7 @@ interface IFCMVault is IERC4626 {
     event PerformanceFeeSet(uint256 oldBps, uint256 newBps);
     /// @notice Emitted whenever the vault is re-balanced.
     /// @param caller Address that invoked `rebalance`.
-    /// @param ltvBefore LTV at the start of the call (1e18-scaled).
-    /// @param ltvAfter LTV after the rebalance (1e18-scaled).
-    event Rebalanced(address indexed caller, uint256 ltvBefore, uint256 ltvAfter);
+    event Rebalanced(address indexed caller);
     /// @notice Emitted on a `redeemInKind` (escape hatch): `owner`'s `shares` burned, `caller` repaid `debtRepaid`
     /// loanToken, `receiver` got `collateralOut` collateral + `yieldOut` yield in kind.
     /// @param caller Account that
@@ -148,7 +143,7 @@ interface IFCMVault is IERC4626 {
     error InvalidYieldFactor();
     /// @notice Thrown when a harvest realizes more loan token than the outstanding debt can absorb, which would leave
     /// the excess idle and uncounted by `totalAssets`.
-    error LeftoverDebt();
+    error LeftoverLoanTokens();
     /// @notice Thrown during redeem when the vault is unhealthy.
     error VaultUnhealthy();
 
@@ -234,23 +229,10 @@ interface IFCMVault is IERC4626 {
     /// under-levered below this bound.
     /// @dev 1e18-scaled.
     function LTV_MIN() external view returns (uint128);
-    /// @notice Re-entry target for a lever-up: when `ltv < LTV_MIN`, `rebalance` borrows just enough to raise the LTV
-    /// to this value, which sits just above the lower bound.
-    /// @dev 1e18-scaled.
-    function LTV_MIN_TARGET() external view returns (uint128);
     /// @notice Maximum LTV above which `rebalance` delevers (sells yield to repay debt). The position is over-levered
     /// above this bound.
     /// @dev 1e18-scaled.
     function LTV_MAX() external view returns (uint128);
-    /// @notice Re-entry target for a delever: when `ltv > LTV_MAX`, `rebalance` repays just enough debt to lower the
-    /// LTV to this value, which sits just below the upper bound.
-    /// @dev 1e18-scaled.
-    function LTV_MAX_TARGET() external view returns (uint128);
-    /// @notice The yield-to-loan ratio is `yieldValue / debt`, 1e18-scaled (1e18 = the yield exactly repays the debt).
-    /// `YIELD_TO_LOAN_MAX` is the upper edge of its band: `harvest` fires only when the ratio exceeds it. Must be
-    /// `>= 1e18`. Immutable.
-    /// @dev 1e18-scaled.
-    function YIELD_TO_LOAN_MAX() external view returns (uint128);
 
     /// @notice Address of the FlowSwap V3 SwapRouter02.
     function SWAP_ROUTER() external view returns (ISwapRouter02);

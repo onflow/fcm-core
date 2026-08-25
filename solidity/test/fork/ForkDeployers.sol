@@ -21,10 +21,7 @@ contract ForkDeployers is Test {
     IERC20 constant FUSDEV = IERC20(0xd069d989e2F44B70c65347d1853C0c67e10a9F8D);
 
     uint128 constant LTV_MIN = 0.6e18;
-    uint128 constant LTV_MIN_TARGET = 0.61e18;
     uint128 constant LTV_MAX = 0.7e18;
-    uint128 constant LTV_MAX_TARGET = 0.69e18;
-    uint128 constant YIELD_TO_LOAN_MAX = 1.01e18;
 
     address constant SWAP_FACTORY = 0xca6d7Bb03334bBf135902e1d919a5feccb461632;
     uint24 constant COLLATERAL_LOAN_POOL_FEE = 3000;
@@ -71,10 +68,7 @@ contract ForkDeployers is Test {
                 loanToken: address(PYUSD0),
                 yieldToken: address(FUSDEV),
                 ltvMin: LTV_MIN,
-                ltvMinTarget: LTV_MIN_TARGET,
                 ltvMax: LTV_MAX,
-                ltvMaxTarget: LTV_MAX_TARGET,
-                yieldToLoanMax: YIELD_TO_LOAN_MAX,
                 collateralLoanPool: address(collateralLoanPool),
                 yieldLoanPool: address(yieldLoanPool),
                 collateralOracle: address(COLLATERAL_ORACLE),
@@ -146,7 +140,7 @@ contract ForkDeployers is Test {
                     tokenOut: address(WBTC),
                     fee: COLLATERAL_LOAN_POOL_FEE,
                     recipient: arbitrager,
-                    amountIn: 1e6,
+                    amountIn: 1e18,
                     amountOutMinimum: 0,
                     sqrtPriceLimitX96: targetSpot
                 })
@@ -160,7 +154,7 @@ contract ForkDeployers is Test {
                     tokenOut: address(PYUSD0),
                     fee: COLLATERAL_LOAN_POOL_FEE,
                     recipient: arbitrager,
-                    amountIn: 1e6,
+                    amountIn: 1e18,
                     amountOutMinimum: 0,
                     sqrtPriceLimitX96: targetSpot
                 })

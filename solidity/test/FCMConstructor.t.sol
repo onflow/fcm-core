@@ -25,46 +25,11 @@ contract FCMConstructorTest is Test, Deployers {
         new FCMVault(p);
     }
 
-    function test_constructor_revertsWhenLtvMinAboveMinTarget() public {
-        IFCMVault.InitParams memory p = defaultInitParams();
-        p.ltvMinTarget = p.ltvMin - 1;
-        vm.expectRevert(Errors.invalidLtv());
-        new FCMVault(p);
-    }
-
-    function test_constructor_revertsWhenLtvMinTargetAboveMaxTarget() public {
-        IFCMVault.InitParams memory p = defaultInitParams();
-        p.ltvMaxTarget = p.ltvMinTarget - 1;
-        vm.expectRevert(Errors.invalidLtv());
-        new FCMVault(p);
-    }
-
-    function test_constructor_revertsWhenLtvMaxTargetAboveMax() public {
-        IFCMVault.InitParams memory p = defaultInitParams();
-        p.ltvMax = p.ltvMaxTarget - 1;
-        vm.expectRevert(Errors.invalidLtv());
-        new FCMVault(p);
-    }
-
     function test_constructor_revertsWhenLtvMaxAboveMarketLltv() public {
         IFCMVault.InitParams memory p = defaultInitParams();
         p.ltvMax = uint128(p.marketLltv);
         vm.expectRevert(Errors.invalidLtv());
         new FCMVault(p);
-    }
-
-    function test_constructor_revertsWhenYieldToLoanMaxBelowOne() public {
-        IFCMVault.InitParams memory p = defaultInitParams();
-        p.yieldToLoanMax = uint128(LTV_SCALE - 1);
-        vm.expectRevert(Errors.invalidYieldFactor());
-        new FCMVault(p);
-    }
-
-    function test_constructor_yieldToLoanMaxAtScaleIsAllowed() public {
-        IFCMVault.InitParams memory p = defaultInitParams();
-        p.yieldToLoanMax = uint128(LTV_SCALE);
-        FCMVault v = new FCMVault(p);
-        assertEq(v.YIELD_TO_LOAN_MAX(), LTV_SCALE);
     }
 
     function test_constructor_revertsWhenYieldLoanPoolIsZeroAddress() public {
@@ -90,10 +55,7 @@ contract FCMConstructorTest is Test, Deployers {
         assertEq(address(v.YIELD_TOKEN()), address(p.yieldToken));
 
         assertEq(v.LTV_MIN(), p.ltvMin);
-        assertEq(v.LTV_MIN_TARGET(), p.ltvMinTarget);
         assertEq(v.LTV_MAX(), p.ltvMax);
-        assertEq(v.LTV_MAX_TARGET(), p.ltvMaxTarget);
-        assertEq(v.YIELD_TO_LOAN_MAX(), p.yieldToLoanMax);
 
         assertEq(address(v.COLLATERAL_LOAN_POOL()), p.collateralLoanPool);
         assertEq(address(v.YIELD_LOAN_POOL()), p.yieldLoanPool);

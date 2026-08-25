@@ -10,3 +10,6 @@
 [submodule "solidity/lib/Yearn-ERC4626-Router"]
 	path = solidity/lib/Yearn-ERC4626-Router
 	url = https://github.com/yearn/Yearn-ERC4626-Router
+[submodule "solidity/lib/v3-core"]
+	path = solidity/lib/v3-core
+	url = https://github.com/Uniswap/v3-core

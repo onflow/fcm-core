@@ -105,7 +105,7 @@ contract FCMHelpersTest is Test, Deployers {
         vault.deposit(1 ether, alice);
 
         // A deposit targets the band midpoint of the re-entry targets.
-        uint256 midpoint = (LTV_MAX_TARGET + LTV_MIN_TARGET) / 2;
+        uint256 midpoint = (LTV_MAX + LTV_MIN) / 2;
         assertApproxEqAbs(vault.ltv(), midpoint, 1);
         assertGe(vault.ltv(), LTV_MIN);
         assertLe(vault.ltv(), LTV_MAX);

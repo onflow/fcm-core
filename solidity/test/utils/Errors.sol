@@ -75,8 +75,8 @@ library Errors {
         return abi.encodeWithSelector(IFCMVault.EmergencyRecoveryNotReady.selector);
     }
 
-    function leftoverDebt() public pure returns (bytes memory) {
-        return abi.encodeWithSelector(IFCMVault.LeftoverDebt.selector);
+    function leftoverLoanTokens() public pure returns (bytes memory) {
+        return abi.encodeWithSelector(IFCMVault.LeftoverLoanTokens.selector);
     }
 
     function notImplemented() public pure returns (bytes memory) {

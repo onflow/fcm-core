@@ -124,7 +124,7 @@ contract FCMDepositTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
 
-        uint256 midPoint = (LTV_MIN_TARGET + LTV_MAX_TARGET) / 2;
+        uint256 midPoint = (LTV_MIN + LTV_MAX) / 2;
         assertApproxEqAbs(vault.ltv(), midPoint, 1);
     }
 

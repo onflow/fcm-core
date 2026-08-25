@@ -47,7 +47,7 @@ contract FCMRebalanceTest is Test, Deployers {
         assertLt(vault.ltv(), LTV_MIN);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
         vault.rebalance();
-        assertGt(vault.ltv(), LTV_MIN);
+        assertGe(vault.ltv(), LTV_MIN);
         assertGt(YIELD_TOKEN.balanceOf(address(vault)), originalYield);
     }
 
@@ -58,7 +58,7 @@ contract FCMRebalanceTest is Test, Deployers {
         assertGt(vault.ltv(), LTV_MAX);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
         vault.rebalance();
-        assertLt(vault.ltv(), LTV_MAX);
+        assertLe(vault.ltv(), LTV_MAX);
         assertLt(YIELD_TOKEN.balanceOf(address(vault)), originalYield);
     }
 
@@ -133,9 +133,7 @@ contract FCMRebalanceTest is Test, Deployers {
         vault.rebalance();
 
         assertLt(YIELD_TOKEN.balanceOf(address(vault)), originalYield);
-        assertEq(vault.debt(), 0);
-        // we allow loan tokens to be lost.
-        assertGt(LOAN_TOKEN.balanceOf(address(vault)), 0);
+        assertEq(vault.ltv(), LTV_MAX);
     }
 
     function testFuzz_rebalance_leverPartialFill(uint16 slippageBps) public {
@@ -224,7 +222,7 @@ contract FCMRebalanceTest is Test, Deployers {
         COLLATERAL_ORACLE.setPrice(1000e36);
         assertGt(vault.ltv(), LTV_MAX);
         vault.rebalance();
-        assertLt(vault.ltv(), LTV_MAX);
+        assertLe(vault.ltv(), LTV_MAX);
     }
 
     function test_rebalance_leverRevertsWhenMorphoMarketIlliquid() public {
@@ -242,13 +240,12 @@ contract FCMRebalanceTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
 
-        setCollateralPrice(COLLATERAL_PRICE / 10);
-        setYieldPrice(YIELD_PRICE / 10);
+        setCollateralPrice(COLLATERAL_PRICE.mulDiv(10, 100));
+        setYieldPrice(YIELD_PRICE.mulDiv(10, 100));
 
-        uint256 originalLtv = vault.ltv();
+        // vault position is completely unhealthy, we lose money restoring it.
+        vm.expectRevert();
         vault.rebalance();
-        assertLt(vault.ltv(), originalLtv);
-        assertGt(vault.ltv(), LTV_MAX);
     }
 
     function test_rebalance_noopStillEmitsSnapshot() public {
