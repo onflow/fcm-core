@@ -95,10 +95,8 @@ contract FCMConstructorTest is Test, Deployers {
         assertEq(v.LTV_MAX_TARGET(), p.ltvMaxTarget);
         assertEq(v.YIELD_TO_LOAN_MAX(), p.yieldToLoanMax);
 
-        assertEq(v.COLLATERAL_LOAN_POOL(), p.collateralLoanPool);
-        assertEq(v.COLLATERAL_LOAN_POOL_FEE(), p.collateralLoanPoolFee);
-        assertEq(v.YIELD_LOAN_POOL(), p.yieldLoanPool);
-        assertEq(v.YIELD_LOAN_POOL_FEE(), p.yieldLoanPoolFee);
+        assertEq(address(v.COLLATERAL_LOAN_POOL()), p.collateralLoanPool);
+        assertEq(address(v.YIELD_LOAN_POOL()), p.yieldLoanPool);
 
         assertEq(address(v.COLLATERAL_ORACLE()), address(p.collateralOracle));
         assertEq(v.MARKET_IRM(), p.marketIrm);
@@ -125,7 +123,6 @@ contract FCMConstructorTest is Test, Deployers {
         assertEq(v.managementFeeBps(), 0);
         assertEq(v.performanceFeeBps(), 0);
         assertEq(v.feeRecipient(), address(0));
-        assertEq(v.lastFeeAccrual(), block.timestamp);
 
         assertFalse(v.emergencyRecoveryActive());
         assertFalse(v.emergencyRecovered());

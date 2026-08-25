@@ -60,7 +60,6 @@ contract Status is ConfiguredScript {
         if (yieldPool != address(0)) {
             (, int24 tick,,,,,) = IUniswapV3Pool(yieldPool).slot0();
             console.log("yield/debt spot tick: %s", vm.toString(tick));
-            console.log("in-range liquidity: %s", IUniswapV3Pool(yieldPool).liquidity());
         }
     }
 

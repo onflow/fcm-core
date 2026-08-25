@@ -162,4 +162,40 @@ contract FCMIntegrationTest is Test, Deployers {
         uint256 assetsOut = vault.redeem(shares, alice, alice);
         assertEq(assetsOut, 0);
     }
+
+    function test_integration_highCollateralPrice() public {
+        setCollateralPrice(2e46);
+
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        assertApproxEqAbs(assetsOut, 1 ether, 2);
+    }
+
+    function test_integration_lowCollateralPrice() public {
+        setCollateralPrice(1);
+
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        assertApproxEqAbs(assetsOut, 1 ether, 2);
+    }
+
+    function test_integration_highYieldPrice() public {
+        setYieldPrice(2e46);
+
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        assertApproxEqAbs(assetsOut, 1 ether, 2);
+    }
+
+    function test_integration_lowYieldPrice() public {
+        setYieldPrice(1);
+
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        assertApproxEqAbs(assetsOut, 1 ether, 2);
+    }
 }

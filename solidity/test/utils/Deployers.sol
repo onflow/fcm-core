@@ -11,8 +11,6 @@ import {MockMorpho} from "../mocks/MockMorpho.sol";
 import {MockOracle} from "../mocks/MockOracle.sol";
 import {MockPool} from "../mocks/MockPool.sol";
 import {MockSwapRouter} from "../mocks/MockSwapRouter.sol";
-import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
-import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract Deployers is Test {
@@ -29,13 +27,11 @@ contract Deployers is Test {
     uint128 constant YIELD_TO_LOAN_MAX = 1.01e18;
 
     MockPool immutable COLLATERAL_LOAN_POOL = MockPool(makeAddr("COLLATERAL_LOAN_POOL"));
-    uint24 constant COLLATERAL_LOAN_POOL_FEE = 3000;
     MockPool immutable YIELD_LOAN_POOL = MockPool(makeAddr("YIELD_LOAN_POOL"));
-    uint24 constant YIELD_LOAN_POOL_FEE = 100;
 
     MockMorpho constant MORPHO = MockMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
     ISwapRouter02 constant SWAP_ROUTER = ISwapRouter02(0xeEDC6Ff75e1b10B903D9013c358e446a73d35341);
-    MockOracle immutable MARKET_ORACLE = MockOracle(makeAddr("MARKET_ORACLE"));
+    MockOracle immutable COLLATERAL_ORACLE = MockOracle(makeAddr("COLLATERAL_ORACLE"));
     MockIrm immutable MARKET_IRM = MockIrm(makeAddr("MARKET_IRM"));
     uint256 constant MARKET_LLTV = 0.86e18;
     MockOracle immutable YIELD_ORACLE = MockOracle(makeAddr("YIELD_ORACLE"));
@@ -55,10 +51,11 @@ contract Deployers is Test {
         etchMocks();
         setCollateralPrice(COLLATERAL_PRICE);
         setYieldPrice(YIELD_PRICE);
-        MockSwapRouter(address(SWAP_ROUTER)).setPool(COLLATERAL_LOAN_POOL_FEE, COLLATERAL_LOAN_POOL);
-        MockSwapRouter(address(SWAP_ROUTER)).setPool(YIELD_LOAN_POOL_FEE, YIELD_LOAN_POOL);
+        MockSwapRouter(address(SWAP_ROUTER))
+            .setPool(MockPool(COLLATERAL_LOAN_POOL), address(COLLATERAL_TOKEN), address(LOAN_TOKEN));
+        MockSwapRouter(address(SWAP_ROUTER))
+            .setPool(MockPool(YIELD_LOAN_POOL), address(YIELD_TOKEN), address(LOAN_TOKEN));
         vault = new FCMVault(defaultInitParams());
-        // MORPHO.supplyLiquidity(vault.market(), 100 ether);
     }
 
     function etchMocks() internal {
@@ -70,7 +67,7 @@ contract Deployers is Test {
         vm.etch(address(YIELD_LOAN_POOL), address(new MockPool()).code);
         vm.etch(address(SWAP_ROUTER), address(new MockSwapRouter()).code);
 
-        vm.etch(address(MARKET_ORACLE), address(new MockOracle(COLLATERAL_PRICE)).code);
+        vm.etch(address(COLLATERAL_ORACLE), address(new MockOracle(COLLATERAL_PRICE)).code);
         vm.etch(address(MARKET_IRM), address(new MockIrm()).code);
         vm.etch(address(YIELD_ORACLE), address(new MockOracle(YIELD_PRICE)).code);
         vm.etch(address(MORPHO), address(new MockMorpho()).code);
@@ -78,24 +75,22 @@ contract Deployers is Test {
 
     function defaultInitParams() public view returns (IFCMVault.InitParams memory initParams) {
         return IFCMVault.InitParams({
-            collateralToken: COLLATERAL_TOKEN,
-            loanToken: LOAN_TOKEN,
-            yieldToken: YIELD_TOKEN,
+            collateralToken: address(COLLATERAL_TOKEN),
+            loanToken: address(LOAN_TOKEN),
+            yieldToken: address(YIELD_TOKEN),
             ltvMin: LTV_MIN,
             ltvMinTarget: LTV_MIN_TARGET,
             ltvMax: LTV_MAX,
             ltvMaxTarget: LTV_MAX_TARGET,
             yieldToLoanMax: YIELD_TO_LOAN_MAX,
             collateralLoanPool: address(COLLATERAL_LOAN_POOL),
-            collateralLoanPoolFee: COLLATERAL_LOAN_POOL_FEE,
             yieldLoanPool: address(YIELD_LOAN_POOL),
-            yieldLoanPoolFee: YIELD_LOAN_POOL_FEE,
-            collateralOracle: IOracle(address(MARKET_ORACLE)),
+            collateralOracle: address(COLLATERAL_ORACLE),
             marketIrm: address(MARKET_IRM),
             marketLltv: MARKET_LLTV,
-            yieldOracle: IOracle(address(YIELD_ORACLE)),
-            morpho: IMorpho(address(MORPHO)),
-            swapRouter: SWAP_ROUTER,
+            yieldOracle: address(YIELD_ORACLE),
+            morpho: address(MORPHO),
+            swapRouter: address(SWAP_ROUTER),
             name: "Flow Credit Market Mock",
             symbol: "fcmMock",
             owner: owner
@@ -104,12 +99,12 @@ contract Deployers is Test {
 
     function setCollateralPrice(uint256 price) public {
         setCollateralPoolPrice(price);
-        MockOracle(address(MARKET_ORACLE)).setPrice(price);
+        MockOracle(address(COLLATERAL_ORACLE)).setPrice(price);
     }
 
     function setCollateralPoolPrice(uint256 price) public {
-        COLLATERAL_LOAN_POOL.setPrice(address(COLLATERAL_TOKEN), address(LOAN_TOKEN), price);
-        COLLATERAL_LOAN_POOL.setPrice(address(LOAN_TOKEN), address(COLLATERAL_TOKEN), 1e36 * 1e36 / price);
+        COLLATERAL_LOAN_POOL.setPrice(COLLATERAL_TOKEN, LOAN_TOKEN, price);
+        COLLATERAL_LOAN_POOL.setPrice(LOAN_TOKEN, COLLATERAL_TOKEN, 1e36 * 1e36 / price);
     }
 
     function setYieldPrice(uint256 price) public {
@@ -118,20 +113,20 @@ contract Deployers is Test {
     }
 
     function setYieldPoolPrice(uint256 price) public {
-        YIELD_LOAN_POOL.setPrice(address(YIELD_TOKEN), address(LOAN_TOKEN), price);
-        YIELD_LOAN_POOL.setPrice(address(LOAN_TOKEN), address(YIELD_TOKEN), 1e36 * 1e36 / price);
+        YIELD_LOAN_POOL.setPrice(YIELD_TOKEN, LOAN_TOKEN, price);
+        YIELD_LOAN_POOL.setPrice(LOAN_TOKEN, YIELD_TOKEN, 1e36 * 1e36 / price);
     }
 
     function setCollateralLoanPoolPriceImpact(uint256 reserveIn, uint256 reserveOut) public {
         COLLATERAL_LOAN_POOL.enablePriceImpact();
-        COLLATERAL_LOAN_POOL.setReserves(address(COLLATERAL_TOKEN), reserveIn);
-        COLLATERAL_LOAN_POOL.setReserves(address(LOAN_TOKEN), reserveOut);
+        COLLATERAL_LOAN_POOL.setReserves(COLLATERAL_TOKEN, reserveIn);
+        COLLATERAL_LOAN_POOL.setReserves(LOAN_TOKEN, reserveOut);
     }
 
     function setYieldLoanPoolPriceImpact(uint256 reserveIn, uint256 reserveOut) public {
         YIELD_LOAN_POOL.enablePriceImpact();
-        YIELD_LOAN_POOL.setReserves(address(YIELD_TOKEN), reserveIn);
-        YIELD_LOAN_POOL.setReserves(address(LOAN_TOKEN), reserveOut);
+        YIELD_LOAN_POOL.setReserves(YIELD_TOKEN, reserveIn);
+        YIELD_LOAN_POOL.setReserves(LOAN_TOKEN, reserveOut);
     }
 
     function grantFundApprove(address who, uint256 amount) internal {

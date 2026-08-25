@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {ISwapRouter02} from "./external/ISwapRouter02.sol";
+import {IUniswapV3Pool} from "./external/IUniswapV3Pool.sol";
 import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {IERC4626} from "openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
@@ -12,9 +13,9 @@ import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 /// @notice Interface for the FCMVault
 interface IFCMVault is IERC4626 {
     struct InitParams {
-        IERC20 collateralToken;
-        IERC20 loanToken;
-        IERC20 yieldToken;
+        address collateralToken;
+        address loanToken;
+        address yieldToken;
 
         uint128 ltvMin;
         uint128 ltvMinTarget;
@@ -23,16 +24,14 @@ interface IFCMVault is IERC4626 {
         uint128 yieldToLoanMax;
 
         address collateralLoanPool;
-        uint24 collateralLoanPoolFee;
         address yieldLoanPool;
-        uint24 yieldLoanPoolFee;
 
-        IOracle collateralOracle;
+        address collateralOracle;
         address marketIrm;
         uint256 marketLltv;
-        IOracle yieldOracle;
-        IMorpho morpho;
-        ISwapRouter02 swapRouter;
+        address yieldOracle;
+        address morpho;
+        address swapRouter;
 
         string name;
         string symbol;
@@ -114,9 +113,7 @@ interface IFCMVault is IERC4626 {
     /// @param yield Yield token held by the vault, raw token units.
     /// @param collateralPrice Collateral price in loan token, 1e36-scaled.
     /// @param yieldPrice Yield-token price in loan token, 1e36-scaled.
-    event VaultState(
-        uint256 collateral, uint256 debt, uint256 yield, uint256 collateralPrice, uint256 yieldPrice
-    );
+    event VaultState(uint256 collateral, uint256 debt, uint256 yield, uint256 collateralPrice, uint256 yieldPrice);
     /// @notice Emitted when early access is granted to an account.
     /// @param account The account that was granted early access.
     event EarlyAccessGranted(address indexed account);
@@ -258,11 +255,11 @@ interface IFCMVault is IERC4626 {
     /// @notice Address of the FlowSwap V3 SwapRouter02.
     function SWAP_ROUTER() external view returns (ISwapRouter02);
     /// @notice collateral/loan pool for swapping collateral to loan token or vice versa.
-    function COLLATERAL_LOAN_POOL() external view returns (address);
+    function COLLATERAL_LOAN_POOL() external view returns (IUniswapV3Pool);
     /// @notice Pool fee tier for the collateral/loan pool.
     function COLLATERAL_LOAN_POOL_FEE() external view returns (uint24);
     /// @notice loan/yield pool for swapping loan token to yield token or vice versa.
-    function YIELD_LOAN_POOL() external view returns (address);
+    function YIELD_LOAN_POOL() external view returns (IUniswapV3Pool);
     /// @notice Pool fee tier for the loan/yield pool.
     function YIELD_LOAN_POOL_FEE() external view returns (uint24);
 

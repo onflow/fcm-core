@@ -1,62 +1,67 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
+import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
+import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
+import {MockERC20} from "./MockERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
-import {MockERC20} from "./MockERC20.sol";
-
-/// @dev Single-pool swap mock with two modes. Flat (default): `exactInputSingle` converts at a per-pair rate set via
-/// `setPrice` and ignores `sqrtPriceLimitX96` — `amountOut = amountIn * price / 1e18` exactly, so exact-equality
-/// asserts pass without slippage noise; this is what `Deployers` wires by default. Price-impact (opt-in via
-/// `enablePriceImpact`): a constant-product (x*y=k) curve using `setReserves` that honors `sqrtPriceLimitX96` like a
-/// real Uniswap V3 pool, partial-filling up to the limit and consuming only the input used — this is what exercises
-/// the vault's price-limit-based partial rebalancing. Implements `slot0()` so `SwapLib.swapLimit` can read the marginal
-/// price. Price convention: `setPrice` is 1e18-scaled (1e18 = 1:1); `sqrtPriceX96 = sqrt(token1/token0) * Q96`.
-contract MockPool {
+/// @dev Single-pool swap mock with two modes. Flat (default): `exactInputSingle` converts
+/// at a per-pair rate set via `setPrice` using `mulDiv` with the full 1e36-scale oracle
+/// price — no truncation to 1e18, so extreme price ratios maintain full precision. At
+/// least as precise as Uniswap V3 (same `FullMath.mulDiv` internally). Ignores
+/// `sqrtPriceLimitX96` in flat mode. Price-impact (opt-in via `enablePriceImpact`): a
+/// constant-product (x*y=k) curve using `setReserves` that honors `sqrtPriceLimitX96` like
+/// a real Uniswap V3 pool, partial-filling up to the limit and consuming only the input
+/// used. Implements `slot0()` and `fee()` so `SwapLib.swapLimit` and the vault
+/// constructor's `IUniswapV3Pool(p).fee()` work identically to a real pool.
+contract MockPool is IUniswapV3Pool {
     uint256 internal constant Q96 = 1 << 96;
-    uint256 internal constant LTV_SCALE = 1e18;
+    uint256 internal constant ORACLE_PRICE_SCALE = 1e36;
 
     /// @dev Virtual reserve per token, keyed by token address; only consulted in price-impact mode.
     mapping(address => uint256) public reserveOf;
 
-    /// @dev Flat rate (tokenOut per tokenIn, 1e18-scaled) keyed by keccak256(tokenIn, tokenOut); only consulted in flat
-    /// mode. 0 = worthless (or unset); 1e18 = 1:1.
+    /// @dev Flat rate (tokenOut per tokenIn, 1e36-scaled) keyed by keccak256(tokenIn, tokenOut).
+    /// Only consulted in flat mode. 0 = worthless (or unset); 1e36 = 1:1. Stored at full
+    /// 1e36 precision so sub-1e18 oracle prices don't truncate to zero.
     mapping(bytes32 => uint256) internal flatPrice;
 
-    /// @dev When true, `exactInputSingle` runs the constant-product curve and honors `sqrtPriceLimitX96`; off by
-    /// default so swaps are flat / lossless.
+    /// @dev When true, `exactInputSingle` runs the constant-product curve and honors
+    /// `sqrtPriceLimitX96`; off by default so swaps are flat / lossless.
     bool public priceImpactEnabled;
 
     /// @dev Sqrt price for `slot0()`, derived from the last `setPrice` call.
     uint160 public sqrtPriceX96;
 
-    function setReserves(address token, uint256 reserve) external {
-        reserveOf[token] = reserve;
+    function setReserves(IERC20 token, uint256 reserve) external {
+        reserveOf[address(token)] = reserve;
     }
 
-    /// @dev Sets the rate for `tokenIn -> tokenOut` in the Morpho IOracle convention: `oraclePrice` is 1e36-scaled
-    /// (loan-per-tokenIn, 1e36 = 1:1, 0 = worthless). Internally converts to the 1e18 flat rate (`oraclePrice / 1e18`)
-    /// and derives `sqrtPriceX96` so `slot0()` matches what `SwapLib.swapLimit` derives from the oracle. The inverse
-    /// direction is auto-derived in `_resolvePrice` — only one direction needs setting.
-    function setPrice(address tokenIn, address tokenOut, uint256 oraclePrice) external {
-        flatPrice[_pairKey(tokenIn, tokenOut)] = oraclePrice / 1e18; // 1e36-scaled -> 1e18-scaled
-        // sqrtPriceX96 = sqrt(token1/token0) * Q96 (token0 = min, token1 = max). Each branch computes spot for its own
-        // direction; the zeroForOne/oneForZero spots are reciprocals scaled by 1e36, so using one formula for both
-        // leaves the pool off-oracle for the other. oraclePrice == 0 -> sqrtPriceX96 = 0, which SwapLib.swapLimit
-        // rejects (raw <= MIN_SQRT_RATIO -> ok=false).
+    /// @dev Sets the rate for `tokenIn -> tokenOut` in the Morpho IOracle convention:
+    /// `oraclePrice` is 1e36-scaled (1e36 = 1:1, 0 = worthless). Stored at full 1e36
+    /// precision. The inverse direction must be set separately. `sqrtPriceX96` is derived
+    /// so `slot0()` matches what `SwapLib.swapLimit` derives from the oracle.
+    function setPrice(IERC20 tokenIn, IERC20 tokenOut, uint256 oraclePrice) external {
+        flatPrice[_pairKey(address(tokenIn), address(tokenOut))] = oraclePrice;
         if (oraclePrice == 0) {
             sqrtPriceX96 = 0;
-        } else if (tokenIn < tokenOut) {
+        } else if (address(tokenIn) < address(tokenOut)) {
             sqrtPriceX96 = uint160(Math.mulDiv(Math.sqrt(oraclePrice), Q96, 1e18));
         } else {
             sqrtPriceX96 = uint160(Math.mulDiv(1e18, Q96, Math.sqrt(oraclePrice)));
         }
     }
 
-    /// @dev Uniswap V3 `slot0()` — only `sqrtPriceX96` is read by `SwapLib.swapLimit`.
+    /// @inheritdoc IUniswapV3Pool
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
         return (sqrtPriceX96, int24(0), uint16(0), uint16(0), uint16(0), uint8(0), true);
+    }
+
+    /// @inheritdoc IUniswapV3Pool
+    function fee() external pure returns (uint24) {
+        return 0;
     }
 
     function enablePriceImpact() external {
@@ -71,9 +76,11 @@ contract MockPool {
         require(p.amountIn != 0, "AS");
 
         if (!priceImpactEnabled) {
-            // Flat: ignores sqrtPriceLimitX96; a 0 rate (worthless or unset) yields amountOut 0.
+            // Flat: mulDiv with the full 1e36-scale price — no truncation, so extreme
+            // ratios (e.g. 1e16) preserve full precision. A 0 rate yields amountOut 0.
             uint256 price = _resolvePrice(p.tokenIn, p.tokenOut);
-            amountOut = p.amountIn * price / LTV_SCALE;
+            if (price == 0) return 0;
+            amountOut = Math.mulDiv(p.amountIn, price, ORACLE_PRICE_SCALE);
             MockERC20(p.tokenIn).burn(msg.sender, p.amountIn);
             MockERC20(p.tokenOut).mint(p.recipient, amountOut);
             return amountOut;
@@ -114,8 +121,11 @@ contract MockPool {
     {
         require(p.amountOut != 0, "AS");
         require(!priceImpactEnabled, "exactOutputSingle not implemented in price-impact mode");
+
+        // Flat: mulDiv with the full 1e36-scale price — no truncation.
         uint256 price = _resolvePrice(p.tokenOut, p.tokenIn);
-        amountIn = (p.amountOut * price + LTV_SCALE - 1) / LTV_SCALE;
+        require(price != 0, "zero price");
+        amountIn = Math.mulDiv(p.amountOut, price, ORACLE_PRICE_SCALE, Math.Rounding.Ceil);
         require(amountIn <= p.amountInMaximum, "Too much requested");
         MockERC20(p.tokenIn).burn(msg.sender, amountIn);
         MockERC20(p.tokenOut).mint(p.recipient, p.amountOut);

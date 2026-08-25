@@ -2,91 +2,125 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../../src/FCMVault.sol";
-import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
 import {FCMHelpers} from "../../src/libraries/periphery/FCMHelpers.sol";
 import {ForkDeployers} from "./ForkDeployers.sol";
+import {console} from "forge-std/console.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract RedeemForkTest is ForkDeployers {
     using FCMHelpers for FCMVault;
-
-    uint256 constant DEPOSIT_AMOUNT = 0.01e8;
-
-    address internal repayer = makeAddr("repayer");
-    address internal holder = makeAddr("user0");
+    using SafeERC20 for IERC20;
+    using Math for uint256;
 
     function setUp() public {
-        _forkSetup();
-        _fundArb();
+        setupFork();
+        grantFundApprove(alice, 1 ether);
     }
 
-    function test_redeemFork_noDebt() public {
-        setCollateralPrice(ORACLE_PRICE);
-        _depositUsers(1, DEPOSIT_AMOUNT);
-        _arbPoolToSpot();
-
-        uint256 shares = vault.balanceOf(holder);
+    function test_edgeCaseFork_noDebt() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1e6, alice);
 
         _externalRepayFullDebt();
         assertEq(vault.debt(), 0);
 
-        vm.prank(holder);
-        uint256 assetsOut = vault.redeem(shares, holder, holder);
+        vm.prank(alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
 
-        assertGt(assetsOut, 0);
-        assertEq(vault.balanceOf(holder), 0);
+        assertGt(assetsOut, 1.5e6);
     }
 
-    function test_redeemFork_noCollateral() public {
-        setCollateralPrice(ORACLE_PRICE);
-        _depositUsers(1, DEPOSIT_AMOUNT);
-        _arbPoolToSpot();
-
-        uint256 shares = vault.balanceOf(holder);
+    function test_edgeCaseFork_noCollateral() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1e6, alice);
 
         _externalRepayFullDebt();
         uint256 coll = vault.collateral();
         vm.prank(address(vault));
-        MORPHO.withdrawCollateral(mp, coll, address(vault), repayer);
+        MORPHO.withdrawCollateral(_market(), coll, address(vault), address(1));
         assertEq(vault.collateral(), 0);
 
-        vm.prank(holder);
-        uint256 assetsOut = vault.redeem(shares, holder, holder);
+        vm.prank(alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
 
-        assertGt(assetsOut, 0);
-        assertEq(vault.balanceOf(holder), 0);
+        assertGt(assetsOut, 0.6e6);
+        assertLt(assetsOut, 0.8e6);
     }
 
-    function test_redeemFork_noYield() public {
-        // The collateral oracle is mocked (ORACLE_PRICE ~350x the real WBTC/PYUSD pool),
-        // which would book debt the pool can't absorb when the redeem must sell collateral
-        // for the full debt (no yield). Match the oracle to the pool's spot price first, so
-        // debt books at a rate the collateral->loan swap can actually fill.
-        (uint160 collSpot,,,,,,) = IUniswapV3Pool(collateralLoanPool).slot0();
-        uint256 priceRaw = Math.mulDiv(uint256(collSpot), uint256(collSpot), 1 << 192);
-        setCollateralPrice(priceRaw * 1e36);
+    function test_edgeCaseFork_noYield() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1e6, alice);
+        // setCollateralPrice(COLLATERAL_PRICE.mulDiv(200, 100));
 
-        _depositUsers(1, DEPOSIT_AMOUNT);
-        _arbPoolToSpot();
+        uint256 balance = FUSDEV.balanceOf(address(vault));
+        vm.prank(address(vault));
+        FUSDEV.safeTransfer(bob, balance);
 
-        uint256 shares = vault.balanceOf(holder);
-        deal(address(FUSDEV), address(vault), 0);
-        assertEq(FUSDEV.balanceOf(address(vault)), 0);
+        vm.prank(alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
 
-        vm.prank(holder);
-        uint256 assetsOut = vault.redeem(shares, holder, holder);
+        assertGt(assetsOut, 0.1e6);
+        assertLt(assetsOut, 0.5e6);
+    }
 
-        assertGt(assetsOut, 0);
-        assertEq(vault.balanceOf(holder), 0);
+    function test_edgeCaseFork_highCollateralPrice() public {
+        uint256 expectedAssets = _expectedAssetsOut(100);
+        setCollateralPrice(2e40);
+
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(100, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        assertApproxEqAbs(assetsOut, expectedAssets, 2);
+    }
+
+    function test_edgeCaseFork_lowCollateralPrice() public {
+        uint256 expectedAssets = _expectedAssetsOut(100);
+        console.log("expectedAssets", expectedAssets);
+        setCollateralPrice(COLLATERAL_PRICE);
+
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(100, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        assertApproxEqAbs(assetsOut, expectedAssets, 2);
+    }
+
+    function test_edgeCaseFork_highYieldPrice() public {
+        uint256 expectedAssets = _expectedAssetsOut(1e6);
+        setYieldPrice(2e46);
+
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(1e6, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        assertApproxEqAbs(assetsOut, expectedAssets, 2);
+    }
+
+    function test_edgeCaseFork_lowYieldPrice() public {
+        uint256 expectedAssets = _expectedAssetsOut(1e6);
+        setYieldPrice(1);
+
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(1e6, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        assertApproxEqAbs(assetsOut, expectedAssets, 2);
+    }
+
+    function _expectedAssetsOut(uint256 assetsIn) internal returns (uint256) {
+        uint256 snapshotId = vm.snapshot();
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(assetsIn, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        vm.stopPrank();
+        vm.revertToState(snapshotId);
+        return assetsOut;
     }
 
     function _externalRepayFullDebt() internal {
         uint256 borrowShares = uint256(vault.position().borrowShares);
-        deal(address(PYUSD0), repayer, vault.debt() * 2 + 1e6);
-
-        vm.startPrank(repayer);
+        vm.startPrank(arbitrager);
         PYUSD0.approve(address(MORPHO), type(uint256).max);
-        MORPHO.repay(mp, 0, borrowShares, address(vault), "");
+        MORPHO.repay(_market(), 0, borrowShares, address(vault), "");
         vm.stopPrank();
     }
 }

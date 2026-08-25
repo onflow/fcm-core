@@ -3,7 +3,6 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../../src/FCMVault.sol";
 import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
-import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
 import {FCMHelpers} from "../../src/libraries/periphery/FCMHelpers.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -30,17 +29,16 @@ contract SandwichForkTest is ForkDeployers {
     }
 
     function setUp() public {
-        _forkSetup();
-        _fundArb();
-        _depositUsers(N_USERS, DEPOSIT_AMOUNT_PER_USER);
+        setupFork();
+        depositUsers(N_USERS, DEPOSIT_AMOUNT_PER_USER);
 
         users = new address[](N_USERS);
         for (uint256 i = 0; i < N_USERS; i++) {
             users[i] = makeAddr(string.concat("user", vm.toString(i)));
         }
 
-        setCollateralPrice(ORACLE_PRICE * 110 / 100);
-        assertGt(vault.ltv(), LTV_MAX, "HF above max after 10% rise -> lever path");
+        setCollateralPrice(COLLATERAL_PRICE * 110 / 100);
+        assertLt(vault.ltv(), LTV_MIN, "HF above max after 10% rise -> lever path");
 
         deal(address(PYUSD0), attacker, 100_000_000e6);
         deal(address(FUSDEV), attacker, 100_000_000e18);
@@ -52,15 +50,12 @@ contract SandwichForkTest is ForkDeployers {
         snap = vm.snapshotState();
 
         console.log("=== Sandwich fork test setup ($1M TVL vs ~$20k pool) ===");
-        console.log("Collateral price:", ORACLE_PRICE);
+        console.log("Collateral price:", COLLATERAL_PRICE);
         console.log("Yield oracle:", IOracle(YIELD_ORACLE).price());
-        console.log("Pool spot:", uint256(cleanSpot));
-        console.log("Pool liquidity:", uint256(IUniswapV3Pool(YIELD_LOAN_POOL).liquidity()));
         console.log("HF after 10% rise:", vault.ltv() / 1e15);
-        console.log("TVL ($):", _tvlUsd() / 1e6);
         console.log("---");
 
-        _arbPoolToSpot();
+        arbPoolToSpot();
     }
 
     function test_sandwich_singleSweepVaultLossBounded() public {
@@ -73,7 +68,7 @@ contract SandwichForkTest is ForkDeployers {
         for (uint256 i = 1; i <= 19; i++) {
             uint256 pushBps = i * 5;
             vm.revertToState(snap);
-            _arbPoolToSpot();
+            arbPoolToSpot();
 
             SandwichResult memory r = _singleSandwich(pushBps);
 
@@ -121,7 +116,7 @@ contract SandwichForkTest is ForkDeployers {
         for (uint256 i = 1; i <= 19; i++) {
             uint256 pushBps = i * 5;
             vm.revertToState(snap);
-            _arbPoolToSpot();
+            arbPoolToSpot();
 
             int256 totalProfit = 0;
             uint256 iterations = 0;
@@ -134,7 +129,7 @@ contract SandwichForkTest is ForkDeployers {
                 iterations = y + 1;
                 hfFinal = r.ltvAfter;
                 tvlFinal = r.tvlUsd;
-                _arbPoolToSpot();
+                arbPoolToSpot();
                 if (r.ltvAfter <= LTV_MAX) break;
             }
 
@@ -161,7 +156,7 @@ contract SandwichForkTest is ForkDeployers {
 
     function test_sandwich_hardDOSPush1Percent100Times() public {
         vm.revertToState(snap);
-        _arbPoolToSpot();
+        arbPoolToSpot();
 
         int256 totalProfit = 0;
         uint256 debtAdded = 0;
@@ -172,7 +167,7 @@ contract SandwichForkTest is ForkDeployers {
             totalProfit += r.attackerProfit;
             hfFinal = r.ltvAfter;
             debtAdded += r.debtAdded;
-            _arbPoolToSpot();
+            arbPoolToSpot();
         }
 
         uint256 attackerCost = totalProfit < 0 ? SafeCast.toUint256(-totalProfit) : 0;
@@ -185,7 +180,7 @@ contract SandwichForkTest is ForkDeployers {
         uint256 debtStart = vault.debt();
         uint256 yieldStart = FUSDEV.balanceOf(address(vault));
 
-        (uint160 currentSpot,,,,,,) = IUniswapV3Pool(YIELD_LOAN_POOL).slot0();
+        (uint160 currentSpot,,,,,,) = yieldLoanPool.slot0();
 
         uint256 sqrtFactor = Math.sqrt((10_000 - pushBps) * 1e36 / 10_000);
         uint160 targetSpot = uint160(Math.mulDiv(currentSpot, sqrtFactor, 1e18));
@@ -213,7 +208,6 @@ contract SandwichForkTest is ForkDeployers {
         r.debtAdded = vault.debt() - debtStart;
         r.yieldBought = FUSDEV.balanceOf(address(vault)) - yieldStart;
         r.ltvAfter = vault.ltv();
-        r.tvlUsd = _tvlUsd();
 
         if (yieldGotFront > 0) {
             vm.prank(attacker);

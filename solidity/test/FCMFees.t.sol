@@ -231,4 +231,65 @@ contract FCMFeesTest is Test, Deployers {
 
         assertGt(vault.balanceOf(carol), 0);
     }
+
+    function test_fees_initialPerfHighWaterMark() public {
+        setCollateralPrice(COLLATERAL_PRICE * 100);
+        setYieldPrice(YIELD_PRICE * 10_000);
+        vault.accrueFees();
+
+        vm.startPrank(owner);
+        vault.setManagementFeeBps(100);
+        vault.setFeeRecipient(carol);
+        vault.grantEarlyAccess(carol);
+        vm.warp(block.timestamp + 30 days);
+        vm.stopPrank();
+
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        assertEq(vault.balanceOf(carol), 0);
+    }
+
+    function test_fees_dustDeposit() public {
+        vm.startPrank(owner);
+        vault.setManagementFeeBps(100);
+        vault.setFeeRecipient(carol);
+        vault.grantEarlyAccess(carol);
+        vm.stopPrank();
+        vm.prank(alice);
+        vault.deposit(1, alice);
+        vm.warp(block.timestamp + 30 days);
+
+        vm.prank(alice);
+        vault.deposit(1 ether - 1, alice);
+        vault.accrueFees();
+
+        assertEq(vault.balanceOf(carol), 0);
+    }
+
+    function test_fees_afterEmptyPeriod() public {
+        vm.startPrank(owner);
+        vault.setManagementFeeBps(100);
+        vault.setFeeRecipient(bob);
+        vault.grantEarlyAccess(bob);
+        vm.stopPrank();
+
+        vm.prank(alice);
+        uint256 shares = vault.deposit(.5 ether, alice);
+        vm.warp(block.timestamp + 365 days);
+        vault.accrueFees();
+
+        vm.prank(alice);
+        vault.redeem(shares, alice, alice);
+
+        vm.prank(owner);
+        vault.setFeeRecipient(carol);
+        vm.warp(block.timestamp + 365 days);
+        setYieldPrice(YIELD_PRICE * 2);
+        vm.prank(alice);
+        vault.deposit(.5 ether, alice);
+        vault.accrueFees();
+
+        assertEq(vault.balanceOf(carol), 0);
+    }
 }

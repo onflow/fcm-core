@@ -1,21 +1,16 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Test} from "forge-std/Test.sol";
-
 import {FCMVaultFactory} from "../src/FCMVaultFactory.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
 import {IFCMVaultFactory} from "../src/interfaces/IFCMVaultFactory.sol";
-import {ISwapRouter02} from "../src/interfaces/external/ISwapRouter02.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockIrm} from "./mocks/MockIrm.sol";
 import {MockMorpho} from "./mocks/MockMorpho.sol";
 import {MockOracle} from "./mocks/MockOracle.sol";
 import {MockPool} from "./mocks/MockPool.sol";
 import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
-import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
-import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
+import {Test} from "forge-std/Test.sol";
 
 contract FCMVaultFactoryTest is Test {
     // Real Flow EVM addresses for mocking.
@@ -30,13 +25,13 @@ contract FCMVaultFactoryTest is Test {
 
     address constant MOCK_IRM = 0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546;
     address constant MORPHO = 0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f;
-    ISwapRouter02 constant SWAP_ROUTER = ISwapRouter02(0xeEDC6Ff75e1b10B903D9013c358e446a73d35341);
+    address constant SWAP_ROUTER = 0xeEDC6Ff75e1b10B903D9013c358e446a73d35341;
 
     FCMVaultFactory internal factory;
-    MockOracle internal marketOracle;
-    MockOracle internal yieldOracle;
-    MockPool internal collateralLoanPool;
-    MockPool internal yieldLoanPool;
+    address internal marketOracle;
+    address internal yieldOracle;
+    address internal collateralLoanPool;
+    address internal yieldLoanPool;
     IFCMVault.InitParams internal initParams;
     bytes32 internal salt = bytes32(uint256(0xA11CE));
     bytes32 internal salt2 = bytes32(uint256(0xB0B));
@@ -48,34 +43,32 @@ contract FCMVaultFactoryTest is Test {
         vm.etch(PYUSD0, erc20Code);
         vm.etch(FUSDEV, erc20Code);
         vm.etch(MORPHO, address(new MockMorpho()).code);
-        vm.etch(address(SWAP_ROUTER), address(new MockSwapRouter()).code);
+        vm.etch(SWAP_ROUTER, address(new MockSwapRouter()).code);
         vm.etch(MOCK_IRM, address(new MockIrm()).code);
 
-        marketOracle = new MockOracle(WETH_PRICE);
-        yieldOracle = new MockOracle(YIELD_PRICE);
-        yieldLoanPool = new MockPool();
-        collateralLoanPool = new MockPool();
+        marketOracle = address(new MockOracle(WETH_PRICE));
+        yieldOracle = address(new MockOracle(YIELD_PRICE));
+        yieldLoanPool = address(new MockPool());
+        collateralLoanPool = address(new MockPool());
 
         factory = new FCMVaultFactory();
 
         initParams = IFCMVault.InitParams({
-            collateralToken: IERC20(WETH),
-            loanToken: IERC20(PYUSD0),
-            yieldToken: IERC20(FUSDEV),
+            collateralToken: WETH,
+            loanToken: PYUSD0,
+            yieldToken: FUSDEV,
             ltvMin: 0.6e18,
             ltvMinTarget: 0.61e18,
             ltvMax: 0.7e18,
             ltvMaxTarget: 0.69e18,
             yieldToLoanMax: 1.01e18,
-            collateralLoanPool: address(collateralLoanPool),
-            collateralLoanPoolFee: 3000,
-            yieldLoanPool: address(yieldLoanPool),
-            yieldLoanPoolFee: 100,
-            collateralOracle: IOracle(address(marketOracle)),
+            collateralLoanPool: collateralLoanPool,
+            yieldLoanPool: yieldLoanPool,
+            collateralOracle: marketOracle,
             marketIrm: MOCK_IRM,
             marketLltv: MARKET_LLTV,
-            yieldOracle: IOracle(address(yieldOracle)),
-            morpho: IMorpho(MORPHO),
+            yieldOracle: yieldOracle,
+            morpho: MORPHO,
             swapRouter: SWAP_ROUTER,
             owner: deployer,
             name: "Flow Credit Markets WETH",

@@ -18,12 +18,12 @@ library FCMHelpers {
     using MorphoLib for IMorpho;
     using Math for uint256;
 
-    function market(IFCMVault vault) internal view returns (MarketParams memory _market) {
-        _market.loanToken = address(vault.LOAN_TOKEN());
-        _market.collateralToken = address(vault.COLLATERAL_TOKEN());
-        _market.oracle = address(vault.COLLATERAL_ORACLE());
-        _market.irm = address(vault.MARKET_IRM());
-        _market.lltv = vault.MARKET_LLTV();
+    function market(IFCMVault vault) internal view returns (MarketParams memory market_) {
+        market_.loanToken = address(vault.LOAN_TOKEN());
+        market_.collateralToken = address(vault.COLLATERAL_TOKEN());
+        market_.oracle = address(vault.COLLATERAL_ORACLE());
+        market_.irm = address(vault.MARKET_IRM());
+        market_.lltv = vault.MARKET_LLTV();
     }
 
     /// @dev The vault's outstanding debt in its Morpho market, in raw loan-token units. Delegates to

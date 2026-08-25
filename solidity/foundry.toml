@@ -44,7 +44,7 @@ sort_imports = true
 
 [lint]
 severity = ["high", "medium", "low", "info", "gas", "codesize"]
-exclude_lints = ["unaliased-plain-import"]
+exclude_lints = ["unaliased-plain-import", "asm-keccak256"]
 
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

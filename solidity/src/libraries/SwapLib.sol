@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {ISwapRouter02} from "../interfaces/external/ISwapRouter02.sol";
 import {IUniswapV3Pool} from "../interfaces/external/IUniswapV3Pool.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title SwapLib
@@ -70,16 +71,16 @@ library SwapLib {
     /// @return amountOut Realized amount of `tokenOut` received.
     function swapExactInToLimit(
         ISwapRouter02 swapRouter,
-        address tokenIn,
-        address tokenOut,
+        IERC20 tokenIn,
+        IERC20 tokenOut,
         uint24 fee,
         uint256 amountIn,
         uint160 sqrtPriceLimitX96
     ) internal returns (uint256 amountOut) {
         return swapRouter.exactInputSingle(
             ISwapRouter02.ExactInputSingleParams({
-                tokenIn: tokenIn,
-                tokenOut: tokenOut,
+                tokenIn: address(tokenIn),
+                tokenOut: address(tokenOut),
                 fee: fee,
                 recipient: address(this),
                 amountIn: amountIn,
@@ -142,9 +143,9 @@ library SwapLib {
     /// @return limit The Q64.96 price limit to pass to the pool.
     /// @return ok Whether a swap should be attempted.
     function swapLimit(
-        address pool,
-        address tokenIn,
-        address tokenOut,
+        IUniswapV3Pool pool,
+        IERC20 tokenIn,
+        IERC20 tokenOut,
         uint256 outPerInNum,
         uint256 outPerInDen,
         uint256 maxSlippageBps
@@ -152,7 +153,7 @@ library SwapLib {
         // Uniswap orders the pair by address: token0 is the lower-address token
         // and the pool price is token1/token0. Selling token0 (`zeroForOne`) pushes
         // the price down; selling token1 pushes it up.
-        bool zeroForOne = tokenIn < tokenOut;
+        bool zeroForOne = address(tokenIn) < address(tokenOut);
 
         // Fair price as an exact token1/token0 fraction. Selling token0 makes token1/token0
         // the tokenOut/tokenIn rate (outPerIn); selling token1 makes it the reciprocal, so
@@ -177,7 +178,7 @@ library SwapLib {
         // price-decreasing swap, above spot for a price-increasing one. If the pool
         // is already past it, there is no room to trade within tolerance.
         // slither-disable-next-line unused-return -> only sqrtPriceX96 is read; the other slot0 fields are unused
-        (uint160 spot,,,,,,) = IUniswapV3Pool(pool).slot0();
+        (uint160 spot,,,,,,) = pool.slot0();
         if (zeroForOne && raw >= spot) return (0, false);
         if (!zeroForOne && raw <= spot) return (0, false);
 

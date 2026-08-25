@@ -208,7 +208,7 @@ contract FCMRebalanceTest is Test, Deployers {
     function test_rebalance_skipsLeverUpDuringRecovery() public {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
-        MARKET_ORACLE.setPrice(COLLATERAL_PRICE.mulDiv(150, 100));
+        COLLATERAL_ORACLE.setPrice(COLLATERAL_PRICE.mulDiv(150, 100));
         vm.prank(owner);
         vault.scheduleEmergencyRecovery();
         vm.warp(vault.emergencyRecoveryValidAt());
@@ -221,7 +221,7 @@ contract FCMRebalanceTest is Test, Deployers {
     function test_rebalance_deleversDuringRecovery() public {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
-        MARKET_ORACLE.setPrice(1000e36);
+        COLLATERAL_ORACLE.setPrice(1000e36);
         assertGt(vault.ltv(), LTV_MAX);
         vault.rebalance();
         assertLt(vault.ltv(), LTV_MAX);

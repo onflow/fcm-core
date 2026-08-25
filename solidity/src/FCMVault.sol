@@ -3,14 +3,15 @@ pragma solidity ^0.8.24;
 
 import {IFCMVault} from "./interfaces/IFCMVault.sol";
 import {ISwapRouter02} from "./interfaces/external/ISwapRouter02.sol";
+import {IUniswapV3Pool} from "./interfaces/external/IUniswapV3Pool.sol";
 import "./libraries/ConstantsLib.sol";
 import {FeesLib} from "./libraries/FeesLib.sol";
 import {MorphoLib} from "./libraries/MorphoLib.sol";
 import {SwapLib} from "./libraries/SwapLib.sol";
-import {IMorpho, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
+import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IMorphoRepayCallback} from "@morpho-blue/interfaces/IMorphoCallbacks.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
-import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
+import {MarketParams, MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -71,11 +72,11 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
     /// @inheritdoc IFCMVault
     ISwapRouter02 public immutable SWAP_ROUTER;
     /// @inheritdoc IFCMVault
-    address public immutable COLLATERAL_LOAN_POOL;
+    IUniswapV3Pool public immutable COLLATERAL_LOAN_POOL;
     /// @inheritdoc IFCMVault
     uint24 public immutable COLLATERAL_LOAN_POOL_FEE;
     /// @inheritdoc IFCMVault
-    address public immutable YIELD_LOAN_POOL;
+    IUniswapV3Pool public immutable YIELD_LOAN_POOL;
     /// @inheritdoc IFCMVault
     uint24 public immutable YIELD_LOAN_POOL_FEE;
 
@@ -145,9 +146,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         require(p.yieldLoanPool != address(0), ZeroAddress());
         require(p.collateralLoanPool != address(0), ZeroAddress());
 
-        COLLATERAL_TOKEN = p.collateralToken;
-        LOAN_TOKEN = p.loanToken;
-        YIELD_TOKEN = p.yieldToken;
+        COLLATERAL_TOKEN = IERC20(p.collateralToken);
+        LOAN_TOKEN = IERC20(p.loanToken);
+        YIELD_TOKEN = IERC20(p.yieldToken);
 
         LTV_MIN = p.ltvMin;
         LTV_MIN_TARGET = p.ltvMinTarget;
@@ -155,26 +156,25 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         LTV_MAX_TARGET = p.ltvMaxTarget;
         YIELD_TO_LOAN_MAX = p.yieldToLoanMax;
 
-        COLLATERAL_LOAN_POOL = p.collateralLoanPool;
-        COLLATERAL_LOAN_POOL_FEE = p.collateralLoanPoolFee;
-        YIELD_LOAN_POOL = p.yieldLoanPool;
-        YIELD_LOAN_POOL_FEE = p.yieldLoanPoolFee;
+        COLLATERAL_LOAN_POOL = IUniswapV3Pool(p.collateralLoanPool);
+        COLLATERAL_LOAN_POOL_FEE = IUniswapV3Pool(p.collateralLoanPool).fee();
+        YIELD_LOAN_POOL = IUniswapV3Pool(p.yieldLoanPool);
+        YIELD_LOAN_POOL_FEE = IUniswapV3Pool(p.yieldLoanPool).fee();
 
-        COLLATERAL_ORACLE = p.collateralOracle;
+        COLLATERAL_ORACLE = IOracle(p.collateralOracle);
         MARKET_IRM = p.marketIrm;
         MARKET_LLTV = p.marketLltv;
-        YIELD_ORACLE = p.yieldOracle;
-        MORPHO = p.morpho;
-        SWAP_ROUTER = p.swapRouter;
+        YIELD_ORACLE = IOracle(p.yieldOracle);
+        MORPHO = IMorpho(p.morpho);
+        SWAP_ROUTER = ISwapRouter02(p.swapRouter);
 
         uint256 maxAllowance = type(uint256).max;
-        p.collateralToken.forceApprove(address(MORPHO), maxAllowance);
-        p.loanToken.forceApprove(address(MORPHO), maxAllowance);
-        p.loanToken.forceApprove(address(SWAP_ROUTER), maxAllowance);
-        p.yieldToken.forceApprove(address(SWAP_ROUTER), maxAllowance);
-        p.collateralToken.forceApprove(address(SWAP_ROUTER), maxAllowance);
+        COLLATERAL_TOKEN.forceApprove(address(MORPHO), maxAllowance);
+        LOAN_TOKEN.forceApprove(address(MORPHO), maxAllowance);
+        COLLATERAL_TOKEN.forceApprove(address(SWAP_ROUTER), maxAllowance);
+        LOAN_TOKEN.forceApprove(address(SWAP_ROUTER), maxAllowance);
+        YIELD_TOKEN.forceApprove(address(SWAP_ROUTER), maxAllowance);
 
-        lastFeeAccrual = uint64(block.timestamp);
         // Seed the HWM at the starting price-per-share so the first deposit isn't counted as performance.
         perfHighWaterMark = LTV_SCALE / (10 ** _decimalsOffset());
     }
@@ -231,16 +231,10 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         _accrueFees();
         uint256 ltv = _ltv();
         if (ltv < LTV_MIN && !emergencyRecoveryActive) {
-            // Lever-up is frozen while an emergency recovery is pending: the position
-            // is slated for in-kind wind-down, so re-levering (more debt + AMM cost)
-            // would work against it. Delever stays live - it only de-risks - matching
-            // `_harvest`'s recovery gate. Cancelling recovery (`recoveryValidAt = 0`)
-            // restores lever-up immediately.
             _rebalanceLever();
         } else if (ltv > LTV_MAX) {
             _rebalanceDelever();
         } else {
-            // Inside the dead band, or lever-up suppressed during a pending recovery.
             return;
         }
 
@@ -569,7 +563,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         if (targetDebt <= currentDebt) return 0;
         uint256 borrowAmount = targetDebt - currentDebt;
 
-        (uint160 yieldLoanPriceLimit, bool ok) = _yieldLoanSwapLimit(address(LOAN_TOKEN));
+        (uint160 yieldLoanPriceLimit, bool ok) = _yieldLoanSwapLimit(LOAN_TOKEN);
         if (!ok) return 0; // pool already past the slippage bound - no-op.
 
         // Borrow first, then swap loan->yield bounded by the price limit. The
@@ -579,12 +573,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         uint256 loanBefore = LOAN_TOKEN.balanceOf(address(this));
         MORPHO.borrow(_market(), borrowAmount, 0, address(this), address(this));
         SwapLib.swapExactInToLimit(
-            SWAP_ROUTER,
-            address(LOAN_TOKEN),
-            address(YIELD_TOKEN),
-            YIELD_LOAN_POOL_FEE,
-            borrowAmount,
-            yieldLoanPriceLimit
+            SWAP_ROUTER, LOAN_TOKEN, YIELD_TOKEN, YIELD_LOAN_POOL_FEE, borrowAmount, yieldLoanPriceLimit
         );
 
         // Repay the loan token the swap left behind, so no idle loan lingers.
@@ -616,15 +605,14 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         if (yieldToSell > yieldBalance) yieldToSell = yieldBalance;
         if (yieldToSell == 0) return;
 
-        (uint160 limit, bool ok) = _yieldLoanSwapLimit(address(YIELD_TOKEN));
+        (uint160 limit, bool ok) = _yieldLoanSwapLimit(YIELD_TOKEN);
         if (!ok) return;
 
         // Sell yield->loan bounded by the price limit. The pool partial-fills
         // up to it, so a too-large delever still repays as much as the bound
         // allows.
-        uint256 loanGot = SwapLib.swapExactInToLimit(
-            SWAP_ROUTER, address(YIELD_TOKEN), address(LOAN_TOKEN), YIELD_LOAN_POOL_FEE, yieldToSell, limit
-        );
+        uint256 loanGot =
+            SwapLib.swapExactInToLimit(SWAP_ROUTER, YIELD_TOKEN, LOAN_TOKEN, YIELD_LOAN_POOL_FEE, yieldToSell, limit);
 
         if (loanGot > 0) {
             if (loanGot > currentDebt) {
@@ -671,15 +659,10 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         // Leg 1: sell surplus yield -> loan on the yield/debt pool, bounded by an oracle-derived price limit
         // (`maxSlippageBps` of price impact). The pool partial-fills up to the limit; when it is already past the bound
         // the swap is skipped and the harvest no-ops. Same mechanism as `_rebalanceDelever`.
-        (uint160 yieldLoanPriceLimit, bool ok) = _yieldLoanSwapLimit(address(YIELD_TOKEN));
+        (uint160 yieldLoanPriceLimit, bool ok) = _yieldLoanSwapLimit(YIELD_TOKEN);
         if (!ok) return;
         uint256 loanGot = SwapLib.swapExactInToLimit(
-            SWAP_ROUTER,
-            address(YIELD_TOKEN),
-            address(LOAN_TOKEN),
-            YIELD_LOAN_POOL_FEE,
-            yieldToHarvest,
-            yieldLoanPriceLimit
+            SWAP_ROUTER, YIELD_TOKEN, LOAN_TOKEN, YIELD_LOAN_POOL_FEE, yieldToHarvest, yieldLoanPriceLimit
         );
         // A dust surplus (or a pool already at the bound) rounds the swap output to zero; no-op rather than pass a zero
         // amount to the next leg, which the router and Morpho reject.
@@ -690,12 +673,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         (uint160 collateralLoanPriceLimit, bool collateralOk) = _collateralLoanSwapLimit();
         uint256 collateralAdded = collateralOk
             ? SwapLib.swapExactInToLimit(
-                SWAP_ROUTER,
-                address(LOAN_TOKEN),
-                address(COLLATERAL_TOKEN),
-                COLLATERAL_LOAN_POOL_FEE,
-                loanGot,
-                collateralLoanPriceLimit
+                SWAP_ROUTER, LOAN_TOKEN, COLLATERAL_TOKEN, COLLATERAL_LOAN_POOL_FEE, loanGot, collateralLoanPriceLimit
             )
             : 0;
         // Supply as collateral only - no re-lever. This lowers LTV; `rebalance`'s lever branch redeploys the collateral
@@ -764,15 +742,11 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
 
     /// @dev Price limit for a swap on the yield/debt pool (rebalance lever/delever and harvest leg 1). The yield oracle
     /// quotes loan per yield token, 1e36-scaled.
-    function _yieldLoanSwapLimit(address tokenIn) internal view returns (uint160, bool) {
+    function _yieldLoanSwapLimit(IERC20 tokenIn) internal view returns (uint160, bool) {
         uint256 loanPerYield = YIELD_ORACLE.price();
-        return tokenIn == address(YIELD_TOKEN)
-            ? SwapLib.swapLimit(
-                YIELD_LOAN_POOL, tokenIn, address(LOAN_TOKEN), loanPerYield, ORACLE_PRICE_SCALE, maxSlippageBps
-            )
-            : SwapLib.swapLimit(
-                YIELD_LOAN_POOL, tokenIn, address(YIELD_TOKEN), ORACLE_PRICE_SCALE, loanPerYield, maxSlippageBps
-            );
+        return address(tokenIn) == address(YIELD_TOKEN)
+            ? SwapLib.swapLimit(YIELD_LOAN_POOL, tokenIn, LOAN_TOKEN, loanPerYield, ORACLE_PRICE_SCALE, maxSlippageBps)
+            : SwapLib.swapLimit(YIELD_LOAN_POOL, tokenIn, YIELD_TOKEN, ORACLE_PRICE_SCALE, loanPerYield, maxSlippageBps);
     }
 
     /// @dev Price limit for harvest leg 2's loan->collateral swap on the collateral/debt pool. The market oracle quotes
@@ -780,8 +754,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
     function _collateralLoanSwapLimit() internal view returns (uint160, bool) {
         return SwapLib.swapLimit(
             COLLATERAL_LOAN_POOL,
-            address(LOAN_TOKEN),
-            address(COLLATERAL_TOKEN),
+            LOAN_TOKEN,
+            COLLATERAL_TOKEN,
             ORACLE_PRICE_SCALE,
             COLLATERAL_ORACLE.price(),
             maxSlippageBps
@@ -821,9 +795,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
     }
 
     function _logVaultState() internal {
-        emit VaultState(
-            _collateral(), _debt(), _yield(), COLLATERAL_ORACLE.price(), YIELD_ORACLE.price()
-        );
+        emit VaultState(_collateral(), _debt(), _yield(), COLLATERAL_ORACLE.price(), YIELD_ORACLE.price());
     }
 
     function _market() internal view returns (MarketParams memory) {
@@ -851,11 +823,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
     /// @dev Returns how much the current debt is worth in collateral assets.
     function _debtInCollateralAssets() internal view returns (uint256) {
         return _debt().mulDiv(ORACLE_PRICE_SCALE, IOracle(COLLATERAL_ORACLE).price());
-    }
-
-    /// @dev Returns how much the current collateral is worth in debt assets.
-    function _collateralInDebtAssets() internal view returns (uint256) {
-        return _collateral().mulDiv(COLLATERAL_ORACLE.price(), ORACLE_PRICE_SCALE);
     }
 
     function _ltv() internal view returns (uint256) {
