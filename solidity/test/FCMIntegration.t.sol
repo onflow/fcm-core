@@ -2,24 +2,24 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
-import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
 import {Test, console} from "forge-std/Test.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 contract FCMIntegrationTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
     using Math for uint256;
 
     function setUp() public {
         deployVault();
         vm.prank(owner);
         vault.setMaxTvl(100 ether);
-        vault.grantFundApprove(alice, 1 ether);
+        grantFundApprove(alice, 1 ether);
         vm.prank(alice);
         vault.approve(address(vault), type(uint256).max);
-        vault.grantFundApprove(bob, 1 ether);
+        grantFundApprove(bob, 1 ether);
         vm.prank(bob);
         vault.approve(address(vault), type(uint256).max);
 
@@ -80,13 +80,13 @@ contract FCMIntegrationTest is Test, Deployers {
         YIELD_TOKEN.mint(address(vault), YIELD_TOKEN.balanceOf(address(vault)) / 2);
 
         uint256 collBefore = vault.collateral();
-        uint256 debtBefore = vaultHarness.exposed_debt();
+        uint256 debtBefore = vault.debt();
 
         vault.harvest(type(uint256).max);
         vault.rebalance();
 
         assertGt(vault.collateral(), collBefore);
-        assertGt(vaultHarness.exposed_debt(), debtBefore);
+        assertGt(vault.debt(), debtBefore);
         assertApproxEqRel(vault.healthFactor(), HEALTH_FACTOR_MAX_TARGET, 1e15);
     }
 
@@ -148,14 +148,14 @@ contract FCMIntegrationTest is Test, Deployers {
         // Full liquidation: seize ALL collateral, no debt repaid.
         MORPHO.liquidate(vault.market(), address(vault), 10 ether, 0);
         assertEq(vault.collateral(), 0);
-        uint256 debtBefore = vaultHarness.exposed_debt();
+        uint256 debtBefore = vault.debt();
         assertGt(debtBefore, 0);
 
         // Must not revert even with no collateral to lever against.
         vault.rebalance();
 
-        assertLt(vaultHarness.exposed_debt(), debtBefore);
-        assertApproxEqAbs(vaultHarness.exposed_debt(), 0, 10 ether / 1000);
+        assertLt(vault.debt(), debtBefore);
+        assertApproxEqAbs(vault.debt(), 0, 10 ether / 1000);
         assertEq(vault.healthFactor(), type(uint256).max);
 
         vm.prank(alice);

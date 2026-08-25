@@ -3,14 +3,14 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
-import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
 import {Test} from "forge-std/Test.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 contract FCMRedeemInKindTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
     using Math for uint256;
 
     uint256 constant LOAN_AMOUNT = 2000 ether;
@@ -19,10 +19,10 @@ contract FCMRedeemInKindTest is Test, Deployers {
         deployVault();
         vm.prank(owner);
         vault.setMaxTvl(100 ether);
-        vault.grantFundApprove(alice, 1 ether);
+        grantFundApprove(alice, 1 ether);
         vm.prank(alice);
         vault.approve(address(vault), type(uint256).max);
-        vault.grantFundApprove(bob, 1 ether);
+        grantFundApprove(bob, 1 ether);
         vm.prank(bob);
         vault.approve(address(bob), type(uint256).max);
 

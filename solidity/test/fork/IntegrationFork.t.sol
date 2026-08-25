@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
+import {FCMVault} from "../../src/FCMVault.sol";
 import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
+import {FCMHelpers} from "../../src/libraries/FCMHelpers.sol";
 import {ForkDeployers} from "./ForkDeployers.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {console} from "forge-std/console.sol";
 
 contract IntegrationForkTest is ForkDeployers {
+    using FCMHelpers for FCMVault;
     uint256 constant N_USERS = 100;
     uint256 constant DEPOSIT_AMOUNT = 0.1e8;
     uint256 constant MAX_REBALANCE_ITERATIONS = 500;
@@ -73,14 +76,14 @@ contract IntegrationForkTest is ForkDeployers {
 
     function _shockPriceAndRebalanceUntilOk(uint256 newPrice) internal returns (uint256 iterations, uint256 hfFinal) {
         setCollateralPrice(newPrice);
-        hfFinal = _hf();
+        hfFinal = vault.healthFactor();
         console.log("HF right after price shock:", hfFinal / 1e15);
 
         for (uint256 i = 0; i < MAX_REBALANCE_ITERATIONS; i++) {
             if (hfFinal >= HEALTH_FACTOR_MIN && hfFinal <= HEALTH_FACTOR_MAX) break;
             vault.rebalance();
             _arbPoolToSpot();
-            hfFinal = _hf();
+            hfFinal = vault.healthFactor();
             iterations = i + 1;
         }
     }
@@ -97,6 +100,6 @@ contract IntegrationForkTest is ForkDeployers {
 
             _arbPoolToSpot();
         }
-        console.log("All", N_USERS, "withdrawals done. HF =", _hf() / 1e15);
+        console.log("All", N_USERS, "withdrawals done. HF =", vault.healthFactor() / 1e15);
     }
 }

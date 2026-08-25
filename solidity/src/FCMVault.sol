@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {IFCMVault} from "./interfaces/IFCMVault.sol";
 import {ISwapRouter02} from "./interfaces/external/ISwapRouter02.sol";
 import {FeesLib} from "./libraries/FeesLib.sol";
+import {MarketLib} from "./libraries/MarketLib.sol";
 import {MorphoLib} from "./libraries/MorphoLib.sol";
 import {SwapLib} from "./libraries/SwapLib.sol";
 import {IMorpho, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
@@ -37,7 +38,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
     using SafeERC20 for IERC20;
     using Math for uint256;
     using MorphoLib for IMorpho;
-    using MorphoLib for MarketParams;
+    using MarketLib for MarketParams;
 
     /// @dev Defines the decimal offset between vault assets and shares. Larger offsets make inflation attacks more
     /// expensive. See
@@ -488,11 +489,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoFla
             return gross - debtInCollateral;
         }
         return 0;
-    }
-
-    /// @inheritdoc IFCMVault
-    function healthFactor() public view returns (uint256) {
-        return MORPHO.healthFactor(_market());
     }
 
     /// @dev Leverage leg of `rebalance`, rebalancing only to the re-entry target just inside the nearest bound rather

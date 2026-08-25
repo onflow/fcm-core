@@ -240,11 +240,6 @@ interface IFCMVault is IERC4626 {
     /// @dev The yield token is the inner vault's share token and the yield leg of the position.
     function YIELD_TOKEN() external view returns (IERC20);
 
-    /// @notice Current health factor of the vault's Morpho position (WAD-scaled).
-    /// @dev WAD-scaled. `WAD` (1e18) is the liquidation line; below `HEALTH_FACTOR_MIN` is over-levered, above
-    /// `HEALTH_FACTOR_MAX` is under-levered.
-    function healthFactor() external view returns (uint256);
-
     /// @notice Minimum health factor below which `rebalance` delevers (sells yield to repay debt).
     /// @dev WAD-scaled. Positions below this threshold are over-levered.
     function HEALTH_FACTOR_MIN() external view returns (uint256);

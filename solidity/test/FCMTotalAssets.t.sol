@@ -2,19 +2,19 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
-import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract FCMTotalAssetsTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
 
     function setUp() public {
         deployVault();
         vm.prank(owner);
         vault.setMaxTvl(100 ether);
-        vault.grantFundApprove(alice, 1 ether);
-        vault.grantFundApprove(bob, 1 ether);
+        grantFundApprove(alice, 1 ether);
+        grantFundApprove(bob, 1 ether);
     }
 
     function test_totalAssets_navRoundsToOriginalAssets() public {

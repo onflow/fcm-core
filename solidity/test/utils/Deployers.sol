@@ -4,20 +4,19 @@ pragma solidity ^0.8.24;
 import {FCMVault} from "../../src/FCMVault.sol";
 import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
 import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
+import {FCMHelpers} from "../../src/libraries/FCMHelpers.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockIrm} from "../mocks/MockIrm.sol";
 import {MockMorpho} from "../mocks/MockMorpho.sol";
 import {MockOracle} from "../mocks/MockOracle.sol";
 import {MockPool} from "../mocks/MockPool.sol";
 import {MockSwapRouter} from "../mocks/MockSwapRouter.sol";
-import {FCMVaultHarness} from "./FCMVaultHarness.sol";
-import {VaultHelpers} from "./FCMVaultHelpers.sol";
 import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract Deployers is Test {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
 
     MockERC20 immutable COLLATERAL_TOKEN = MockERC20(makeAddr("COLLATERAL_TOKEN"));
     MockERC20 immutable LOAN_TOKEN = MockERC20(makeAddr("LOAN_TOKEN"));
@@ -45,7 +44,6 @@ contract Deployers is Test {
     uint256 constant YIELD_PRICE = 1e36;
 
     FCMVault internal vault;
-    FCMVaultHarness internal vaultHarness;
 
     address internal owner = address(makeAddr("owner"));
     address internal alice = address(makeAddr("alice"));
@@ -59,8 +57,7 @@ contract Deployers is Test {
         setYieldPrice(YIELD_PRICE);
         MockSwapRouter(address(SWAP_ROUTER)).setPool(COLLATERAL_LOAN_POOL_FEE, COLLATERAL_LOAN_POOL);
         MockSwapRouter(address(SWAP_ROUTER)).setPool(YIELD_LOAN_POOL_FEE, YIELD_LOAN_POOL);
-        vaultHarness = new FCMVaultHarness(defaultInitParams());
-        vault = FCMVault(address(vaultHarness));
+        vault = new FCMVault(defaultInitParams());
         MORPHO.supplyLiquidity(vault.market(), 100 ether);
     }
 
@@ -135,5 +132,15 @@ contract Deployers is Test {
         YIELD_LOAN_POOL.enablePriceImpact();
         YIELD_LOAN_POOL.setReserves(address(YIELD_TOKEN), reserveIn);
         YIELD_LOAN_POOL.setReserves(address(LOAN_TOKEN), reserveOut);
+    }
+
+    function grantFundApprove(address who, uint256 amount) internal {
+        vm.prank(owner);
+        vault.grantEarlyAccess(who);
+
+        COLLATERAL_TOKEN.mint(who, amount);
+
+        vm.prank(who);
+        COLLATERAL_TOKEN.approve(address(vault), amount);
     }
 }

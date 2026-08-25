@@ -3,14 +3,14 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
-import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract FCMFeesTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
     using Math for uint256;
 
     function setUp() public {
@@ -18,7 +18,7 @@ contract FCMFeesTest is Test, Deployers {
 
         vm.prank(owner);
         vault.setMaxTvl(100 ether);
-        vault.grantFundApprove(alice, 1 ether);
+        grantFundApprove(alice, 1 ether);
     }
 
     function test_fees_defaultFees() public view {

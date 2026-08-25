@@ -96,10 +96,22 @@ library MorphoLib {
     }
 
     /// @notice Returns this contract's collateral balance in the given market, in raw collateral-token units.
+    /// @dev Convenience wrapper over `collateral(morpho, market, address(this))`.
     /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     function collateral(IMorpho morpho, MarketParams memory market) internal view returns (uint256) {
-        return uint256(morpho.position(market.id(), address(this)).collateral);
+        return collateral(morpho, market, address(this));
+    }
+
+    /// @notice Returns `user`'s collateral balance in the given market, in raw collateral-token units.
+    /// @dev Overload that reads an arbitrary account's position instead of `address(this)`'s, so it is safe to call
+    /// from a context (e.g. a test or periphery) that is not the position owner.
+    /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required.
+    /// @param morpho The Morpho Blue singleton.
+    /// @param market Morpho market parameters identifying the position.
+    /// @param user The account whose collateral balance is being read.
+    function collateral(IMorpho morpho, MarketParams memory market, address user) internal view returns (uint256) {
+        return uint256(morpho.position(market.id(), user).collateral);
     }
 
     /// @notice Returns this contract's current debt in the given Morpho market, denominated in raw loan-token units.
@@ -117,7 +129,19 @@ library MorphoLib {
     /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     function debt(IMorpho morpho, MarketParams memory market) internal view returns (uint256) {
-        Position memory pos = morpho.position(market.id(), address(this));
+        return debt(morpho, market, address(this));
+    }
+
+    /// @notice Returns `user`'s current debt in the given Morpho market, denominated in raw loan-token units.
+    /// @dev Overload of `debt(IMorpho,MarketParams)` that reads an arbitrary account's borrow position instead of
+    /// `address(this)`'s, so it is safe to call from a context that is not the position owner. Conversion math and
+    /// virtual shares/assets handling are identical to `debt(IMorpho,MarketParams)`.
+    /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required.
+    /// @param morpho The Morpho Blue singleton.
+    /// @param market Morpho market parameters identifying the position.
+    /// @param user The account whose debt is being read.
+    function debt(IMorpho morpho, MarketParams memory market, address user) internal view returns (uint256) {
+        Position memory pos = morpho.position(market.id(), user);
         if (pos.borrowShares == 0) return 0;
         Market memory mkt = morpho.market(market.id());
         return uint256(pos.borrowShares)
@@ -169,11 +193,21 @@ library MorphoLib {
     }
 
     /// @notice Returns the maximum loan-token amount borrowable against this contract's current collateral balance.
-    /// @dev Convenience wrapper over `maxBorrowFor(collateral(market))`.
+    /// @dev Convenience wrapper over `maxBorrow(morpho, market, address(this))`.
     /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     function maxBorrow(IMorpho morpho, MarketParams memory market) internal view returns (uint256) {
-        return maxBorrowFor(market, collateral(morpho, market));
+        return maxBorrow(morpho, market, address(this));
+    }
+
+    /// @notice Returns the maximum loan-token amount borrowable against `user`'s current collateral balance.
+    /// @dev Convenience wrapper over `maxBorrowFor(collateral(market, user))`. Reads `user`'s position instead of
+    /// `address(this)`'s, so it is safe to call from a context that is not the position owner.
+    /// @param morpho The Morpho Blue singleton.
+    /// @param market Morpho market parameters identifying the position.
+    /// @param user The account whose collateral is being borrowed against.
+    function maxBorrow(IMorpho morpho, MarketParams memory market, address user) internal view returns (uint256) {
+        return maxBorrowFor(market, collateral(morpho, market, user));
     }
 
     /// @notice Returns this contract's health factor in the given market, scaled by WAD (1e18).
@@ -186,9 +220,23 @@ library MorphoLib {
     /// @param morpho The Morpho Blue singleton.
     /// @param market Morpho market parameters identifying the position.
     function healthFactor(IMorpho morpho, MarketParams memory market) internal view returns (uint256) {
-        uint256 debtAmount = debt(morpho, market);
+        return healthFactor(morpho, market, address(this));
+    }
+
+    /// @notice Returns `user`'s health factor in the given market, scaled by WAD (1e18).
+    /// @dev Same definition as `healthFactor(IMorpho,MarketParams)` but computed against `user`'s collateral and debt
+    /// (both read via the `address` overloads), so it is safe to call from a context that is not the position owner.
+    /// The collateral and debt MUST refer to the same account: mixing `user`'s debt with `address(this)`'s collateral
+    /// would understate the health factor whenever the caller holds no collateral itself.
+    /// Returns `type(uint256).max` when `user` has no debt, since an unborrowed position cannot be liquidated.
+    /// CAUTION: Call `accrueInterest(market)` first if an up-to-the-block value is required.
+    /// @param morpho The Morpho Blue singleton.
+    /// @param market Morpho market parameters identifying the position.
+    /// @param user The account whose health factor is being read.
+    function healthFactor(IMorpho morpho, MarketParams memory market, address user) internal view returns (uint256) {
+        uint256 debtAmount = debt(morpho, market, user);
         if (debtAmount == 0) return type(uint256).max;
-        return maxBorrow(morpho, market).mulDiv(WAD, debtAmount);
+        return maxBorrow(morpho, market, user).mulDiv(WAD, debtAmount);
     }
 
     /// @notice Returns the additional loan-token amount this contract can borrow to reach `targetHealthFactor`.

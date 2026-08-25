@@ -3,16 +3,14 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
-import {MorphoLib} from "../src/libraries/MorphoLib.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
-import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
-import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
 contract FCMEmergencyRecoveryTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
     bytes errorBobUnauthorized = Errors.ownableUnauthorizedAccount(address(bob));
     bytes errorNotReady = Errors.emergencyRecoveryNotReady();
     bytes errorActive = Errors.emergencyRecoveryActive();
@@ -22,7 +20,7 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
 
         vm.prank(owner);
         vault.setMaxTvl(1e21);
-        vault.grantFundApprove(alice, 1 ether);
+        grantFundApprove(alice, 1 ether);
     }
 
     function test_emergencyRecovery_onlyOwner() public {
@@ -148,9 +146,12 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
         vault.scheduleEmergencyRecovery();
 
         vm.warp(vault.emergencyRecoveryValidAt());
+        // Pre-repay the vault's debt by shares so it zeroes exactly, freeing collateral for the sweep.
         LOAN_TOKEN.mint(owner, 1e10 ether);
-        LOAN_TOKEN.approve(address(vault), type(uint256).max);
-        MorphoLib.repayAll(IMorpho(address(MORPHO)), vault.market());
+        LOAN_TOKEN.approve(address(MORPHO), type(uint256).max);
+        MORPHO.repay(vault.market(), 0, vault.position().borrowShares, address(vault), "");
+        assertEq(vault.debt(), 0);
+        assertEq(vault.healthFactor(), type(uint256).max);
 
         vm.recordLogs();
         vault.executeEmergencyRecovery();
@@ -158,8 +159,8 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
 
         assertEq(COLLATERAL_TOKEN.balanceOf(address(vault)), 0);
         assertEq(YIELD_TOKEN.balanceOf(address(vault)), 0);
-        assertEq(MorphoLib.collateral(IMorpho(address(MORPHO)), vault.market()), 0);
-        assertEq(MorphoLib.debt(IMorpho(address(MORPHO)), vault.market()), 0);
+        assertEq(vault.collateral(), 0);
+        assertEq(vault.debt(), 0);
 
         uint256 collateralOut = COLLATERAL_TOKEN.balanceOf(owner);
         uint256 yieldOut = YIELD_TOKEN.balanceOf(owner);

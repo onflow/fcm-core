@@ -3,16 +3,15 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
-import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
-// import {FeesLib} from "./utils/FeesLib.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
 contract FCMRebalanceTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
     using Math for uint256;
     bytes errorEmergencyRecoveryActive = Errors.emergencyRecoveryActive();
 
@@ -22,7 +21,7 @@ contract FCMRebalanceTest is Test, Deployers {
         vault.setMaxSlippageBps(100);
         vm.prank(owner);
         vault.setMaxTvl(1000 ether);
-        vault.grantFundApprove(alice, 1 ether);
+        grantFundApprove(alice, 1 ether);
     }
 
     function test_rebalance_noopInsideBand() public {
@@ -139,7 +138,7 @@ contract FCMRebalanceTest is Test, Deployers {
         vault.rebalance();
 
         assertLt(YIELD_TOKEN.balanceOf(address(vault)), originalYield);
-        assertEq(vaultHarness.exposed_debt(), 0);
+        assertEq(vault.debt(), 0);
         // we allow loan tokens to be lost.
         assertGt(LOAN_TOKEN.balanceOf(address(vault)), 0);
     }
@@ -149,7 +148,7 @@ contract FCMRebalanceTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 originalDebt = vaultHarness.exposed_debt();
+        uint256 originalDebt = vault.debt();
 
         vm.prank(owner);
         vault.setMaxSlippageBps(slippageBps);
@@ -158,7 +157,7 @@ contract FCMRebalanceTest is Test, Deployers {
 
         vault.rebalance();
         uint256 yieldBought = YIELD_TOKEN.balanceOf(address(vault)) - originalYield;
-        uint256 newDebt = vaultHarness.exposed_debt() - originalDebt;
+        uint256 newDebt = vault.debt() - originalDebt;
         uint256 price = yieldBought.mulDiv(1e36, newDebt);
         assertGe(price, uint256(10_000 - slippageBps) * 1e36 / 1e4);
         assertLe(price, YIELD_PRICE);
@@ -169,7 +168,7 @@ contract FCMRebalanceTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
-        uint256 originalDebt = vaultHarness.exposed_debt();
+        uint256 originalDebt = vault.debt();
 
         vm.prank(owner);
         vault.setMaxSlippageBps(slippageBps);
@@ -178,7 +177,7 @@ contract FCMRebalanceTest is Test, Deployers {
 
         vault.rebalance();
         uint256 yieldSold = originalYield - YIELD_TOKEN.balanceOf(address(vault));
-        uint256 newDebt = originalDebt - vaultHarness.exposed_debt();
+        uint256 newDebt = originalDebt - vault.debt();
         uint256 price = yieldSold.mulDiv(1e36, newDebt);
         assertGe(price, uint256(10_000 - slippageBps) * 1e36 / 1e4);
         assertGe(price, YIELD_PRICE);
@@ -311,7 +310,7 @@ contract FCMRebalanceTest is Test, Deployers {
     function test_rebalance_leverEmitsUpdatedSnapshot() public {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
-        uint256 debtBeforeLever = vaultHarness.exposed_debt();
+        uint256 debtBeforeLever = vault.debt();
         setCollateralPrice(2300e36); // push HF above max so rebalance levers
 
         vm.recordLogs();
@@ -364,7 +363,7 @@ contract FCMRebalanceTest is Test, Deployers {
     {
         (collateral, debt, yield, collateralPrice, debtPrice, yieldPrice) = _lastVaultState();
         assertEq(collateral, vault.collateral());
-        assertApproxEqAbs(debt, vaultHarness.exposed_debt(), 1);
+        assertApproxEqAbs(debt, vault.debt(), 1);
         assertEq(yield, YIELD_TOKEN.balanceOf(address(vault)));
     }
 
@@ -381,11 +380,11 @@ contract FCMRebalanceTest is Test, Deployers {
         MORPHO.repay(vault.market(), 1, 0, address(vault), "");
 
         assertGt(vault.healthFactor(), HEALTH_FACTOR_MAX);
-        uint256 debtBefore = vaultHarness.exposed_debt();
+        uint256 debtBefore = vault.debt();
 
         vault.rebalance();
 
-        assertEq(vaultHarness.exposed_debt(), debtBefore);
+        assertEq(vault.debt(), debtBefore);
     }
 
     // Hits `_rebalanceDelever`'s `yieldToSell == 0` guard: vault is over-levered (hf < MIN)
@@ -400,10 +399,10 @@ contract FCMRebalanceTest is Test, Deployers {
 
         setCollateralPrice(COLLATERAL_PRICE / 3);
         assertLt(vault.healthFactor(), HEALTH_FACTOR_MIN);
-        uint256 debtBefore = vaultHarness.exposed_debt();
+        uint256 debtBefore = vault.debt();
 
         vault.rebalance();
 
-        assertEq(vaultHarness.exposed_debt(), debtBefore);
+        assertEq(vault.debt(), debtBefore);
     }
 }

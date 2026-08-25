@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
+import {FCMVault} from "../../src/FCMVault.sol";
 import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
 import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
+import {FCMHelpers} from "../../src/libraries/FCMHelpers.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
@@ -11,6 +13,7 @@ import {console} from "forge-std/console.sol";
 import {ForkDeployers} from "./ForkDeployers.sol";
 
 contract SandwichForkTest is ForkDeployers {
+    using FCMHelpers for FCMVault;
     uint256 constant N_USERS = 100;
     uint256 constant DEPOSIT_AMOUNT_PER_USER = 0.1e8;
 
@@ -37,7 +40,7 @@ contract SandwichForkTest is ForkDeployers {
         }
 
         setCollateralPrice(ORACLE_PRICE * 110 / 100);
-        assertGt(_hf(), HEALTH_FACTOR_MAX, "HF above max after 10% rise -> lever path");
+        assertGt(vault.healthFactor(), HEALTH_FACTOR_MAX, "HF above max after 10% rise -> lever path");
 
         deal(address(PYUSD0), attacker, 100_000_000e6);
         deal(address(FUSDEV), attacker, 100_000_000e18);
@@ -53,7 +56,7 @@ contract SandwichForkTest is ForkDeployers {
         console.log("Yield oracle:", IOracle(YIELD_ORACLE).price());
         console.log("Pool spot:", uint256(cleanSpot));
         console.log("Pool liquidity:", uint256(IUniswapV3Pool(YIELD_LOAN_POOL).liquidity()));
-        console.log("HF after 10% rise:", _hf() / 1e15);
+        console.log("HF after 10% rise:", vault.healthFactor() / 1e15);
         console.log("TVL ($):", _tvlUsd() / 1e6);
         console.log("---");
 
@@ -179,7 +182,7 @@ contract SandwichForkTest is ForkDeployers {
     }
 
     function _singleSandwich(uint256 pushBps) internal returns (SandwichResult memory r) {
-        uint256 debtStart = _debt();
+        uint256 debtStart = vault.debt();
         uint256 yieldStart = FUSDEV.balanceOf(address(vault));
 
         (uint160 currentSpot,,,,,,) = IUniswapV3Pool(YIELD_LOAN_POOL).slot0();
@@ -207,9 +210,9 @@ contract SandwichForkTest is ForkDeployers {
         }
 
         vault.rebalance();
-        r.debtAdded = _debt() - debtStart;
+        r.debtAdded = vault.debt() - debtStart;
         r.yieldBought = FUSDEV.balanceOf(address(vault)) - yieldStart;
-        r.hfAfter = _hf();
+        r.hfAfter = vault.healthFactor();
         r.tvlUsd = _tvlUsd();
 
         if (yieldGotFront > 0) {

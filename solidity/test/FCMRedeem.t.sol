@@ -3,25 +3,25 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
+import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
-import {VaultHelpers} from "./utils/FCMVaultHelpers.sol";
 import {Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {Test, console} from "forge-std/Test.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 contract FCMRedeemTest is Test, Deployers {
-    using VaultHelpers for FCMVault;
+    using FCMHelpers for FCMVault;
     using Math for uint256;
 
     function setUp() public {
         deployVault();
         vm.prank(owner);
         vault.setMaxTvl(100 ether);
-        vault.grantFundApprove(alice, 1 ether);
+        grantFundApprove(alice, 1 ether);
         vm.prank(alice);
         vault.approve(address(vault), type(uint256).max);
-        vault.grantFundApprove(bob, 1 ether);
+        grantFundApprove(bob, 1 ether);
         vm.prank(bob);
         vault.approve(address(vault), type(uint256).max);
     }
@@ -48,14 +48,16 @@ contract FCMRedeemTest is Test, Deployers {
         assertEq(COLLATERAL_TOKEN.balanceOf(carol), assetsOut);
         assertApproxEqAbs(COLLATERAL_TOKEN.balanceOf(carol), 1 ether, 2);
         assertEq(vault.balanceOf(alice), 0);
+        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN);
     }
 
     function test_redeem_partialRedeemUnwindsProportionalSlice() public {
         vm.prank(alice);
         uint256 shares = vault.deposit(1 ether, alice);
 
-        uint256 debtBefore = vaultHarness.exposed_debt();
+        uint256 debtBefore = vault.debt();
         uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
+        uint256 hfBefore = vault.healthFactor();
 
         vm.prank(alice);
         uint256 assetsOut = vault.redeem(shares / 2, alice, alice);
@@ -63,8 +65,10 @@ contract FCMRedeemTest is Test, Deployers {
         assertApproxEqAbs(assetsOut, 0.5 ether, 2);
         assertApproxEqAbs(vault.balanceOf(alice), shares / 2, 1);
         assertApproxEqAbs(COLLATERAL_TOKEN.balanceOf(address(alice)), assetsOut, 1);
-        assertApproxEqRel(vaultHarness.exposed_debt(), debtBefore / 2, 1);
+        assertApproxEqRel(vault.debt(), debtBefore / 2, 1);
         assertApproxEqRel(YIELD_TOKEN.balanceOf(address(vault)), yieldBefore / 2, 1);
+        // Pro-rata unwind halves collateral and debt together, so HF is unchanged.
+        assertApproxEqAbs(vault.healthFactor(), hfBefore, 1e15);
     }
 
     function test_redeem_twoDepositorsIndependentRedeem() public {
