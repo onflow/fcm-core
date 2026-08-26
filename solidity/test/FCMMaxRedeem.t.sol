@@ -6,9 +6,11 @@ import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Test} from "forge-std/Test.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 contract FCMMaxRedeemTest is Test, Deployers {
     using FCMHelpers for FCMVault;
+    using Math for uint256;
 
     function setUp() public {
         deployVault();
@@ -92,5 +94,21 @@ contract FCMMaxRedeemTest is Test, Deployers {
         assertEq(vault.maxRedeem(alice), aliceShares);
         assertEq(vault.maxRedeem(bob), bobShares);
         assertEq(vault.maxRedeem(stranger), 0);
+    }
+
+    function test_redeem_unhealthyAndNoYield() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+
+        setYieldPrice(1);
+        setCollateralPrice(COLLATERAL_PRICE.mulDiv(80, 100));
+
+        assertGt(vault.ltv(), LTV_MAX);
+        assertLt(vault.ltv(), MARKET_LLTV);
+        assertGt(vault.totalAssets(), 0);
+
+        assertEq(vault.maxRedeem(alice), 0);
+        deal(address(YIELD_TOKEN), address(vault), 0);
+        assertEq(vault.maxRedeem(alice), shares);
     }
 }

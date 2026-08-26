@@ -101,7 +101,7 @@ contract FCMDepositTest is Test, Deployers {
         vm.prank(owner);
         vault.setMaxTvl(1000);
         vm.prank(alice);
-        vm.expectRevert(Errors.erc4626ExceededMaxDeposit(alice, 1001, 1000));
+        vm.expectRevert(Errors.erc4626ExceededMaxDeposit(1001, 1000));
         vault.deposit(1001, alice);
     }
 
@@ -113,7 +113,7 @@ contract FCMDepositTest is Test, Deployers {
         vault.deposit(600, alice);
 
         vm.prank(bob);
-        vm.expectRevert(Errors.erc4626ExceededMaxDeposit(bob, 500, 400));
+        vm.expectRevert(Errors.erc4626ExceededMaxDeposit(500, 400));
         vault.deposit(500, bob);
 
         vm.prank(bob);
@@ -176,7 +176,7 @@ contract FCMDepositTest is Test, Deployers {
         vm.prank(owner);
         vault.setMaxTvl(500);
         vm.prank(alice);
-        vm.expectRevert(Errors.erc4626ExceededMaxDeposit(alice, 1, 0));
+        vm.expectRevert(Errors.erc4626ExceededMaxDeposit(1, 0));
         vault.deposit(1, alice);
     }
 

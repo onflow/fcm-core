@@ -9,7 +9,8 @@
     "reentrancy-no-eth",
     "reentrancy-events",
     "missing-zero-check",
-    "incorrect-equality"
+    "incorrect-equality",
+    "unused-return"
   ],
   "exclude_dependencies": true,
   "exclude_informational": false,

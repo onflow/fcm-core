@@ -39,7 +39,7 @@ contract FCMHarvestTest is Test, Deployers {
         vm.revertToState(snapshot);
 
         vm.expectEmit(false, false, false, true);
-        emit IFCMVault.Harvested(yieldSold, collateralAdded);
+        emit IFCMVault.Harvested(address(this), yieldSold, collateralAdded);
         vault.harvest(type(uint256).max);
 
         assertGt(vault.collateral(), 1.5 ether);
@@ -75,7 +75,7 @@ contract FCMHarvestTest is Test, Deployers {
         assertGt(yieldSold, 0);
 
         vm.expectEmit(false, false, false, true);
-        emit IFCMVault.Harvested(yieldSold, collateralAdded);
+        emit IFCMVault.Harvested(address(this), yieldSold, collateralAdded);
         vault.harvest(type(uint256).max);
 
         assertEq(vault.debt(), originalDebt);

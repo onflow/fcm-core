@@ -45,13 +45,13 @@ contract FCMFeesTest is Test, Deployers {
     }
 
     function test_fees_setFeesCaps() public {
-        vm.expectRevert(Errors.invalidFee());
+        vm.expectRevert(Errors.maxFeeRateExceeded());
         vm.prank(owner);
         vault.setManagementFeeBps(1001);
         vm.prank(owner);
         vault.setManagementFeeBps(1000);
 
-        vm.expectRevert(Errors.invalidFee());
+        vm.expectRevert(Errors.maxFeeRateExceeded());
         vm.prank(owner);
         vault.setPerformanceFeeBps(5001);
         vm.prank(owner);
