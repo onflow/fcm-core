@@ -9,7 +9,6 @@ import {MockIrm} from "./mocks/MockIrm.sol";
 import {MockMorpho} from "./mocks/MockMorpho.sol";
 import {MockOracle} from "./mocks/MockOracle.sol";
 import {MockPool} from "./mocks/MockPool.sol";
-import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract FCMVaultFactoryTest is Test {
@@ -25,7 +24,6 @@ contract FCMVaultFactoryTest is Test {
 
     address constant MOCK_IRM = 0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546;
     address constant MORPHO = 0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f;
-    address constant SWAP_ROUTER = 0xeEDC6Ff75e1b10B903D9013c358e446a73d35341;
 
     FCMVaultFactory internal factory;
     address internal marketOracle;
@@ -43,7 +41,6 @@ contract FCMVaultFactoryTest is Test {
         vm.etch(PYUSD0, erc20Code);
         vm.etch(FUSDEV, erc20Code);
         vm.etch(MORPHO, address(new MockMorpho()).code);
-        vm.etch(SWAP_ROUTER, address(new MockSwapRouter()).code);
         vm.etch(MOCK_IRM, address(new MockIrm()).code);
 
         marketOracle = address(new MockOracle(WETH_PRICE));
@@ -66,7 +63,6 @@ contract FCMVaultFactoryTest is Test {
             marketLltv: MARKET_LLTV,
             yieldOracle: yieldOracle,
             morpho: MORPHO,
-            swapRouter: SWAP_ROUTER,
             owner: deployer,
             name: "Flow Credit Markets WETH",
             symbol: "fcmWETH"

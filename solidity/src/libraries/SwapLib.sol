@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {ISwapRouter02} from "../interfaces/external/ISwapRouter02.sol";
 import {IUniswapV3Pool} from "../interfaces/external/IUniswapV3Pool.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -20,35 +19,6 @@ library SwapLib {
     /// @dev Q64.96 fixed-point one squared (`2**192`), used to build the `sqrtPriceX96` price limit for rebalance
     /// swaps.
     uint256 internal constant ONE_X192 = 1 << 192;
-
-    /// @notice Swap `amountIn` of `tokenIn` for `tokenOut` with no slippage bound. The router decides the realized
-    /// price. Recipient is always `address(this)`.
-    /// @dev Caller MUST have approved `SWAP_ROUTER` for `tokenIn`. Pool
-    /// `fee` is the FlowSwap V3 fee tier (e.g. 100 / 500 / 3000). Setting `amountOutMinimum = 0` is intentional for
-    /// legs whose downstream accounting already enforces fairness (e.g. redeem scales by realized output); use
-    /// `swapExactInToLimit` for legs that need an explicit price-impact bound.
-    /// @param swapRouter The FlowSwap V3 SwapRouter02 instance.
-    /// @param tokenIn Token being sold.
-    /// @param tokenOut Token being bought.
-    /// @param fee Pool fee tier.
-    /// @param amountIn Amount of `tokenIn` to sell.
-    /// @return amountOut Realized amount of `tokenOut` received.
-    function swapExactIn(ISwapRouter02 swapRouter, address tokenIn, address tokenOut, uint24 fee, uint256 amountIn)
-        internal
-        returns (uint256 amountOut)
-    {
-        return swapRouter.exactInputSingle(
-            ISwapRouter02.ExactInputSingleParams({
-                tokenIn: tokenIn,
-                tokenOut: tokenOut,
-                fee: fee,
-                recipient: address(this),
-                amountIn: amountIn,
-                amountOutMinimum: 0,
-                sqrtPriceLimitX96: 0
-            })
-        );
-    }
 
     /// @notice Swap up to `amountIn` of `tokenIn` for `tokenOut` directly on `pool`, stopping early if the pool's
     /// marginal price reaches `sqrtPriceLimitX96`. The pool fills natively up to that bound and then stops without
@@ -83,38 +53,6 @@ library SwapLib {
         (int256 amount0, int256 amount1) =
             pool.swap(address(this), zeroForOne, SafeCast.toInt256(amountIn), limit, abi.encode(address(tokenIn)));
         amountOut = zeroForOne ? uint256(-amount1) : uint256(-amount0);
-    }
-
-    /// @notice Swap `tokenIn` for exactly `amountOut` of `tokenOut`, reverting in the router if it would cost more than
-    /// `amountInMaximum`.
-    /// @dev Exact-output single-hop; recipient is always `address(this)`. Used by redeem to buy exactly the
-    /// redeemer's debt shortfall from their collateral, spending no more than the collateral slice withdrawn for it.
-    /// @param swapRouter The FlowSwap V3 SwapRouter02 instance.
-    /// @param tokenIn Token being sold.
-    /// @param tokenOut Token being bought.
-    /// @param fee Pool fee tier.
-    /// @param amountOut Exact amount of `tokenOut` to receive.
-    /// @param amountInMaximum Max `tokenIn` to spend; router reverts above it.
-    /// @return amountIn Realized `tokenIn` spent.
-    function swapExactOut(
-        ISwapRouter02 swapRouter,
-        address tokenIn,
-        address tokenOut,
-        uint24 fee,
-        uint256 amountOut,
-        uint256 amountInMaximum
-    ) internal returns (uint256 amountIn) {
-        return swapRouter.exactOutputSingle(
-            ISwapRouter02.ExactOutputSingleParams({
-                tokenIn: tokenIn,
-                tokenOut: tokenOut,
-                fee: fee,
-                recipient: address(this),
-                amountOut: amountOut,
-                amountInMaximum: amountInMaximum,
-                sqrtPriceLimitX96: 0
-            })
-        );
     }
 
     /// @notice Swap `tokenIn` for up to `amountOutRequested` of `tokenOut` directly on `pool`, stopping early if the

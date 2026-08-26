@@ -91,14 +91,11 @@ contract FCMConstructorTest is Test, Deployers {
         assertEq(v.emergencyRecoveryValidAt(), 0);
     }
 
-    function test_constructor_approvesMorphoAndSwapRouterMaxAllowance() public {
+    function test_constructor_approvesMorphoMaxAllowance() public {
         IFCMVault.InitParams memory p = defaultInitParams();
         FCMVault v = new FCMVault(p);
 
         assertEq(COLLATERAL_TOKEN.allowance(address(v), address(MORPHO)), type(uint256).max);
         assertEq(LOAN_TOKEN.allowance(address(v), address(MORPHO)), type(uint256).max);
-        assertEq(LOAN_TOKEN.allowance(address(v), address(v.SWAP_ROUTER())), type(uint256).max);
-        assertEq(YIELD_TOKEN.allowance(address(v), address(v.SWAP_ROUTER())), type(uint256).max);
-        assertEq(COLLATERAL_TOKEN.allowance(address(v), address(v.SWAP_ROUTER())), type(uint256).max);
     }
 }

@@ -2,7 +2,6 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../../src/FCMVault.sol";
-import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
 import {FCMHelpers} from "../../src/libraries/periphery/FCMHelpers.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -42,10 +41,6 @@ contract SandwichForkTest is ForkDeployers {
 
         deal(address(PYUSD0), attacker, 100_000_000e6);
         deal(address(FUSDEV), attacker, 100_000_000e18);
-        vm.startPrank(attacker);
-        PYUSD0.approve(address(SWAP_ROUTER), type(uint256).max);
-        FUSDEV.approve(address(SWAP_ROUTER), type(uint256).max);
-        vm.stopPrank();
 
         snap = vm.snapshotState();
 
@@ -189,19 +184,11 @@ contract SandwichForkTest is ForkDeployers {
 
         uint256 yieldGotFront = 0;
         if (pushBps > 0) {
-            vm.prank(attacker);
-            yieldGotFront = ISwapRouter02(address(SWAP_ROUTER))
-                .exactInputSingle(
-                    ISwapRouter02.ExactInputSingleParams({
-                    tokenIn: address(PYUSD0),
-                    tokenOut: address(FUSDEV),
-                    fee: YIELD_LOAN_POOL_FEE,
-                    recipient: attacker,
-                    amountIn: 1e6,
-                    amountOutMinimum: 0,
-                    sqrtPriceLimitX96: targetSpot
-                })
-                );
+            // Front-run: push the yield-pool price down by `pushBps`, buying yield cheaply. Routed directly through
+            // the pool (no router); the attacker funds and receives via `_directArbSwap`.
+            uint256 yieldBefore = FUSDEV.balanceOf(attacker);
+            _directArbSwap(yieldLoanPool, address(PYUSD0), address(FUSDEV), 1e6, targetSpot, attacker);
+            yieldGotFront = FUSDEV.balanceOf(attacker) - yieldBefore;
         }
 
         vault.rebalance();
@@ -210,19 +197,8 @@ contract SandwichForkTest is ForkDeployers {
         r.ltvAfter = vault.ltv();
 
         if (yieldGotFront > 0) {
-            vm.prank(attacker);
-            ISwapRouter02(address(SWAP_ROUTER))
-                .exactInputSingle(
-                    ISwapRouter02.ExactInputSingleParams({
-                    tokenIn: address(FUSDEV),
-                    tokenOut: address(PYUSD0),
-                    fee: YIELD_LOAN_POOL_FEE,
-                    recipient: attacker,
-                    amountIn: yieldGotFront,
-                    amountOutMinimum: 0,
-                    sqrtPriceLimitX96: 0
-                })
-                );
+            // Back-run: sell the front-run yield back for loan token at the (now moved) price.
+            _directArbSwap(yieldLoanPool, address(FUSDEV), address(PYUSD0), yieldGotFront, 0, attacker);
         }
 
         r.attackerProfit = int256(int256(PYUSD0.balanceOf(attacker)) - SafeCast.toInt256(loanBefore));

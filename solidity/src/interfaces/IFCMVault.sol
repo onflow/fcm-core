@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {ISwapRouter02} from "./external/ISwapRouter02.sol";
 import {IUniswapV3Pool} from "./external/IUniswapV3Pool.sol";
 import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
@@ -28,7 +27,6 @@ interface IFCMVault is IERC4626 {
         uint256 marketLltv;
         address yieldOracle;
         address morpho;
-        address swapRouter;
 
         string name;
         string symbol;
@@ -234,8 +232,6 @@ interface IFCMVault is IERC4626 {
     /// @dev 1e18-scaled.
     function LTV_MAX() external view returns (uint128);
 
-    /// @notice Address of the FlowSwap V3 SwapRouter02.
-    function SWAP_ROUTER() external view returns (ISwapRouter02);
     /// @notice collateral/loan pool for swapping collateral to loan token or vice versa.
     function COLLATERAL_LOAN_POOL() external view returns (IUniswapV3Pool);
     /// @notice Pool fee tier for the collateral/loan pool.

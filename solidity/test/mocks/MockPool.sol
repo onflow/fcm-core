@@ -2,7 +2,6 @@
 pragma solidity ^0.8.24;
 
 import {IUniswapV3SwapCallback} from "../../src/interfaces/IUniswapV3SwapCallback.sol";
-import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
 import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
 import {MockERC20} from "./MockERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -177,68 +176,68 @@ contract MockPool is IUniswapV3Pool {
         priceImpactEnabled = true;
     }
 
-    function exactInputSingle(ISwapRouter02.ExactInputSingleParams calldata p)
-        external
-        payable
-        returns (uint256 amountOut)
-    {
-        require(p.amountIn != 0, "AS");
+    // function exactInputSingle(ISwapRouter02.ExactInputSingleParams calldata p)
+    //     external
+    //     payable
+    //     returns (uint256 amountOut)
+    // {
+    //     require(p.amountIn != 0, "AS");
 
-        if (!priceImpactEnabled) {
-            // Flat: mulDiv with the full 1e36-scale price — no truncation, so extreme
-            // ratios (e.g. 1e16) preserve full precision. A 0 rate yields amountOut 0.
-            uint256 price = _resolvePrice(p.tokenIn, p.tokenOut);
-            if (price == 0) return 0;
-            amountOut = Math.mulDiv(p.amountIn, price, ORACLE_PRICE_SCALE);
-            MockERC20(p.tokenIn).burn(msg.sender, p.amountIn);
-            MockERC20(p.tokenOut).mint(p.recipient, amountOut);
-            return amountOut;
-        }
+    //     if (!priceImpactEnabled) {
+    //         // Flat: mulDiv with the full 1e36-scale price — no truncation, so extreme
+    //         // ratios (e.g. 1e16) preserve full precision. A 0 rate yields amountOut 0.
+    //         uint256 price = _resolvePrice(p.tokenIn, p.tokenOut);
+    //         if (price == 0) return 0;
+    //         amountOut = Math.mulDiv(p.amountIn, price, ORACLE_PRICE_SCALE);
+    //         MockERC20(p.tokenIn).burn(msg.sender, p.amountIn);
+    //         MockERC20(p.tokenOut).mint(p.recipient, amountOut);
+    //         return amountOut;
+    //     }
 
-        // Price-impact mode: constant-product curve honoring sqrtPriceLimitX96.
-        require(p.amountOutMinimum == 0, "amountOutMinimum not implemented in this mock");
+    //     // Price-impact mode: constant-product curve honoring sqrtPriceLimitX96.
+    //     require(p.amountOutMinimum == 0, "amountOutMinimum not implemented in this mock");
 
-        bool zeroForOne = p.tokenIn < p.tokenOut;
-        (address token0, address token1) = zeroForOne ? (p.tokenIn, p.tokenOut) : (p.tokenOut, p.tokenIn);
-        uint256 r0 = reserveOf[token0];
-        uint256 r1 = reserveOf[token1];
-        require(r0 > 0 && r1 > 0, "reserves unset");
-        uint256 k = r0 * r1;
-        uint256 rootK = Math.sqrt(k);
+    //     bool zeroForOne = p.tokenIn < p.tokenOut;
+    //     (address token0, address token1) = zeroForOne ? (p.tokenIn, p.tokenOut) : (p.tokenOut, p.tokenIn);
+    //     uint256 r0 = reserveOf[token0];
+    //     uint256 r1 = reserveOf[token1];
+    //     require(r0 > 0 && r1 > 0, "reserves unset");
+    //     uint256 k = r0 * r1;
+    //     uint256 rootK = Math.sqrt(k);
 
-        uint256 consumed = p.amountIn;
-        if (p.sqrtPriceLimitX96 != 0) {
-            uint256 reserveInLimit = zeroForOne
-                ? Math.mulDiv(rootK, Q96, p.sqrtPriceLimitX96)
-                : Math.mulDiv(rootK, p.sqrtPriceLimitX96, Q96);
-            uint256 reserveIn = zeroForOne ? r0 : r1;
-            uint256 maxConsumed = reserveInLimit > reserveIn ? reserveInLimit - reserveIn : 0;
-            if (consumed > maxConsumed) consumed = maxConsumed;
-        }
-        if (consumed == 0) return 0;
+    //     uint256 consumed = p.amountIn;
+    //     if (p.sqrtPriceLimitX96 != 0) {
+    //         uint256 reserveInLimit = zeroForOne
+    //             ? Math.mulDiv(rootK, Q96, p.sqrtPriceLimitX96)
+    //             : Math.mulDiv(rootK, p.sqrtPriceLimitX96, Q96);
+    //         uint256 reserveIn = zeroForOne ? r0 : r1;
+    //         uint256 maxConsumed = reserveInLimit > reserveIn ? reserveInLimit - reserveIn : 0;
+    //         if (consumed > maxConsumed) consumed = maxConsumed;
+    //     }
+    //     if (consumed == 0) return 0;
 
-        amountOut = zeroForOne ? r1 - Math.mulDiv(r0, r1, r0 + consumed) : r0 - Math.mulDiv(r0, r1, r1 + consumed);
+    //     amountOut = zeroForOne ? r1 - Math.mulDiv(r0, r1, r0 + consumed) : r0 - Math.mulDiv(r0, r1, r1 + consumed);
 
-        MockERC20(p.tokenIn).burn(msg.sender, consumed);
-        MockERC20(p.tokenOut).mint(p.recipient, amountOut);
-    }
+    //     MockERC20(p.tokenIn).burn(msg.sender, consumed);
+    //     MockERC20(p.tokenOut).mint(p.recipient, amountOut);
+    // }
 
-    function exactOutputSingle(ISwapRouter02.ExactOutputSingleParams calldata p)
-        external
-        payable
-        returns (uint256 amountIn)
-    {
-        require(p.amountOut != 0, "AS");
-        require(!priceImpactEnabled, "exactOutputSingle not implemented in price-impact mode");
+    // function exactOutputSingle(ISwapRouter02.ExactOutputSingleParams calldata p)
+    //     external
+    //     payable
+    //     returns (uint256 amountIn)
+    // {
+    //     require(p.amountOut != 0, "AS");
+    //     require(!priceImpactEnabled, "exactOutputSingle not implemented in price-impact mode");
 
-        // Flat: mulDiv with the full 1e36-scale price — no truncation.
-        uint256 price = _resolvePrice(p.tokenOut, p.tokenIn);
-        require(price != 0, "zero price");
-        amountIn = Math.mulDiv(p.amountOut, price, ORACLE_PRICE_SCALE, Math.Rounding.Ceil);
-        require(amountIn <= p.amountInMaximum, "Too much requested");
-        MockERC20(p.tokenIn).burn(msg.sender, amountIn);
-        MockERC20(p.tokenOut).mint(p.recipient, p.amountOut);
-    }
+    //     // Flat: mulDiv with the full 1e36-scale price — no truncation.
+    //     uint256 price = _resolvePrice(p.tokenOut, p.tokenIn);
+    //     require(price != 0, "zero price");
+    //     amountIn = Math.mulDiv(p.amountOut, price, ORACLE_PRICE_SCALE, Math.Rounding.Ceil);
+    //     require(amountIn <= p.amountInMaximum, "Too much requested");
+    //     MockERC20(p.tokenIn).burn(msg.sender, amountIn);
+    //     MockERC20(p.tokenOut).mint(p.recipient, p.amountOut);
+    // }
 
     function _pairKey(address tokenIn, address tokenOut) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked(tokenIn, tokenOut));
