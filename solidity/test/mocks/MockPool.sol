@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {IUniswapV3SwapCallback} from "../../src/interfaces/external/IUniswapV3SwapCallback.sol";
 import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
+import {IUniswapV3SwapCallback} from "../../src/interfaces/external/IUniswapV3SwapCallback.sol";
 import {MockERC20} from "./MockERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -103,7 +103,7 @@ contract MockPool is IUniswapV3Pool {
         require(amountSpecified != 0, "AS");
 
         bool exactIn = amountSpecified > 0;
-        uint256 amount = exactIn ? uint256(amountSpecified) : uint256(-amountSpecified);
+        uint256 amount = exactIn ? SafeCast.toUint256(amountSpecified) : SafeCast.toUint256(-amountSpecified);
         (uint256 amountIn, uint256 amountOut) = _computeFill(zeroForOne, exactIn, amount, sqrtPriceLimitX96);
 
         // Pool-perspective deltas: positive = received (input), negative = sent (output).

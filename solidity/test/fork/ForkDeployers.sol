@@ -184,7 +184,7 @@ contract ForkDeployers is Test, IUniswapV3SwapCallback {
 
         // Pull the input from the funder into this contract so the callback can pay the pool from here.
         vm.prank(funder);
-        IERC20(tokenIn).transfer(address(this), amountIn);
+        IERC20(tokenIn).safeTransfer(address(this), amountIn);
 
         (int256 amount0, int256 amount1) = pool.swap({
             recipient: funder,

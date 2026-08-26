@@ -2,73 +2,60 @@
 pragma solidity ^0.8.24;
 
 import {IUniswapV3Pool} from "../interfaces/external/IUniswapV3Pool.sol";
+import {BPS} from "./ConstantsLib.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @title SwapLib
 /// @author Flow Foundation
-/// @notice Thin wrapper around FlowSwap V3's SwapRouter02. The router address is passed as a parameter, not
-/// hardcoded. Internal helpers - inlined into the caller, recipient is always `address(this)`.
+/// @notice Thin wrapper around SwapRouter02. Recipient is always `address(this)`.
 library SwapLib {
-    uint256 internal constant BPS = 10_000;
-    /// @dev Uniswap V3 tick-math bounds on a valid `sqrtPriceLimitX96`. A limit outside `(MIN_SQRT_RATIO,
-    /// MAX_SQRT_RATIO)` is rejected by the pool; the vault treats such a limit as "no feasible swap" and skips.
+    /// @dev Uniswap V3 tick-math bound on a valid `sqrtPriceLimitX96`.
     uint160 internal constant MIN_SQRT_RATIO = 4_295_128_739;
+    /// @dev Uniswap V3 tick-math bound on a valid `sqrtPriceLimitX96`.
     uint160 internal constant MAX_SQRT_RATIO = 1_461_446_703_485_210_103_287_273_052_203_988_822_378_723_970_342;
-    /// @dev Q64.96 fixed-point one squared (`2**192`), used to build the `sqrtPriceX96` price limit for rebalance
-    /// swaps.
+    /// @dev Q64.96 fixed-point one squared (`2**192`)
     uint256 internal constant ONE_X192 = 1 << 192;
 
-    /// @notice Swap up to `amountIn` of `tokenIn` for `tokenOut` directly on `pool`, stopping early if the pool's
-    /// marginal price reaches `sqrtPriceLimitX96`. The pool fills natively up to that bound and then stops without
-    /// reverting, so a swap too large to complete within the bound is a *partial fill* rather than a revert.
-    /// @dev Canonical Uniswap V3 best-effort swap under a price bound: the swap loop runs while input remains AND the
-    /// marginal price has not reached the limit, so the average execution price never crosses it. On a partial fill the
-    /// pool consumes LESS than `amountIn` and the unspent `tokenIn` stays with the caller - the caller must account for
-    /// the remainder. `sqrtPriceLimitX96` MUST sit on the side the price moves toward (below spot for 0->1, above for
-    /// 1->0), otherwise the pool reverts `SPL`; callers check the live price first via `swapLimit`. The pool calls this
-    /// contract's `uniswapV3SwapCallback` to pull `tokenIn`, so the caller MUST hold `amountIn` of `tokenIn`. Recipient
-    /// is `address(this)`.
-    /// @param pool The Uniswap V3 pool for the `tokenIn`/`tokenOut` pair.
+    /// @notice Swap tokenIn for tokenOut
+    /// @dev The caller of this method receives a callback in the form of IUniswapV3SwapCallback#uniswapV3SwapCallback
     /// @param tokenIn Token being sold.
     /// @param tokenOut Token being bought.
-    /// @param amountIn Maximum amount of `tokenIn` to sell.
-    /// @param sqrtPriceLimitX96 Q64.96 marginal-price bound the swap will not cross; the fill stops here if reached.
+    /// @param amountInRequested Maximum amount of `tokenIn` to sell.
+    /// @param sqrtPriceLimitX96 The Q64.96 sqrt price limit. If zero for one, the price cannot move beyond this limit.
+    /// @return amountIn Realized amount of `tokenIn` spent (<= `amountInRequested` on a partial fill).
     /// @return amountOut Realized amount of `tokenOut` received.
     function swapExactInToLimit(
         IUniswapV3Pool pool,
         IERC20 tokenIn,
         IERC20 tokenOut,
-        uint256 amountIn,
+        uint256 amountInRequested,
         uint160 sqrtPriceLimitX96
-    ) internal returns (uint256 amountOut) {
+    ) internal returns (uint256 amountIn, uint256 amountOut) {
         bool zeroForOne = address(tokenIn) < address(tokenOut);
-        // `0` means "no limit": the router used to substitute the inclusive-adjacent bounds internally (MIN+1 / MAX-1,
-        // because the pool requires the limit to be STRICTLY inside `(MIN_SQRT_RATIO, MAX_SQRT_RATIO)`); `pool.swap`
-        // has no such convention and reverts `SPL` on 0 (and on the bare bounds), so mirror the router's substitution
-        // here.
-        uint160 limit =
-            sqrtPriceLimitX96 == 0 ? (zeroForOne ? MIN_SQRT_RATIO + 1 : MAX_SQRT_RATIO - 1) : sqrtPriceLimitX96;
-        (int256 amount0, int256 amount1) =
-            pool.swap(address(this), zeroForOne, SafeCast.toInt256(amountIn), limit, abi.encode(address(tokenIn)));
-        amountOut = zeroForOne ? uint256(-amount1) : uint256(-amount0);
+        uint160 limit = _setUnsetLimit(sqrtPriceLimitX96, zeroForOne);
+        bytes memory data = abi.encode(address(tokenIn));
+        // casting is safe because will only use tokens with supply well below 2**256
+        // forge-lint: disable-next-line(unsafe-typecast)
+        (int256 a0, int256 a1) = pool.swap(address(this), zeroForOne, int256(amountInRequested), limit, data);
+        // Positive delta = pool received (input consumed); negative delta = pool sent (output).
+        // On a partial fill the consumed input is LESS than `amountInRequested` - the unspent input stays with the
+        // caller. casting to 'uint256' is safe because uniswap return convention
+        // forge-lint: disable-next-line(unsafe-typecast)
+        amountIn = zeroForOne ? uint256(a0) : uint256(a1);
+        // casting to 'uint256' is safe because uniswap return convention
+        // forge-lint: disable-next-line(unsafe-typecast)
+        amountOut = zeroForOne ? uint256(-a1) : uint256(-a0);
     }
 
-    /// @notice Swap `tokenIn` for up to `amountOutRequested` of `tokenOut` directly on `pool`, stopping early if the
-    /// pool's marginal price reaches `sqrtPriceLimitX96`. Reverts if the realized `amountIn` exceeds `maxAmountIn`.
-    /// @dev Exact-output via a negative `amountSpecified`. On a partial fill (price limit hit) `amountOut` is less than
-    /// `amountOutRequested` and `amountIn` is the corresponding spend. `sqrtPriceLimitX96` MUST sit on the side the
-    /// price moves toward (below spot for 0->1, above for 1->0), otherwise the pool reverts `SPL`; callers check the
-    /// live price first via `swapLimit`. The pool calls this contract's `uniswapV3SwapCallback` to pull `tokenIn`, so
-    /// the caller MUST hold at least `maxAmountIn` of `tokenIn`. Recipient is `address(this)`.
-    /// @param pool The Uniswap V3 pool for the `tokenIn`/`tokenOut` pair.
+    /// @notice Swap tokenIn for tokenOut
+    /// @dev The caller of this method receives a callback in the form of IUniswapV3SwapCallback#uniswapV3SwapCallback
     /// @param tokenIn Token being sold.
     /// @param tokenOut Token being bought.
-    /// @param amountOutRequested Target amount of `tokenOut` to receive.
-    /// @param sqrtPriceLimitX96 Q64.96 marginal-price bound the swap will not cross.
-    /// @return amountIn Realized `tokenIn` spent.
-    /// @return amountOut Realized `tokenOut` received (<= `amountOutRequested`).
+    /// @param amountOutRequested Maximum amount of `tokenOut` to receive.
+    /// @param sqrtPriceLimitX96 The Q64.96 sqrt price limit. If zero for one, the price cannot move beyond this limit.
+    /// @return amountIn Realized amount of `tokenIn` spent.
+    /// @return amountOut Realized amount of `tokenOut` received.
     function swapExactOutToLimit(
         IUniswapV3Pool pool,
         IERC20 tokenIn,
@@ -77,31 +64,21 @@ library SwapLib {
         uint160 sqrtPriceLimitX96
     ) internal returns (uint256 amountIn, uint256 amountOut) {
         bool zeroForOne = address(tokenIn) < address(tokenOut);
-        // `0` means "no limit": the router used to substitute the inclusive-adjacent bounds internally (MIN+1 / MAX-1,
-        // because the pool requires the limit to be STRICTLY inside `(MIN_SQRT_RATIO, MAX_SQRT_RATIO)`); `pool.swap`
-        // has no such convention and reverts `SPL` on 0 (and on the bare bounds), so mirror the router's substitution
-        // here.
-        uint160 limit =
-            sqrtPriceLimitX96 == 0 ? (zeroForOne ? MIN_SQRT_RATIO + 1 : MAX_SQRT_RATIO - 1) : sqrtPriceLimitX96;
-        (int256 amount0, int256 amount1) = pool.swap(
-            address(this), zeroForOne, -SafeCast.toInt256(amountOutRequested), limit, abi.encode(address(tokenIn))
-        );
-        amountIn = zeroForOne ? uint256(amount0) : uint256(amount1);
-        amountOut = zeroForOne ? uint256(-amount1) : uint256(-amount0);
+        uint160 limit = _setUnsetLimit(sqrtPriceLimitX96, zeroForOne);
+        bytes memory data = abi.encode(address(tokenIn));
+        // casting is safe because will only use tokens with supply well below 2**256
+        // forge-lint: disable-next-line(unsafe-typecast)
+        (int256 a0, int256 a1) = pool.swap(address(this), zeroForOne, -int256(amountOutRequested), limit, data);
+        // casting to 'uint256' is safe because uniswap return convention
+        // forge-lint: disable-next-line(unsafe-typecast)
+        amountIn = zeroForOne ? uint256(a0) : uint256(a1);
+        // casting to 'uint256' is safe because uniswap return convention
+        // forge-lint: disable-next-line(unsafe-typecast)
+        amountOut = zeroForOne ? uint256(-a1) : uint256(-a0);
     }
 
     /// @notice Resolve the `sqrtPriceLimitX96` and a go/skip flag for a swap selling `tokenIn` for `tokenOut` on
-    /// `pool`, bounding price impact to `maxSlippageBps` away from a fair rate of `outPerInNum / outPerInDen`
-    /// (`tokenOut` per `tokenIn`, with token decimals already baked into the fraction). Pure Uniswap-price math: it
-    /// does not know or care which token is the loan/oracle side.
-    /// @dev The pool price is `token1/token0` (token0 = the
-    /// lower-address token). The fair rate is mapped to that coordinate and discounted toward the side the swap moves
-    /// it: selling token0 (`zeroForOne`) drives the price down (limit below spot), selling token1 drives it up (limit
-    /// above spot). The pool then fills only while its marginal price is on the good side of the limit, so the realized
-    /// average price is bounded by `maxSlippageBps` of price impact relative to the fair rate.
-    ///
-    /// `ok` is false when the limit is out of tick-math range, or when the pool's live marginal price is already on the
-    /// bad side of it (any swap would no-op or revert `SPL`) - the caller then skips.
+    /// `pool`, bounding price impact to `maxSlippageBps` away from a fair rate of `outPerInNum / outPerInDen`.
     /// @param pool The Uniswap V3 pool address for the `tokenIn`/`tokenOut` pair.
     /// @param tokenIn The token the swap sells.
     /// @param tokenOut The token the swap buys.
@@ -118,9 +95,6 @@ library SwapLib {
         uint256 outPerInDen,
         uint256 maxSlippageBps
     ) external view returns (uint160 limit, bool ok) {
-        // Uniswap orders the pair by address: token0 is the lower-address token
-        // and the pool price is token1/token0. Selling token0 (`zeroForOne`) pushes
-        // the price down; selling token1 pushes it up.
         bool zeroForOne = address(tokenIn) < address(tokenOut);
 
         // Fair price as an exact token1/token0 fraction. Selling token0 makes token1/token0
@@ -145,7 +119,6 @@ library SwapLib {
         // The limit must sit on the side the price moves toward: below spot for a
         // price-decreasing swap, above spot for a price-increasing one. If the pool
         // is already past it, there is no room to trade within tolerance.
-        // slither-disable-next-line unused-return -> only sqrtPriceX96 is read; the other slot0 fields are unused
         (uint160 spot,,,,,,) = pool.slot0();
         if (zeroForOne && raw >= spot) return (0, false);
         if (!zeroForOne && raw <= spot) return (0, false);
@@ -153,5 +126,16 @@ library SwapLib {
         // casting to 'uint160' is safe because MAX_SQRT_RATIO is uint160 and raw is smaller.
         // forge-lint: disable-next-line(unsafe-typecast)
         return (uint160(raw), true);
+    }
+
+    function _setUnsetLimit(uint160 sqrtPriceLimitX96, bool zeroForOne) internal pure returns (uint160 limit) {
+        if (sqrtPriceLimitX96 != 0) {
+            return sqrtPriceLimitX96;
+        }
+        if (zeroForOne) {
+            return MIN_SQRT_RATIO + 1;
+        } else {
+            return MAX_SQRT_RATIO - 1;
+        }
     }
 }

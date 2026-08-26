@@ -14,7 +14,6 @@ library FeesLib {
     using MarketParamsLib for MarketParams;
 
     uint256 private constant SECONDS_PER_YEAR = 365 days;
-    uint256 private constant BPS = 10_000;
 
     /// @notice Calculates the fee shares to mint for the given parameters
     /// @dev Pure calculation only; the caller is responsible for emitting `FeesAccrued` with the returned components.

@@ -390,4 +390,21 @@ contract FCMRedeemTest is Test, Deployers {
         vault.redeem(1 ether, alice, alice);
         assertEq(LOAN_TOKEN.balanceOf(address(vault)), 10 ether);
     }
+
+    function test_redeem_unhealthyAndNoYield() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+
+        setYieldPrice(1);
+        setCollateralPrice(COLLATERAL_PRICE.mulDiv(80, 100));
+
+        assertGt(vault.ltv(), LTV_MAX);
+        assertLt(vault.ltv(), MARKET_LLTV);
+        assertGt(vault.totalAssets(), 0);
+
+        // only way to withdraw is to use redeemInKind
+        vm.expectRevert(Errors.vaultUnhealthy());
+        vm.prank(alice);
+        vault.redeem(shares, alice, alice);
+    }
 }

@@ -223,4 +223,19 @@ contract FCMRedeemInKindTest is Test, Deployers {
 
         vault.redeemInKind(shares, alice, alice);
     }
+
+    function test_redeem_unhealthyAndNoYield() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+
+        setYieldPrice(1);
+        setCollateralPrice(COLLATERAL_PRICE.mulDiv(80, 100));
+
+        assertGt(vault.ltv(), LTV_MAX);
+        assertLt(vault.ltv(), MARKET_LLTV);
+        assertGt(vault.totalAssets(), 0);
+
+        vm.prank(alice);
+        vault.redeemInKind(shares, alice, alice);
+    }
 }
