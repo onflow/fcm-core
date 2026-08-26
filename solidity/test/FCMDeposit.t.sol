@@ -342,4 +342,26 @@ contract FCMDepositTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
     }
+
+    function test_deposit_CollateralDonation() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        deal(address(COLLATERAL_TOKEN), address(vault), 10 ether);
+
+        vm.prank(bob);
+        vault.deposit(1 ether, bob);
+        assertEq(COLLATERAL_TOKEN.balanceOf(address(vault)), 10 ether);
+    }
+
+    function test_deposit_LoanDonation() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        deal(address(LOAN_TOKEN), address(vault), 10 ether);
+
+        vm.prank(bob);
+        vault.deposit(1 ether, bob);
+        assertEq(LOAN_TOKEN.balanceOf(address(vault)), 10 ether);
+    }
 }

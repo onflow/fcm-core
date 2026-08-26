@@ -203,4 +203,26 @@ contract FCMHarvestTest is Test, Deployers {
         vault.harvest(0);
         assertEq(vault.collateral(), 1 ether);
     }
+
+    function test_harvest_CollateralDonation() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        setYieldPrice(YIELD_PRICE * 2);
+        deal(address(COLLATERAL_TOKEN), address(vault), 10 ether);
+
+        vault.harvest(type(uint256).max);
+        assertEq(COLLATERAL_TOKEN.balanceOf(address(vault)), 10 ether);
+    }
+
+    function test_harvest_LoanDonation() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        setYieldPrice(YIELD_PRICE * 2);
+        deal(address(LOAN_TOKEN), address(vault), 10 ether);
+
+        vault.harvest(type(uint256).max);
+        assertEq(LOAN_TOKEN.balanceOf(address(vault)), 10 ether);
+    }
 }

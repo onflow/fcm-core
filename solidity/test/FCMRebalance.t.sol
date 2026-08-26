@@ -358,4 +358,26 @@ contract FCMRebalanceTest is Test, Deployers {
 
         assertEq(vault.debt(), debtBefore);
     }
+
+    function test_rebalance_CollateralDonation() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        setYieldPrice(YIELD_PRICE * 2);
+        deal(address(COLLATERAL_TOKEN), address(vault), 10 ether);
+
+        vault.rebalance();
+        assertEq(COLLATERAL_TOKEN.balanceOf(address(vault)), 10 ether);
+    }
+
+    function test_rebalance_LoanDonation() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        setYieldPrice(YIELD_PRICE * 2);
+        deal(address(LOAN_TOKEN), address(vault), 10 ether);
+
+        vault.rebalance();
+        assertEq(LOAN_TOKEN.balanceOf(address(vault)), 10 ether);
+    }
 }

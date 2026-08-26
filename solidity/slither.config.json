@@ -8,7 +8,6 @@
     "reentrancy-balance",
     "reentrancy-no-eth",
     "reentrancy-events",
-    "unused-return",
     "missing-zero-check",
     "incorrect-equality"
   ],

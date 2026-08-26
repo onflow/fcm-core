@@ -23,4 +23,22 @@ contract FCMTotalAssetsTest is Test, Deployers {
 
         assertApproxEqAbs(vault.totalAssets(), 1 ether, 1);
     }
+
+    function test_totalAssets_depositCollateralDonation() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        uint256 navBefore = vault.totalAssets();
+        deal(address(COLLATERAL_TOKEN), address(vault), 10 ether);
+        assertEq(vault.totalAssets(), navBefore);
+    }
+
+    function test_totalAssets_depositLoanDonation() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        uint256 navBefore = vault.totalAssets();
+        deal(address(LOAN_TOKEN), address(vault), 10 ether);
+        assertEq(vault.totalAssets(), navBefore);
+    }
 }

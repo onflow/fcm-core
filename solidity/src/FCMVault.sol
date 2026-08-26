@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IFCMVault} from "./interfaces/IFCMVault.sol";
-import {IUniswapV3SwapCallback} from "./interfaces/IUniswapV3SwapCallback.sol";
+import {IUniswapV3SwapCallback} from "./interfaces/external/IUniswapV3SwapCallback.sol";
 import {IUniswapV3Pool} from "./interfaces/external/IUniswapV3Pool.sol";
 import "./libraries/ConstantsLib.sol";
 import {FeesLib} from "./libraries/FeesLib.sol";
@@ -257,11 +257,11 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         if (yieldToHarvest == 0) return;
 
         (, uint256 loanGot) = _swapYieldToLoanWithLimit({yieldToSell: yieldToHarvest, loanToGet: 0});
-        (, uint256 collateralAdded) = _swapLoanToCollateralWithLimit(loanGot);
+        (uint256 loanIn, uint256 collateralAdded) = _swapLoanToCollateralWithLimit(loanGot);
+        require(loanIn == loanGot, LeftoverLoanTokens());
         if (collateralAdded > 0) {
             MORPHO.supplyCollateral(_market(), collateralAdded, address(this), "");
         }
-        if (LOAN_TOKEN.balanceOf(address(this)) > 0) revert LeftoverLoanTokens();
 
         emit Harvested(yield - _yield(), collateralAdded);
     }
@@ -553,7 +553,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
     function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external override {
         require(msg.sender == address(YIELD_LOAN_POOL) || msg.sender == address(COLLATERAL_LOAN_POOL), Unauthorized());
         address tokenIn = abi.decode(data, (address));
-        uint256 amountToPay = amount0Delta > 0 ? uint256(amount0Delta) : uint256(amount1Delta);
+        uint256 amountToPay = amount0Delta > 0 ? SafeCast.toUint256(amount0Delta) : SafeCast.toUint256(amount1Delta);
         IERC20(tokenIn).safeTransfer(msg.sender, amountToPay);
     }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {IUniswapV3SwapCallback} from "../../src/interfaces/IUniswapV3SwapCallback.sol";
+import {IUniswapV3SwapCallback} from "../../src/interfaces/external/IUniswapV3SwapCallback.sol";
 import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
 import {MockERC20} from "./MockERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";

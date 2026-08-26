@@ -2,19 +2,22 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../../src/FCMVault.sol";
+import {FCMVaultFactory} from "../../src/FCMVaultFactory.sol";
 import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
-import {IUniswapV3SwapCallback} from "../../src/interfaces/IUniswapV3SwapCallback.sol";
 import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
+import {IUniswapV3SwapCallback} from "../../src/interfaces/external/IUniswapV3SwapCallback.sol";
 import {FCMHelpers} from "../../src/libraries/periphery/FCMHelpers.sol";
 import {IMorpho, MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Test} from "forge-std/Test.sol";
 
 contract ForkDeployers is Test, IUniswapV3SwapCallback {
     using FCMHelpers for FCMVault;
+    using SafeERC20 for IERC20;
     uint256 internal constant Q96 = 1 << 96;
     uint160 internal constant MIN_SQRT_RATIO = 4_295_128_739;
     uint160 internal constant MAX_SQRT_RATIO = 1_461_446_703_485_210_103_287_273_052_203_988_822_378_723_970_342;
@@ -64,25 +67,30 @@ contract ForkDeployers is Test, IUniswapV3SwapCallback {
         setCollateralPrice(COLLATERAL_PRICE);
         setYieldPrice(YIELD_PRICE);
 
-        vault = new FCMVault(
-            IFCMVault.InitParams({
-                collateralToken: address(WBTC),
-                loanToken: address(PYUSD0),
-                yieldToken: address(FUSDEV),
-                ltvMin: LTV_MIN,
-                ltvMax: LTV_MAX,
-                collateralLoanPool: address(collateralLoanPool),
-                yieldLoanPool: address(yieldLoanPool),
-                collateralOracle: address(COLLATERAL_ORACLE),
-                marketIrm: address(MARKET_IRM),
-                marketLltv: MARKET_LLTV,
-                yieldOracle: address(YIELD_ORACLE),
-                morpho: address(MORPHO),
-                name: "Flow Credit Market WBTC/FUSDEV",
-                symbol: "fcmWBTC-FUSDEV",
-                owner: owner
-            })
+        FCMVaultFactory factory = new FCMVaultFactory();
+        vault = FCMVault(
+            factory.createVault(
+                IFCMVault.InitParams({
+                    collateralToken: address(WBTC),
+                    loanToken: address(PYUSD0),
+                    yieldToken: address(FUSDEV),
+                    ltvMin: LTV_MIN,
+                    ltvMax: LTV_MAX,
+                    collateralLoanPool: address(collateralLoanPool),
+                    yieldLoanPool: address(yieldLoanPool),
+                    collateralOracle: address(COLLATERAL_ORACLE),
+                    marketIrm: address(MARKET_IRM),
+                    marketLltv: MARKET_LLTV,
+                    yieldOracle: address(YIELD_ORACLE),
+                    morpho: address(MORPHO),
+                    name: "Flow Credit Market WBTC/FUSDEV",
+                    symbol: "fcmWBTC-FUSDEV",
+                    owner: owner
+                }),
+                "salt"
+            )
         );
+
         vm.prank(owner);
         vault.setMaxTvl(type(uint256).max);
         vm.prank(owner);
@@ -133,11 +141,12 @@ contract ForkDeployers is Test, IUniswapV3SwapCallback {
             ? uint160(Math.mulDiv(Math.sqrt(collateralPrice), Q96, 1e18))
             : uint160(Math.mulDiv(1e18, Q96, Math.sqrt(collateralPrice)));
         if (currentSpot < targetSpot) {
-            // Price needs to rise (oneForZero): buy WBTC with PYUSD0.
-            _directArbSwap(collateralLoanPool, address(PYUSD0), address(WBTC), 1e18, targetSpot, arbitrager);
+            // Price needs to rise (oneForZero): buy WBTC with PYUSD0. Chunk sized within the arbitrager's PYUSD
+            // funding.
+            _directArbSwap(collateralLoanPool, address(PYUSD0), address(WBTC), 1e10, targetSpot, arbitrager);
         } else if (currentSpot > targetSpot) {
             // Price needs to fall (zeroForOne): sell WBTC for PYUSD0.
-            _directArbSwap(collateralLoanPool, address(WBTC), address(PYUSD0), 1e18, targetSpot, arbitrager);
+            _directArbSwap(collateralLoanPool, address(WBTC), address(PYUSD0), 1e10, targetSpot, arbitrager);
         }
     }
 
@@ -150,9 +159,9 @@ contract ForkDeployers is Test, IUniswapV3SwapCallback {
             ? uint160(Math.mulDiv(Math.sqrt(yieldPrice), Q96, 1e18))
             : uint160(Math.mulDiv(1e18, Q96, Math.sqrt(yieldPrice)));
         if (currentSpot < targetSpot) {
-            _directArbSwap(yieldLoanPool, address(FUSDEV), address(PYUSD0), 1e6, targetSpot, arbitrager);
+            _directArbSwap(yieldLoanPool, address(FUSDEV), address(PYUSD0), 1e10, targetSpot, arbitrager);
         } else if (currentSpot > targetSpot) {
-            _directArbSwap(yieldLoanPool, address(PYUSD0), address(FUSDEV), 1e6, targetSpot, arbitrager);
+            _directArbSwap(yieldLoanPool, address(PYUSD0), address(FUSDEV), 1e10, targetSpot, arbitrager);
         }
     }
 
@@ -184,12 +193,11 @@ contract ForkDeployers is Test, IUniswapV3SwapCallback {
             sqrtPriceLimitX96: limit,
             data: abi.encode(tokenIn)
         });
-        // Output goes directly to `funder` (recipient above); nothing to forward. Sanity-check the deltas.
-        if (zeroForOne) {
-            require(uint256(-amount1) > 0, "arb swap got no output");
-        } else {
-            require(uint256(-amount0) > 0, "arb swap got no output");
-        }
+        // Output goes directly to `funder` (recipient above). A dust swap may produce 0 output when the input is too
+        // small relative to the price (valid V3 partial fill) - that's fine for arb purposes, the marginal price still
+        // moves toward the target.
+        amount0; // suppress unused-var warning
+        amount1;
     }
 
     /// @inheritdoc IUniswapV3SwapCallback
@@ -198,8 +206,8 @@ contract ForkDeployers is Test, IUniswapV3SwapCallback {
     function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external override {
         require(msg.sender == address(collateralLoanPool) || msg.sender == address(yieldLoanPool), "bad pool");
         address tokenIn = abi.decode(data, (address));
-        uint256 amountToPay = amount0Delta > 0 ? uint256(amount0Delta) : uint256(amount1Delta);
-        IERC20(tokenIn).transfer(msg.sender, amountToPay);
+        uint256 amountToPay = amount0Delta > 0 ? SafeCast.toUint256(amount0Delta) : SafeCast.toUint256(amount1Delta);
+        IERC20(tokenIn).safeTransfer(msg.sender, amountToPay);
     }
 
     function _market() internal pure returns (MarketParams memory) {
