@@ -52,4 +52,10 @@ contract FCMMiscTest is Test, Deployers {
         vm.expectRevert(Errors.unauthorized());
         vault.onMorphoRepay(0, "");
     }
+
+    function test_misc_uniswapV3SwapCallbackRevertsWhenNotConfiguredPool() public {
+        vm.prank(alice);
+        vm.expectRevert(Errors.unauthorized());
+        vault.uniswapV3SwapCallback(0, 0, "");
+    }
 }

@@ -146,7 +146,6 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
 
         require(p.collateralOracle != address(0), ZeroAddress());
         require(p.marketIrm != address(0), ZeroAddress());
-        require(p.marketLltv != 0, ZeroAddress());
         require(p.yieldOracle != address(0), ZeroAddress());
         require(p.morpho != address(0), ZeroAddress());
 

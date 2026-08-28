@@ -98,4 +98,60 @@ contract FCMConstructorTest is Test, Deployers {
         assertEq(COLLATERAL_TOKEN.allowance(address(v), address(MORPHO)), type(uint256).max);
         assertEq(LOAN_TOKEN.allowance(address(v), address(MORPHO)), type(uint256).max);
     }
+
+    function test_constructor_revertsWhenCollateralTokenIsZeroAddress() public {
+        IFCMVault.InitParams memory p = defaultInitParams();
+        p.collateralToken = address(0);
+        vm.expectRevert(Errors.zeroAddress());
+        new FCMVault(p);
+    }
+
+    function test_constructor_revertsWhenLoanTokenIsZeroAddress() public {
+        IFCMVault.InitParams memory p = defaultInitParams();
+        p.loanToken = address(0);
+        vm.expectRevert(Errors.zeroAddress());
+        new FCMVault(p);
+    }
+
+    function test_constructor_revertsWhenYieldTokenIsZeroAddress() public {
+        IFCMVault.InitParams memory p = defaultInitParams();
+        p.yieldToken = address(0);
+        vm.expectRevert(Errors.zeroAddress());
+        new FCMVault(p);
+    }
+
+    function test_constructor_revertsWhenCollateralOracleIsZeroAddress() public {
+        IFCMVault.InitParams memory p = defaultInitParams();
+        p.collateralOracle = address(0);
+        vm.expectRevert(Errors.zeroAddress());
+        new FCMVault(p);
+    }
+
+    function test_constructor_revertsWhenMarketIrmIsZeroAddress() public {
+        IFCMVault.InitParams memory p = defaultInitParams();
+        p.marketIrm = address(0);
+        vm.expectRevert(Errors.zeroAddress());
+        new FCMVault(p);
+    }
+
+    function test_constructor_revertsWhenMarketLltvIsZero() public {
+        IFCMVault.InitParams memory p = defaultInitParams();
+        p.marketLltv = 0;
+        vm.expectRevert(Errors.invalidLtv());
+        new FCMVault(p);
+    }
+
+    function test_constructor_revertsWhenYieldOracleIsZeroAddress() public {
+        IFCMVault.InitParams memory p = defaultInitParams();
+        p.yieldOracle = address(0);
+        vm.expectRevert(Errors.zeroAddress());
+        new FCMVault(p);
+    }
+
+    function test_constructor_revertsWhenMorphoIsZeroAddress() public {
+        IFCMVault.InitParams memory p = defaultInitParams();
+        p.morpho = address(0);
+        vm.expectRevert(Errors.zeroAddress());
+        new FCMVault(p);
+    }
 }

@@ -407,4 +407,16 @@ contract FCMRedeemTest is Test, Deployers {
         vm.prank(alice);
         vault.redeem(shares, alice, alice);
     }
+
+    function test_redeem_underwater() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+
+        setYieldPrice(YIELD_PRICE / 2);
+        MORPHO.liquidate(vault.market(), address(vault), vault.collateral(), 0);
+
+        vm.expectRevert(Errors.vaultUnhealthy());
+        vm.prank(alice);
+        vault.redeem(shares, alice, alice);
+    }
 }

@@ -292,4 +292,10 @@ contract FCMFeesTest is Test, Deployers {
 
         assertEq(vault.balanceOf(carol), 0);
     }
+
+    function test_fees_setFeeRecipientRevertsZeroAddress() public {
+        vm.expectRevert(Errors.zeroAddress());
+        vm.prank(owner);
+        vault.setFeeRecipient(address(0));
+    }
 }
