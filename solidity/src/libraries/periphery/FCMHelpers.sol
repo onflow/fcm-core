@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {IFCMVault} from "../interfaces/IFCMVault.sol";
-import {MorphoLib} from "./MorphoLib.sol";
+import {IFCMVault} from "../../interfaces/IFCMVault.sol";
+import {LTV_SCALE, ORACLE_PRICE_SCALE} from "../ConstantsLib.sol";
+import {MorphoLib} from "../MorphoLib.sol";
 import {IMorpho, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+
+// forge-lint: disable-start(internal-function-used-once)
 
 /// @title FCMHelpers
 /// @author Flow Foundation
@@ -14,20 +18,24 @@ import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 library FCMHelpers {
     using MarketParamsLib for MarketParams;
     using MorphoLib for IMorpho;
+    using Math for uint256;
 
-    function market(IFCMVault vault) internal view returns (MarketParams memory _market) {
-        _market.loanToken = address(vault.LOAN_TOKEN());
-        _market.collateralToken = address(vault.COLLATERAL_TOKEN());
-        _market.oracle = address(vault.MARKET_ORACLE());
-        _market.irm = address(vault.MARKET_IRM());
-        _market.lltv = vault.MARKET_LLTV();
-        return _market;
+    function market(IFCMVault vault) internal view returns (MarketParams memory market_) {
+        market_.loanToken = address(vault.LOAN_TOKEN());
+        market_.collateralToken = address(vault.COLLATERAL_TOKEN());
+        market_.oracle = address(vault.COLLATERAL_ORACLE());
+        market_.irm = address(vault.MARKET_IRM());
+        market_.lltv = vault.MARKET_LLTV();
     }
 
     /// @dev The vault's outstanding debt in its Morpho market, in raw loan-token units. Delegates to
     /// `MorphoLib.debt(morpho, market, address(vault))`.
     function debt(IFCMVault vault) internal view returns (uint256) {
         return vault.MORPHO().debt(market(vault), address(vault));
+    }
+
+    function debtInCollateralAssets(IFCMVault vault) internal view returns (uint256) {
+        return debt(vault).mulDiv(ORACLE_PRICE_SCALE, vault.COLLATERAL_ORACLE().price());
     }
 
     /// @dev The vault's collateral supplied to its Morpho market, in raw collateral-token units. Delegates to
@@ -45,12 +53,12 @@ library FCMHelpers {
         return vault.MORPHO().position(market(vault).id(), address(vault));
     }
 
-    /// @notice Current health factor of the vault's Morpho position (WAD-scaled).
-    /// @dev WAD-scaled. `WAD` (1e18) is the liquidation line; below `HEALTH_FACTOR_MIN` is over-levered, above
-    /// `HEALTH_FACTOR_MAX` is under-levered. Delegates to `MorphoLib.healthFactor(morpho, market, address(vault))`,
-    /// which reads both the vault's collateral and its debt (not the caller's), so it is safe to call from a test.
-    /// @param vault The vault whose health factor is being read.
-    function healthFactor(IFCMVault vault) internal view returns (uint256) {
-        return vault.MORPHO().healthFactor(market(vault), address(vault));
+    /// @notice Current LTV of the vault's Morpho position (1e18-scaled).
+    /// @dev Returns 0 when the position is empty, `type(uint256).max` when debt remains but collateral is gone.
+    /// @param vault The vault whose LTV is being read.
+    function ltv(IFCMVault vault) internal view returns (uint256) {
+        uint256 coll = collateral(vault);
+        if (coll == 0) return debt(vault) == 0 ? 0 : type(uint256).max;
+        return debtInCollateralAssets(vault).mulDiv(LTV_SCALE, coll);
     }
 }

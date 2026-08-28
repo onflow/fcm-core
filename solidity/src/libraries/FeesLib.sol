@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {MorphoLib} from "./MorphoLib.sol";
+import {BPS, LTV_SCALE} from "./ConstantsLib.sol";
 import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -14,7 +14,6 @@ library FeesLib {
     using MarketParamsLib for MarketParams;
 
     uint256 private constant SECONDS_PER_YEAR = 365 days;
-    uint256 private constant BPS = 10_000;
 
     /// @notice Calculates the fee shares to mint for the given parameters
     /// @dev Pure calculation only; the caller is responsible for emitting `FeesAccrued` with the returned components.
@@ -35,7 +34,7 @@ library FeesLib {
         uint256 perfHighWaterMark,
         uint256 lastFeeAccrual
     ) external view returns (uint256 managementFee, uint256 performanceFee, uint256 feeShares) {
-        uint256 pricePerShare = nav.mulDiv(MorphoLib.WAD, claims);
+        uint256 pricePerShare = nav.mulDiv(LTV_SCALE, claims);
         // Bill exactly `rate * elapsed` since the last accrual, then advance the clock
         // (accrual is irregular: every interaction + permissionless accrueFees).
         // The billable gap is capped at one year, so the fee is
@@ -46,8 +45,10 @@ library FeesLib {
         // continuous limit (negligible span <= ~r^2/2: ~0.02% at bps=200,
         // ~0.48% at the 1000 cap).
         uint256 elapsed = block.timestamp - lastFeeAccrual;
+        // forge-lint: disable-next-line(block-timestamp)
         if (elapsed > SECONDS_PER_YEAR) elapsed = SECONDS_PER_YEAR;
 
+        // forge-lint: disable-next-line(block-timestamp)
         if (managementFeeBps > 0 && elapsed > 0) {
             managementFee = nav.mulDiv(managementFeeBps * elapsed, BPS * SECONDS_PER_YEAR);
         }
@@ -58,7 +59,7 @@ library FeesLib {
             // profit that later reverses - kept, not refunded. The mint goes to the
             // recipient, not the triggerer, so a permissionless accrueFees call can't
             // pay its caller; the strict HWM charges net all-time highs only.
-            uint256 gain = (pricePerShare - perfHighWaterMark).mulDiv(claims, MorphoLib.WAD);
+            uint256 gain = (pricePerShare - perfHighWaterMark).mulDiv(claims, LTV_SCALE);
             performanceFee = gain.mulDiv(performanceFeeBps, BPS);
         }
 

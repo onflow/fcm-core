@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -45,13 +45,13 @@ contract FCMFeesTest is Test, Deployers {
     }
 
     function test_fees_setFeesCaps() public {
-        vm.expectRevert(Errors.invalidFee());
+        vm.expectRevert(Errors.maxFeeRateExceeded());
         vm.prank(owner);
         vault.setManagementFeeBps(1001);
         vm.prank(owner);
         vault.setManagementFeeBps(1000);
 
-        vm.expectRevert(Errors.invalidFee());
+        vm.expectRevert(Errors.maxFeeRateExceeded());
         vm.prank(owner);
         vault.setPerformanceFeeBps(5001);
         vm.prank(owner);
@@ -230,5 +230,66 @@ contract FCMFeesTest is Test, Deployers {
         vault.accrueFees();
 
         assertGt(vault.balanceOf(carol), 0);
+    }
+
+    function test_fees_initialPerfHighWaterMark() public {
+        setCollateralPrice(COLLATERAL_PRICE * 100);
+        setYieldPrice(YIELD_PRICE * 10_000);
+        vault.accrueFees();
+
+        vm.startPrank(owner);
+        vault.setManagementFeeBps(100);
+        vault.setFeeRecipient(carol);
+        vault.grantEarlyAccess(carol);
+        vm.warp(block.timestamp + 30 days);
+        vm.stopPrank();
+
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        assertEq(vault.balanceOf(carol), 0);
+    }
+
+    function test_fees_dustDeposit() public {
+        vm.startPrank(owner);
+        vault.setManagementFeeBps(100);
+        vault.setFeeRecipient(carol);
+        vault.grantEarlyAccess(carol);
+        vm.stopPrank();
+        vm.prank(alice);
+        vault.deposit(1, alice);
+        vm.warp(block.timestamp + 30 days);
+
+        vm.prank(alice);
+        vault.deposit(1 ether - 1, alice);
+        vault.accrueFees();
+
+        assertEq(vault.balanceOf(carol), 0);
+    }
+
+    function test_fees_afterEmptyPeriod() public {
+        vm.startPrank(owner);
+        vault.setManagementFeeBps(100);
+        vault.setFeeRecipient(bob);
+        vault.grantEarlyAccess(bob);
+        vm.stopPrank();
+
+        vm.prank(alice);
+        uint256 shares = vault.deposit(0.5 ether, alice);
+        vm.warp(block.timestamp + 365 days);
+        vault.accrueFees();
+
+        vm.prank(alice);
+        vault.redeem(shares, alice, alice);
+
+        vm.prank(owner);
+        vault.setFeeRecipient(carol);
+        vm.warp(block.timestamp + 365 days);
+        setYieldPrice(YIELD_PRICE * 2);
+        vm.prank(alice);
+        vault.deposit(0.5 ether, alice);
+        vault.accrueFees();
+
+        assertEq(vault.balanceOf(carol), 0);
     }
 }

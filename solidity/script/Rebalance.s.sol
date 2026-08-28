@@ -2,16 +2,15 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
-import {IMorpho, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
-import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
+import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
 import {Script, console} from "forge-std/Script.sol";
 
 /// @title Rebalance
 /// @notice Drives a LIVE FCMVault's leveraged Morpho position back inside its
-///         configured health-factor band, rebalancing to the re-entry target.
+///         configured LTV band, rebalancing to the re-entry target.
 ///         `rebalance` is permissionless, so any account with FLOW for gas can
 ///         run this.
 ///
@@ -39,54 +38,26 @@ contract Rebalance is Script {
     function run() public {
         FCMVault vault = FCMVault(vm.envAddress("VAULT"));
 
-        uint256 hfBefore = _healthFactor(vault);
-        uint256 debtBefore = _debt(vault);
+        uint256 ltvBefore = vault.ltv();
+        uint256 debtBefore = vault.debt();
 
         vm.startBroadcast();
         vault.rebalance();
         vm.stopBroadcast();
 
-        uint256 hfAfter = _healthFactor(vault);
-        uint256 debtAfter = _debt(vault);
+        uint256 ltvAfter = vault.ltv();
+        uint256 debtAfter = vault.debt();
 
         console.log("=== rebalance complete ===");
         console.log("vault:      %s", address(vault));
-        console.log("HF min:     %s", vault.HEALTH_FACTOR_MIN());
-        console.log("HF max:     %s", vault.HEALTH_FACTOR_MAX());
-        console.log("HF before:  %s", hfBefore);
-        console.log("HF after:   %s", hfAfter);
+        console.log("LTV min:    %s", vault.LTV_MIN());
+        console.log("LTV max:    %s", vault.LTV_MAX());
+        console.log("LTV before:  %s", ltvBefore);
+        console.log("LTV after:   %s", ltvAfter);
         console.log("debt before: %s", debtBefore);
         console.log("debt after:  %s", debtAfter);
         if (debtAfter == debtBefore) {
-            console.log("no-op: HF was inside [min, max]");
+            console.log("no-op: LTV was inside [min, max]");
         }
-    }
-
-    /// @dev Reads the vault's Morpho market params and computes the position's
-    ///      health factor the same way the contract does (WAD-scaled). Returns
-    ///      `type(uint256).max` when there is no debt.
-    function _healthFactor(FCMVault vault) internal view returns (uint256) {
-        MarketParams memory mp = vault.market();
-        Position memory pos = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f).position(mp.id(), address(vault));
-        if (pos.borrowShares == 0) return type(uint256).max;
-        uint256 debt = _debtFromPosition(mp, pos);
-        uint256 maxBorrow = (uint256(pos.collateral) * ((IOracle(mp.oracle).price() * mp.lltv) / 1e36)) / 1e18;
-        return (maxBorrow * 1e18) / debt;
-    }
-
-    /// @dev The vault's outstanding debt in loan-token units.
-    function _debt(FCMVault vault) internal view returns (uint256) {
-        MarketParams memory mp = vault.market();
-        Position memory pos = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f).position(mp.id(), address(vault));
-        if (pos.borrowShares == 0) return 0;
-        return _debtFromPosition(mp, pos);
-    }
-
-    /// @dev Converts borrow shares to loan-token debt with Morpho's own
-    ///      `SharesMathLib.toAssetsUp`, matching how Morpho charges debt (and
-    ///      the contract's `MorphoLib.debt`).
-    function _debtFromPosition(MarketParams memory mp, Position memory pos) internal view returns (uint256) {
-        Market memory mkt = IMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f).market(mp.id());
-        return uint256(pos.borrowShares).toAssetsUp(uint256(mkt.totalBorrowAssets), uint256(mkt.totalBorrowShares));
     }
 }

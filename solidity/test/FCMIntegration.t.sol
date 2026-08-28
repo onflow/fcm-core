@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Test, console} from "forge-std/Test.sol";
@@ -16,6 +16,8 @@ contract FCMIntegrationTest is Test, Deployers {
         deployVault();
         vm.prank(owner);
         vault.setMaxTvl(100 ether);
+        vm.prank(owner);
+        vault.setMaxSlippageBps(100);
         grantFundApprove(alice, 1 ether);
         vm.prank(alice);
         vault.approve(address(vault), type(uint256).max);
@@ -57,23 +59,43 @@ contract FCMIntegrationTest is Test, Deployers {
     function test_integration_recoveryAfterLiquidation() public {
         vm.prank(alice);
         uint256 shares = vault.deposit(1 ether, alice);
+        uint256 debt = vault.debt();
         uint256 yield = YIELD_TOKEN.balanceOf(address(vault));
+        console.log("debt", debt);
         console.log("yield", yield);
 
-        MORPHO.liquidate(vault.market(), address(vault), 0.5 ether, 1000 ether);
+        MORPHO.liquidate(vault.market(), address(vault), 0.5 ether, debt.mulDiv(65, 100));
 
         vault.harvest(type(uint256).max);
         vault.rebalance();
 
         vm.prank(alice);
         uint256 assetsOut = vault.redeem(shares, alice, alice);
-        assertApproxEqAbs(assetsOut, 1 ether, 2);
+        assertApproxEqRel(assetsOut, 1 ether, 10e16);
+    }
+
+    function test_integration_recoveryAfterBadLiquidation() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        uint256 debt = vault.debt();
+        uint256 yield = YIELD_TOKEN.balanceOf(address(vault));
+        console.log("debt", debt);
+        console.log("yield", yield);
+
+        MORPHO.liquidate(vault.market(), address(vault), 1 ether, 0);
+        assertEq(vault.ltv(), type(uint256).max);
+
+        vault.harvest(type(uint256).max);
+        assertEq(vault.ltv(), type(uint256).max);
+        vault.rebalance();
+        assertEq(vault.ltv(), 0);
+
+        vm.prank(alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        vm.assertEq(assetsOut, 0);
     }
 
     function test_integration_harvestThenLeversWhenSurplusLarge() public {
-        vm.prank(owner);
-        vault.setMaxSlippageBps(100);
-
         vm.prank(alice);
         vault.deposit(1 ether, alice);
 
@@ -87,13 +109,10 @@ contract FCMIntegrationTest is Test, Deployers {
 
         assertGt(vault.collateral(), collBefore);
         assertGt(vault.debt(), debtBefore);
-        assertApproxEqRel(vault.healthFactor(), HEALTH_FACTOR_MAX_TARGET, 1e15);
+        assertApproxEqRel(vault.ltv(), LTV_MIN, 1e15);
     }
 
     function test_integration_rebalanceUnblocksRedeem() public {
-        vm.prank(owner);
-        vault.setMaxSlippageBps(100);
-
         vm.prank(alice);
         uint256 shares = vault.deposit(1 ether, alice);
 
@@ -104,7 +123,7 @@ contract FCMIntegrationTest is Test, Deployers {
         vault.redeem(shares / 2, alice, alice);
 
         vault.rebalance();
-        assertGe(vault.healthFactor(), 1e18);
+        assertLe(vault.ltv(), LTV_MAX);
 
         vm.prank(alice);
         uint256 assetsOut = vault.redeem(shares / 2, alice, alice);
@@ -112,9 +131,6 @@ contract FCMIntegrationTest is Test, Deployers {
     }
 
     function test_integration_boundedLossAfterLiquidationRecovery() public {
-        vm.prank(owner);
-        vault.setMaxSlippageBps(100);
-
         COLLATERAL_TOKEN.mint(alice, 9 ether);
         vm.prank(alice);
         COLLATERAL_TOKEN.approve(address(vault), 10 ether);
@@ -123,11 +139,11 @@ contract FCMIntegrationTest is Test, Deployers {
 
         // Partial liquidation: seize 35% of collateral, no debt repaid.
         MORPHO.liquidate(vault.market(), address(vault), 3.5 ether, 0);
-        assertLt(vault.healthFactor(), 1e18);
+        assertGt(vault.ltv(), LTV_MAX);
         uint256 navAfterLiquidation = vault.totalAssets();
 
         vault.rebalance();
-        assertGe(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        assertLe(vault.ltv(), LTV_MAX);
         uint256 navAfterRecovery = vault.totalAssets();
 
         // Budget: 2% of NAV for a full liquidation, scaled to the 35% actually liquidated.
@@ -136,9 +152,6 @@ contract FCMIntegrationTest is Test, Deployers {
     }
 
     function test_integration_rebalanceZeroesSurvivingDebtAfterFullLiquidation() public {
-        vm.prank(owner);
-        vault.setMaxSlippageBps(100);
-
         COLLATERAL_TOKEN.mint(alice, 9 ether);
         vm.prank(alice);
         COLLATERAL_TOKEN.approve(address(vault), 10 ether);
@@ -156,10 +169,46 @@ contract FCMIntegrationTest is Test, Deployers {
 
         assertLt(vault.debt(), debtBefore);
         assertApproxEqAbs(vault.debt(), 0, 10 ether / 1000);
-        assertEq(vault.healthFactor(), type(uint256).max);
+        assertEq(vault.ltv(), 0);
 
         vm.prank(alice);
         uint256 assetsOut = vault.redeem(shares, alice, alice);
         assertEq(assetsOut, 0);
+    }
+
+    function test_integration_highCollateralPrice() public {
+        setCollateralPrice(2e46);
+
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        assertApproxEqAbs(assetsOut, 1 ether, 2);
+    }
+
+    function test_integration_lowCollateralPrice() public {
+        setCollateralPrice(1);
+
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        assertApproxEqAbs(assetsOut, 1 ether, 2);
+    }
+
+    function test_integration_highYieldPrice() public {
+        setYieldPrice(2e46);
+
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        assertApproxEqAbs(assetsOut, 1 ether, 2);
+    }
+
+    function test_integration_lowYieldPrice() public {
+        setYieldPrice(1);
+
+        vm.startPrank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        uint256 assetsOut = vault.redeem(shares, alice, alice);
+        assertApproxEqAbs(assetsOut, 1 ether, 2);
     }
 }

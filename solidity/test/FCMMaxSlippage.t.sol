@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Test} from "forge-std/Test.sol";
@@ -31,8 +31,8 @@ contract FCMMaxSlippageTest is Test, Deployers {
     }
 
     function test_maxSlippage_revertsOnInvalidSlippage() public {
-        vm.expectRevert(Errors.invalidSlippage());
+        vm.expectRevert(Errors.maxSlippageExceeded());
         vm.prank(owner);
-        vault.setMaxSlippageBps(10_000);
+        vault.setMaxSlippageBps(1001);
     }
 }

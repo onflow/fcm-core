@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Test} from "forge-std/Test.sol";
@@ -36,5 +36,29 @@ contract FCMOwnerTest is Test, Deployers {
         vm.prank(alice);
         vault.setMaxTvl(1000);
         assertEq(vault.maxTvl(), 1000);
+    }
+
+    /// @dev `renounceOwnership` is intentionally left inherited
+    function test_owner_renounceOwnershipIsAllowedAndPermanent() public {
+        vm.prank(owner);
+        vault.setMaxTvl(1e21);
+
+        vm.prank(owner);
+        vault.renounceOwnership();
+        assertEq(vault.owner(), address(0));
+
+        vm.startPrank(owner);
+        vm.expectRevert(errorOwnerUnauthorized);
+        vault.setMaxTvl(1000);
+        vm.expectRevert(errorOwnerUnauthorized);
+        vault.grantEarlyAccess(bob);
+        vm.expectRevert(errorOwnerUnauthorized);
+        vault.scheduleEmergencyRecovery();
+        vm.stopPrank();
+
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+        vm.prank(alice);
+        assertGt(vault.redeem(shares, alice, alice), 0);
     }
 }

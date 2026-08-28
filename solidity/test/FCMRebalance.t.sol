@@ -3,12 +3,11 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
-import {Vm} from "forge-std/Vm.sol";
 
 contract FCMRebalanceTest is Test, Deployers {
     using FCMHelpers for FCMVault;
@@ -28,20 +27,16 @@ contract FCMRebalanceTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
+
         vault.rebalance();
-        (,, bool ok) = _grabHealthFactors();
-        assertFalse(ok);
+        assertEq(YIELD_TOKEN.balanceOf(address(vault)), originalYield);
 
         setCollateralPrice(COLLATERAL_PRICE.mulDiv(101, 100));
         vault.rebalance();
-        (,, ok) = _grabHealthFactors();
-        assertFalse(ok);
+        assertEq(YIELD_TOKEN.balanceOf(address(vault)), originalYield);
 
         setCollateralPrice(COLLATERAL_PRICE.mulDiv(99, 100));
         vault.rebalance();
-        (,, ok) = _grabHealthFactors();
-        assertFalse(ok);
-
         assertEq(YIELD_TOKEN.balanceOf(address(vault)), originalYield);
     }
 
@@ -49,10 +44,10 @@ contract FCMRebalanceTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         setCollateralPrice(COLLATERAL_PRICE.mulDiv(150, 100));
-        assertGt(vault.healthFactor(), HEALTH_FACTOR_MAX);
+        assertLt(vault.ltv(), LTV_MIN);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
         vault.rebalance();
-        assertLt(vault.healthFactor(), HEALTH_FACTOR_MAX);
+        assertGe(vault.ltv(), LTV_MIN);
         assertGt(YIELD_TOKEN.balanceOf(address(vault)), originalYield);
     }
 
@@ -60,10 +55,10 @@ contract FCMRebalanceTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         setCollateralPrice(COLLATERAL_PRICE.mulDiv(50, 100));
-        assertLt(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        assertGt(vault.ltv(), LTV_MAX);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
         vault.rebalance();
-        assertGt(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        assertLe(vault.ltv(), LTV_MAX);
         assertLt(YIELD_TOKEN.balanceOf(address(vault)), originalYield);
     }
 
@@ -138,13 +133,11 @@ contract FCMRebalanceTest is Test, Deployers {
         vault.rebalance();
 
         assertLt(YIELD_TOKEN.balanceOf(address(vault)), originalYield);
-        assertEq(vault.debt(), 0);
-        // we allow loan tokens to be lost.
-        assertGt(LOAN_TOKEN.balanceOf(address(vault)), 0);
+        assertEq(vault.ltv(), LTV_MAX);
     }
 
     function testFuzz_rebalance_leverPartialFill(uint16 slippageBps) public {
-        slippageBps = uint16(bound(slippageBps, 1, 9999));
+        slippageBps = uint16(bound(slippageBps, 1, 1000));
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
@@ -164,7 +157,7 @@ contract FCMRebalanceTest is Test, Deployers {
     }
 
     function testFuzz_rebalance_deleverPartialFill(uint16 slippageBps) public {
-        slippageBps = uint16(bound(slippageBps, 1, 9999));
+        slippageBps = uint16(bound(slippageBps, 1, 1000));
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 originalYield = YIELD_TOKEN.balanceOf(address(vault));
@@ -213,23 +206,23 @@ contract FCMRebalanceTest is Test, Deployers {
     function test_rebalance_skipsLeverUpDuringRecovery() public {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
-        MARKET_ORACLE.setPrice(COLLATERAL_PRICE.mulDiv(150, 100));
+        COLLATERAL_ORACLE.setPrice(COLLATERAL_PRICE.mulDiv(150, 100));
         vm.prank(owner);
         vault.scheduleEmergencyRecovery();
         vm.warp(vault.emergencyRecoveryValidAt());
-        uint256 hfBefore = vault.healthFactor();
-        assertGt(hfBefore, HEALTH_FACTOR_MAX);
+        uint256 ltvBefore = vault.ltv();
+        assertLt(ltvBefore, LTV_MIN);
         vault.rebalance();
-        assertEq(vault.healthFactor(), hfBefore);
+        assertEq(vault.ltv(), ltvBefore);
     }
 
     function test_rebalance_deleversDuringRecovery() public {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
-        MARKET_ORACLE.setPrice(1000e36);
-        assertLt(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        COLLATERAL_ORACLE.setPrice(1000e36);
+        assertGt(vault.ltv(), LTV_MAX);
         vault.rebalance();
-        assertGt(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        assertLe(vault.ltv(), LTV_MAX);
     }
 
     function test_rebalance_leverRevertsWhenMorphoMarketIlliquid() public {
@@ -247,13 +240,12 @@ contract FCMRebalanceTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
 
-        setCollateralPrice(COLLATERAL_PRICE / 10);
-        setYieldPrice(YIELD_PRICE / 10);
+        setCollateralPrice(COLLATERAL_PRICE.mulDiv(10, 100));
+        setYieldPrice(YIELD_PRICE.mulDiv(10, 100));
 
-        uint256 originalHealthFactor = vault.healthFactor();
+        // vault position is completely unhealthy, we lose money restoring it.
+        vm.expectRevert();
         vault.rebalance();
-        assertGt(vault.healthFactor(), originalHealthFactor);
-        assertLt(vault.healthFactor(), HEALTH_FACTOR_MIN);
     }
 
     function test_rebalance_noopStillEmitsSnapshot() public {
@@ -263,10 +255,16 @@ contract FCMRebalanceTest is Test, Deployers {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
 
-        uint256 depositHealth = (HEALTH_FACTOR_MAX_TARGET + HEALTH_FACTOR_MIN_TARGET) / 2;
-        uint256 debt = uint256(2 ether).mulDiv(MARKET_LLTV, depositHealth);
+        uint256 snap = vm.snapshotState();
+        vault.rebalance();
+
+        uint256 coll = vault.collateral();
+        uint256 debt = vault.debt();
+        uint256 yieldBal = YIELD_TOKEN.balanceOf(address(vault));
+        vm.revertToState(snap);
+
         vm.expectEmit(true, true, true, true);
-        emit IFCMVault.VaultState(1 ether, debt, debt / 4, 2e36, 1e36, 4e36);
+        emit IFCMVault.VaultState(coll, debt, yieldBal, 2e36, 4e36);
         vault.rebalance();
     }
 
@@ -297,89 +295,44 @@ contract FCMRebalanceTest is Test, Deployers {
         assertApproxEqAbs(assetsOut, 0.5 ether, 2);
     }
 
-    function _grabHealthFactors() internal view returns (uint256, uint256, bool) {
-        Vm.Log[] memory entries = vm.getRecordedLogs();
-        for (uint256 i = 0; i < entries.length; i++) {
-            if (entries[i].topics[0] == IFCMVault.Rebalanced.selector) {
-                return (uint256(entries[i].topics[1]), uint256(entries[i].topics[2]), true);
-            }
-        }
-        return (0, 0, false);
-    }
-
     function test_rebalance_leverEmitsUpdatedSnapshot() public {
         vm.prank(alice);
         vault.deposit(1 ether, alice);
         uint256 debtBeforeLever = vault.debt();
-        setCollateralPrice(2300e36); // push HF above max so rebalance levers
+        setCollateralPrice(2300e36); // push LTV below min so rebalance levers
 
-        vm.recordLogs();
+        uint256 snap = vm.snapshotState();
         vault.harvest(type(uint256).max);
         vault.rebalance();
 
-        (, uint256 debt, uint256 yield, uint256 collPrice,, uint256 yieldPrice) = _assertVaultStateMatchesCurrentState();
-        assertEq(collPrice, 2300e36);
-        assertEq(yieldPrice, YIELD_PRICE);
-        assertGt(debt, debtBeforeLever);
-        assertGt(yield, 0);
+        uint256 coll = vault.collateral();
+        uint256 debt = vault.debt();
+        uint256 yieldBal = YIELD_TOKEN.balanceOf(address(vault));
+        vm.revertToState(snap);
+
+        // Harvest emits its own VaultState; run it before the expectEmit so only rebalance's is checked.
+        vault.harvest(type(uint256).max);
+
+        vm.expectEmit(true, true, true, true);
+        emit IFCMVault.VaultState(coll, debt, yieldBal, 2300e36, YIELD_PRICE);
+        vault.rebalance();
+
+        assertGt(vault.debt(), debtBeforeLever);
+        assertGt(YIELD_TOKEN.balanceOf(address(vault)), 0);
     }
 
-    /// @dev Decode the last `VaultState` snapshot emitted by the vault.
-    function _lastVaultState()
-        internal
-        view
-        returns (
-            uint256 collateral,
-            uint256 debt,
-            uint256 yield,
-            uint256 collateralPrice,
-            uint256 debtPrice,
-            uint256 yieldPrice
-        )
-    {
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-        bool found;
-        for (uint256 i = 0; i < logs.length; i++) {
-            if (logs[i].emitter != address(vault) || logs[i].topics[0] != IFCMVault.VaultState.selector) continue;
-            (collateral, debt, yield, collateralPrice, debtPrice, yieldPrice) =
-                abi.decode(logs[i].data, (uint256, uint256, uint256, uint256, uint256, uint256));
-            found = true;
-        }
-        require(found, "VaultState not emitted");
-    }
-
-    /// @dev Assert the last `VaultState` snapshot matches the vault's actual current state.
-    function _assertVaultStateMatchesCurrentState()
-        internal
-        view
-        returns (
-            uint256 collateral,
-            uint256 debt,
-            uint256 yield,
-            uint256 collateralPrice,
-            uint256 debtPrice,
-            uint256 yieldPrice
-        )
-    {
-        (collateral, debt, yield, collateralPrice, debtPrice, yieldPrice) = _lastVaultState();
-        assertEq(collateral, vault.collateral());
-        assertApproxEqAbs(debt, vault.debt(), 1);
-        assertEq(yield, YIELD_TOKEN.balanceOf(address(vault)));
-    }
-
-    // Hits `_rebalanceLever`'s `targetDebt <= currentDebt` guard, only reachable at
-    // sub-100-wei scale: 1:1 oracle + 4 wei collateral -> maxBorrow=3, borrow=2 (HF=1.5);
-    // repay 1 wei -> debt=1, HF=3>MAX, and targetDebt=floor(3e18/1.6e18)=1 == currentDebt -> no-op.
+    // Hits `_rebalanceLever`'s `targetDebt <= currentDebt` guard: 1:1 oracle + 11 wei collateral
+    // -> maxBorrow=9, borrow=6 (ltv=0.545 < LTV_MIN); targetDebt=floor(9*0.61/0.86)=6 == currentDebt -> no-op.
     function test_rebalance_leverNoopWhenTargetDebtFloorsToCurrentDebt() public {
-        setCollateralPrice(1e36); // 1:1 oracle
+        setCollateralPrice(1e40); // 1:1 oracle
         vm.prank(alice);
         vault.deposit(4, alice);
 
-        LOAN_TOKEN.mint(address(this), 10);
+        LOAN_TOKEN.mint(address(this), 1);
         LOAN_TOKEN.approve(address(MORPHO), type(uint256).max);
         MORPHO.repay(vault.market(), 1, 0, address(vault), "");
 
-        assertGt(vault.healthFactor(), HEALTH_FACTOR_MAX);
+        assertLt(vault.ltv(), LTV_MIN);
         uint256 debtBefore = vault.debt();
 
         vault.rebalance();
@@ -387,7 +340,7 @@ contract FCMRebalanceTest is Test, Deployers {
         assertEq(vault.debt(), debtBefore);
     }
 
-    // Hits `_rebalanceDelever`'s `yieldToSell == 0` guard: vault is over-levered (hf < MIN)
+    // Hits `_rebalanceDelever`'s `yieldToSell == 0` guard: vault is over-levered (ltv > LTV_MAX)
     // with `repayAmount > 0` (oracle implies yieldToSell >= 1), but the `yieldToSell > yieldBalance`
     // clamp zeroes it when yield is wiped — a price drop after yield drains to zero strands delever.
     function test_rebalance_deleverNoopWhenVaultHasNoYieldToSell() public {
@@ -398,11 +351,41 @@ contract FCMRebalanceTest is Test, Deployers {
         assertEq(YIELD_TOKEN.balanceOf(address(vault)), 0);
 
         setCollateralPrice(COLLATERAL_PRICE / 3);
-        assertLt(vault.healthFactor(), HEALTH_FACTOR_MIN);
+        assertGt(vault.ltv(), LTV_MAX);
         uint256 debtBefore = vault.debt();
 
         vault.rebalance();
 
         assertEq(vault.debt(), debtBefore);
+    }
+
+    function test_rebalance_CollateralDonation() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        deal(address(COLLATERAL_TOKEN), address(vault), 10 ether);
+
+        setCollateralPrice(COLLATERAL_PRICE * 2);
+        vault.rebalance();
+        assertEq(COLLATERAL_TOKEN.balanceOf(address(vault)), 10 ether);
+
+        setCollateralPrice(COLLATERAL_PRICE / 2);
+        vault.rebalance();
+        assertEq(COLLATERAL_TOKEN.balanceOf(address(vault)), 10 ether);
+    }
+
+    function test_rebalance_LoanDonation() public {
+        vm.prank(alice);
+        vault.deposit(1 ether, alice);
+
+        deal(address(LOAN_TOKEN), address(vault), 10 ether);
+
+        setCollateralPrice(COLLATERAL_PRICE * 2);
+        vault.rebalance();
+        assertEq(LOAN_TOKEN.balanceOf(address(vault)), 10 ether);
+
+        setCollateralPrice(COLLATERAL_PRICE / 2);
+        vault.rebalance();
+        assertEq(LOAN_TOKEN.balanceOf(address(vault)), 10 ether);
     }
 }

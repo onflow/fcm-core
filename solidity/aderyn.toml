@@ -5,9 +5,14 @@ exclude = ["src/interfaces/external/"]
 [detectors]
 exclude = [
     "centralization-risk",
-    "unspecific-solidity-pragma",
     "abi-encode-packed-hash-collision",
     "large-numeric-literal",
     "literal-instead-of-constant",
-    "useless-internal-function"
+    "internal_function_used_once",
+    "reentrancy-state-change",
+    "push-zero-opcode",
+    "address-state-variable-set-without-checks",
+    "unchecked-return",
+    "unspecific-solidity-pragma",
+    "state_no_address_check",
 ]

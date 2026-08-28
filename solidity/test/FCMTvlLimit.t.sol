@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Test} from "forge-std/Test.sol";
@@ -26,7 +26,7 @@ contract FCMTvlLimitTest is Test, Deployers {
 
     function test_tvlLimit_depositRevertsAtZero() public {
         vm.prank(alice);
-        vm.expectRevert(_errorMaxDepositExceeded(alice, 1));
+        vm.expectRevert(_errorMaxDepositExceeded(1));
         vault.deposit(1, alice);
     }
 
@@ -53,7 +53,7 @@ contract FCMTvlLimitTest is Test, Deployers {
         vault.setMaxTvl(500);
     }
 
-    function _errorMaxDepositExceeded(address receiver, uint256 assets) internal view returns (bytes memory) {
-        return Errors.erc4626ExceededMaxDeposit(receiver, assets, vault.maxDeposit(receiver));
+    function _errorMaxDepositExceeded(uint256 assets) internal view returns (bytes memory) {
+        return Errors.erc4626ExceededMaxDeposit(assets, vault.maxDeposit(alice));
     }
 }

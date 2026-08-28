@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Script, console} from "forge-std/Script.sol";
-
+import {FCMVault} from "../src/FCMVault.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {IMorpho, Market, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
-
-import {FCMVault} from "../src/FCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Script, console} from "forge-std/Script.sol";
 
 /// @title LiveCheck
 /// @notice End-to-end integration check against a LIVE FCMVault deployment:
@@ -67,7 +65,7 @@ contract LiveCheck is Script {
         require(vault.balanceOf(caller) == sharesBefore + shares, "share balance does not reflect minted shares");
         require(vault.totalAssets() > navBefore, "vault NAV did not grow on deposit");
 
-        // Rebalance the position. Acts only when HF is outside the [min, max]
+        // Rebalance the position. Acts only when LTV is outside the [min, max]
         // band, driving it to the target just inside the breached bound;
         // against live state this may be a no-op, which is fine.
         uint256 debtBeforeRebalance = _debt(vault);

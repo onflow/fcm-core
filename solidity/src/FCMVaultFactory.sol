@@ -22,7 +22,7 @@ contract FCMVaultFactory is IFCMVaultFactory {
         view
         returns (address predicted)
     {
-        // forge-lint: disable-next-line(asm-keccak256) -> abi.encodePacked needed for dynamic struct encoding
+        // forge-lint: disable-next-line(encode-packed-collision,asm-keccak256)
         bytes32 bytecodeHash = keccak256(abi.encodePacked(type(FCMVault).creationCode, abi.encode(initParams)));
         predicted = Create2.computeAddress(salt, bytecodeHash, address(this));
     }

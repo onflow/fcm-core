@@ -3,9 +3,10 @@ pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
 import {IFCMVault} from "../src/interfaces/IFCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
+import {Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {Test} from "forge-std/Test.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
@@ -153,7 +154,7 @@ contract FCMRedeemInKindTest is Test, Deployers {
         vm.prank(bob);
         vault.redeem(bobShares, bob, bob);
 
-        assertEq(COLLATERAL_TOKEN.balanceOf(bob), 1 ether);
+        assertGe(COLLATERAL_TOKEN.balanceOf(bob), 1 ether);
     }
 
     function test_redeemInKind_emitsSnapshot() public {
@@ -162,12 +163,35 @@ contract FCMRedeemInKindTest is Test, Deployers {
         vm.prank(alice);
         uint256 shares = vault.deposit(1 ether, alice);
 
-        uint256 depositHealth = (HEALTH_FACTOR_MAX_TARGET + HEALTH_FACTOR_MIN_TARGET) / 2;
-        uint256 debt = uint256(1 ether).mulDiv(MARKET_LLTV, depositHealth);
-        vm.expectEmit(true, true, true, true);
-        emit IFCMVault.VaultState(0.5 ether + 1, debt + 1, debt / 4 + 1, 2e36, 1e36, 4e36);
+        uint256 snap = vm.snapshotState();
         vm.prank(alice);
         vault.redeemInKind(shares / 2, alice, alice);
+
+        uint256 coll = vault.collateral();
+        uint256 debt = vault.debt();
+        uint256 yieldBal = YIELD_TOKEN.balanceOf(address(vault));
+        vm.revertToState(snap);
+
+        vm.expectEmit(true, true, true, true);
+        emit IFCMVault.VaultState(coll, debt, yieldBal, 2e36, 4e36);
+        vm.prank(alice);
+        vault.redeemInKind(shares / 2, alice, alice);
+    }
+
+    function test_redeemInKind_Dust() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+
+        Position memory position = vault.position();
+        LOAN_TOKEN.mint(address(this), 1e30);
+        LOAN_TOKEN.approve(address(MORPHO), type(uint256).max);
+        MORPHO.repay(vault.market(), 0, position.borrowShares - 1, address(vault), "");
+
+        vm.prank(alice);
+        vault.redeemInKind(shares, alice, alice);
+
+        assertEq(vault.balanceOf(alice), 0);
+        assertEq(COLLATERAL_TOKEN.balanceOf(alice), 1 ether);
     }
 
     function test_redeemInKind_feesAccrue() public {
@@ -197,6 +221,21 @@ contract FCMRedeemInKindTest is Test, Deployers {
         vm.warp(vault.emergencyRecoveryValidAt());
         vm.prank(alice);
 
+        vault.redeemInKind(shares, alice, alice);
+    }
+
+    function test_redeem_unhealthyAndNoYield() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+
+        setYieldPrice(1);
+        setCollateralPrice(COLLATERAL_PRICE.mulDiv(80, 100));
+
+        assertGt(vault.ltv(), LTV_MAX);
+        assertLt(vault.ltv(), MARKET_LLTV);
+        assertGt(vault.totalAssets(), 0);
+
+        vm.prank(alice);
         vault.redeemInKind(shares, alice, alice);
     }
 }

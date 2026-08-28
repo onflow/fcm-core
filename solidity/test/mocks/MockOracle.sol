@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-contract MockOracle {
+import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
+
+contract MockOracle is IOracle {
     uint256 public priceValue;
 
     constructor(uint256 priceValue_) {

@@ -20,10 +20,22 @@ flow_mainnet = "https://mainnet.evm.nodes.onflow.org"
 [profile.ci]
 no_match_path = "^$"
 via_ir = true
-optimizer_runs = 800
+optimizer_runs = 850
 verbosity = 3
 fuzz.runs = 10_000
 deny = "notes"
+
+[profile.local-ci]
+no_match_path = "^$"
+via_ir = true
+optimizer_runs = 850
+verbosity = 3
+fuzz.runs = 10_000
+deny = "notes"
+# anvil --fork-url https://mainnet.evm.nodes.onflow.org
+eth_rpc_url = "http://localhost:8545"
+
+# flow_mainnet = "http://localhost:8545"
 
 [fmt]
 number_underscore = "thousands"
@@ -32,6 +44,13 @@ docs_style = "line"
 sort_imports = true
 
 [lint]
+ignore = ["lib/**/*.sol", "test/**/*.sol", "script/**/*.sol", "src/interfaces/external/**/*.sol"]
 severity = ["high", "medium", "low", "info", "gas", "codesize"]
+exclude_lints = [
+    "reentrancy-events",
+    "reentrancy-no-eth",
+    "literal-instead-of-constant",
+]
+
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

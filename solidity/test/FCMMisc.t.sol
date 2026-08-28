@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../src/FCMVault.sol";
-import {FCMHelpers} from "../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Test} from "forge-std/Test.sol";
@@ -47,9 +47,9 @@ contract FCMMiscTest is Test, Deployers {
         assertEq(assetsAlice, 1 ether);
     }
 
-    function test_misc_onMorphoFlashLoanRevertsWhenNotMorpho() public {
+    function test_misc_onMorphoRepayRevertsWhenNotMorpho() public {
         vm.prank(alice);
         vm.expectRevert(Errors.unauthorized());
-        vault.onMorphoFlashLoan(0, "");
+        vault.onMorphoRepay(0, "");
     }
 }

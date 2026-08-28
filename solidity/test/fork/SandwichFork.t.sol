@@ -2,9 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {FCMVault} from "../../src/FCMVault.sol";
-import {ISwapRouter02} from "../../src/interfaces/external/ISwapRouter02.sol";
-import {IUniswapV3Pool} from "../../src/interfaces/external/IUniswapV3Pool.sol";
-import {FCMHelpers} from "../../src/libraries/FCMHelpers.sol";
+import {FCMHelpers} from "../../src/libraries/periphery/FCMHelpers.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
@@ -25,42 +23,34 @@ contract SandwichForkTest is ForkDeployers {
         int256 attackerProfit;
         uint256 debtAdded;
         uint256 yieldBought;
-        uint256 hfAfter;
+        uint256 ltvAfter;
         uint256 tvlUsd;
     }
 
     function setUp() public {
-        _forkSetup();
-        _fundArb();
-        _depositUsers(N_USERS, DEPOSIT_AMOUNT_PER_USER);
+        setupFork();
+        depositUsers(N_USERS, DEPOSIT_AMOUNT_PER_USER);
 
         users = new address[](N_USERS);
         for (uint256 i = 0; i < N_USERS; i++) {
             users[i] = makeAddr(string.concat("user", vm.toString(i)));
         }
 
-        setCollateralPrice(ORACLE_PRICE * 110 / 100);
-        assertGt(vault.healthFactor(), HEALTH_FACTOR_MAX, "HF above max after 10% rise -> lever path");
+        setCollateralPrice(COLLATERAL_PRICE * 110 / 100);
+        assertLt(vault.ltv(), LTV_MIN, "HF above max after 10% rise -> lever path");
 
         deal(address(PYUSD0), attacker, 100_000_000e6);
         deal(address(FUSDEV), attacker, 100_000_000e18);
-        vm.startPrank(attacker);
-        PYUSD0.approve(address(SWAP_ROUTER), type(uint256).max);
-        FUSDEV.approve(address(SWAP_ROUTER), type(uint256).max);
-        vm.stopPrank();
 
         snap = vm.snapshotState();
 
         console.log("=== Sandwich fork test setup ($1M TVL vs ~$20k pool) ===");
-        console.log("Collateral price:", ORACLE_PRICE);
+        console.log("Collateral price:", COLLATERAL_PRICE);
         console.log("Yield oracle:", IOracle(YIELD_ORACLE).price());
-        console.log("Pool spot:", uint256(cleanSpot));
-        console.log("Pool liquidity:", uint256(IUniswapV3Pool(YIELD_LOAN_POOL).liquidity()));
-        console.log("HF after 10% rise:", vault.healthFactor() / 1e15);
-        console.log("TVL ($):", _tvlUsd() / 1e6);
+        console.log("HF after 10% rise:", vault.ltv() / 1e15);
         console.log("---");
 
-        _arbPoolToSpot();
+        arbPoolToSpot();
     }
 
     function test_sandwich_singleSweepVaultLossBounded() public {
@@ -73,7 +63,7 @@ contract SandwichForkTest is ForkDeployers {
         for (uint256 i = 1; i <= 19; i++) {
             uint256 pushBps = i * 5;
             vm.revertToState(snap);
-            _arbPoolToSpot();
+            arbPoolToSpot();
 
             SandwichResult memory r = _singleSandwich(pushBps);
 
@@ -121,7 +111,7 @@ contract SandwichForkTest is ForkDeployers {
         for (uint256 i = 1; i <= 19; i++) {
             uint256 pushBps = i * 5;
             vm.revertToState(snap);
-            _arbPoolToSpot();
+            arbPoolToSpot();
 
             int256 totalProfit = 0;
             uint256 iterations = 0;
@@ -132,10 +122,10 @@ contract SandwichForkTest is ForkDeployers {
                 SandwichResult memory r = _singleSandwich(pushBps);
                 totalProfit += r.attackerProfit;
                 iterations = y + 1;
-                hfFinal = r.hfAfter;
+                hfFinal = r.ltvAfter;
                 tvlFinal = r.tvlUsd;
-                _arbPoolToSpot();
-                if (r.hfAfter <= HEALTH_FACTOR_MAX) break;
+                arbPoolToSpot();
+                if (r.ltvAfter <= LTV_MAX) break;
             }
 
             string memory netStr = totalProfit >= 0
@@ -161,7 +151,7 @@ contract SandwichForkTest is ForkDeployers {
 
     function test_sandwich_hardDOSPush1Percent100Times() public {
         vm.revertToState(snap);
-        _arbPoolToSpot();
+        arbPoolToSpot();
 
         int256 totalProfit = 0;
         uint256 debtAdded = 0;
@@ -170,9 +160,9 @@ contract SandwichForkTest is ForkDeployers {
         for (uint256 y = 0; y < 100; y++) {
             SandwichResult memory r = _singleSandwich(100);
             totalProfit += r.attackerProfit;
-            hfFinal = r.hfAfter;
+            hfFinal = r.ltvAfter;
             debtAdded += r.debtAdded;
-            _arbPoolToSpot();
+            arbPoolToSpot();
         }
 
         uint256 attackerCost = totalProfit < 0 ? SafeCast.toUint256(-totalProfit) : 0;
@@ -185,52 +175,32 @@ contract SandwichForkTest is ForkDeployers {
         uint256 debtStart = vault.debt();
         uint256 yieldStart = FUSDEV.balanceOf(address(vault));
 
-        (uint160 currentSpot,,,,,,) = IUniswapV3Pool(YIELD_LOAN_POOL).slot0();
+        (uint160 currentSpot,,,,,,) = yieldLoanPool.slot0();
 
         uint256 sqrtFactor = Math.sqrt((10_000 - pushBps) * 1e36 / 10_000);
-        uint160 targetSpot = uint160(Math.mulDiv(currentSpot, sqrtFactor, 1e18));
+        uint160 targetSpot = SafeCast.toUint160(Math.mulDiv(currentSpot, sqrtFactor, 1e18));
 
         uint256 loanBefore = PYUSD0.balanceOf(attacker);
 
         uint256 yieldGotFront = 0;
         if (pushBps > 0) {
-            vm.prank(attacker);
-            yieldGotFront = ISwapRouter02(address(SWAP_ROUTER))
-                .exactInputSingle(
-                    ISwapRouter02.ExactInputSingleParams({
-                    tokenIn: address(PYUSD0),
-                    tokenOut: address(FUSDEV),
-                    fee: YIELD_LOAN_POOL_FEE,
-                    recipient: attacker,
-                    amountIn: 1e6,
-                    amountOutMinimum: 0,
-                    sqrtPriceLimitX96: targetSpot
-                })
-                );
+            // Front-run: push the yield-pool price down by `pushBps`, buying yield cheaply. Routed directly through
+            // the pool (no router); the attacker funds and receives via `_directArbSwap`.
+            uint256 yieldBefore = FUSDEV.balanceOf(attacker);
+            _directArbSwap(yieldLoanPool, address(PYUSD0), address(FUSDEV), 1e6, targetSpot, attacker);
+            yieldGotFront = FUSDEV.balanceOf(attacker) - yieldBefore;
         }
 
         vault.rebalance();
         r.debtAdded = vault.debt() - debtStart;
         r.yieldBought = FUSDEV.balanceOf(address(vault)) - yieldStart;
-        r.hfAfter = vault.healthFactor();
-        r.tvlUsd = _tvlUsd();
+        r.ltvAfter = vault.ltv();
 
         if (yieldGotFront > 0) {
-            vm.prank(attacker);
-            ISwapRouter02(address(SWAP_ROUTER))
-                .exactInputSingle(
-                    ISwapRouter02.ExactInputSingleParams({
-                    tokenIn: address(FUSDEV),
-                    tokenOut: address(PYUSD0),
-                    fee: YIELD_LOAN_POOL_FEE,
-                    recipient: attacker,
-                    amountIn: yieldGotFront,
-                    amountOutMinimum: 0,
-                    sqrtPriceLimitX96: 0
-                })
-                );
+            // Back-run: sell the front-run yield back for loan token at the (now moved) price.
+            _directArbSwap(yieldLoanPool, address(FUSDEV), address(PYUSD0), yieldGotFront, 0, attacker);
         }
 
-        r.attackerProfit = int256(int256(PYUSD0.balanceOf(attacker)) - SafeCast.toInt256(loanBefore));
+        r.attackerProfit = SafeCast.toInt256(PYUSD0.balanceOf(attacker)) - SafeCast.toInt256(loanBefore);
     }
 }
