@@ -41,6 +41,12 @@ contract MockPool is IUniswapV3Pool {
     address public token0_;
     address public token1_;
 
+    bool public shouldRevert;
+
+    function setShouldRevert(bool value) external {
+        shouldRevert = value;
+    }
+
     function setReserves(IERC20 token, uint256 reserve) external {
         reserveOf[address(token)] = reserve;
     }
@@ -76,6 +82,7 @@ contract MockPool is IUniswapV3Pool {
 
     /// @inheritdoc IUniswapV3Pool
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
+        require(!shouldRevert, "MOCK_POOL_DOWN");
         return (sqrtPriceX96, int24(0), uint16(0), uint16(0), uint16(0), uint8(0), true);
     }
 
@@ -99,6 +106,7 @@ contract MockPool is IUniswapV3Pool {
         uint160 sqrtPriceLimitX96,
         bytes calldata data
     ) external returns (int256 amount0, int256 amount1) {
+        require(!shouldRevert, "MOCK_POOL_DOWN");
         require(token0_ != address(0), "pair unset");
         require(amountSpecified != 0, "AS");
 
