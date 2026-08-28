@@ -15,9 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    defaults:
-      run:
-        working-directory: solidity
     steps:
       - uses: actions/checkout@v5
         with:
@@ -31,16 +28,26 @@ jobs:
         run: forge --version
 
       - name: Run Forge fmt
-        run: FOUNDRY_PROFILE=ci forge fmt --check
+        run: forge fmt --check
+        env:
+          FOUNDRY_PROFILE: ci
 
       - name: Run Forge lint
-        run: FOUNDRY_PROFILE=ci forge lint
+        run: forge lint
+        env:
+          FOUNDRY_PROFILE: ci
 
       - name: Run Forge gas snapshot test
-        run: FOUNDRY_PROFILE=ci forge snapshot --match-path "test/gas/*.t.sol" --check --tolerance 1
+        run: forge snapshot --match-path "test/gas/*.t.sol" --check --tolerance 1
+        env:
+          FOUNDRY_PROFILE: ci
 
       - name: Run Forge build
-        run: FOUNDRY_PROFILE=ci forge build --sizes
+        run: forge build --sizes
+        env:
+          FOUNDRY_PROFILE: ci
 
       - name: Run Forge tests
-        run: FOUNDRY_PROFILE=ci forge test
+        run: forge test
+        env:
+          FOUNDRY_PROFILE: ci
