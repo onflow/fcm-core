@@ -29,7 +29,7 @@ We chose the atomic approach instead: `deposit`/`redeem` enter and exit the posi
 - `mint`, `withdraw`, `previewMint`, `previewWithdraw`, `previewDeposit`, and `previewRedeem` all revert `NotImplemented()`.
 - `maxMint` and `maxWithdraw` both return `0`, consistent with `mint`/`withdraw` being unimplemented.
 - `maxDeposit` and `maxRedeem` are implemented, but only as optimistic upper bounds — not guarantees.
-- `deposit`/`redeem` take no slippage parameter, so they must be called through a slippage-aware router (e.g. the Yearn ERC4626 Router).
+- `deposit`/`redeem` take no slippage parameter on their standard ERC-4626 signatures, so direct calls are vulnerable to sandwich attacks. Slippage-protected overloads (`deposit(assets, receiver, minSharesOut)` and `redeem(shares, receiver, owner, minAssetsOut)`) are provided.
 
 ### Trading the yield leg
 

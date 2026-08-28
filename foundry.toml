@@ -7,7 +7,6 @@ remappings = [
     "forge-std/=lib/forge-std/src/",
     "@morpho-blue/=lib/morpho-blue/src/",
     "@openzeppelin/=lib/openzeppelin-contracts/",
-    "@yearn-erc4626-router/=lib/Yearn-ERC4626-Router/src/",
 ]
 optimizer_runs = 200
 fs_permissions = [{ access = "read", path = "./deployments"}]
