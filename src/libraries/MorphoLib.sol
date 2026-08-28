@@ -16,15 +16,6 @@ library MorphoLib {
     using Math for uint256;
     using MarketParamsLib for MarketParams;
 
-    /// @notice Repay the entire borrow position, by shares, so the debt is zeroed exactly.
-    function repayAll(IMorpho morpho, MarketParams memory market, address user)
-        internal
-        returns (uint256 assetsRepaid, uint256 sharesRepaid)
-    {
-        uint256 borrowedShares = morpho.position(market.id(), user).borrowShares;
-        return morpho.repay(market, 0, borrowedShares, user, "");
-    }
-
     /// @notice Returns `user`'s collateral balance in the given market, in raw collateral-token units.
     function collateral(IMorpho morpho, MarketParams memory market, address user) internal view returns (uint256) {
         return morpho.position(market.id(), user).collateral;
