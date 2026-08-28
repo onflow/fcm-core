@@ -40,6 +40,6 @@ contract FCMRedeemSlippageTest is Test, Deployers {
 
     function test_redeemSlippage_zeroMinAssetsOutSucceeds() public {
         vm.prank(alice);
-        uint256 assets = vault.redeem(aliceShares / 2, alice, alice, 0);
+        vault.redeem(aliceShares / 2, alice, alice, 0);
     }
 }

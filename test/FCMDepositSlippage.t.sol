@@ -37,6 +37,6 @@ contract FCMDepositSlippageTest is Test, Deployers {
 
     function test_depositSlippage_zeroMinSharesOutSucceeds() public {
         vm.prank(alice);
-        uint256 shares = vault.deposit(1 ether, alice, 0);
+        vault.deposit(1 ether, alice, 0);
     }
 }
