@@ -1,167 +1,44 @@
-# flow-credit-markets
+# FCM core
 
-Users holding an asset are seeking higher returns than the direct yield opportunities of that asset. Using the asset as collateral to borrow a debt token can gain those higher yields, but requires permanent user interaction to keep asset exposure, maximize yield and prevent liquidation.
-We utilize flow's unique feature of scheduled transactions to automate this process, constantly adjusting the position to keep asset exposure at 100%, maximizing the potential debt to maximize yield while making sure the user doesn’t get liquidated.
-This will bring TVL and users to Flow, provide a revenue stream through fees, and demonstrate a practical application of Flow’s unique feature of scheduled transactions.
+FCM is an automated carry trade protocol: Vaults are deployed which automatically borrow against deposited collateral to invest in a yield-bearing asset.
+This allows earning a higher yield on assets which typically do not have access to high yield sources, such as BTC.
 
-## Installation
-
-```sh
-curl -L https://foundry.paradigm.xyz | bash
-source ~/.zshenv   # or restart your shell
-foundryup
-```
-
-## Build & Test
-
-```bash
-make ci             # fmt check + build + tests (solidity + cadence)
-make solidity-test  # solidity tests only
-make cadence-test   # cadence tests only (requires the Flow CLI)
-```
+FCM continuously `rebalances` the position to hold as high an LTV as safely possible, maximizing exposure to the yield-bearing asset while staying clear of liquidation, and periodically `harvests` the accrued yield back into collateral to keep 100% asset exposure.
 
 ## Architecture
 
-See [Architecture](./docs/architecture.md)
+Each `FCMVault` is an ERC-4626 vault that runs a single, immutable three-leg carry trade:
+
+1. **Collateral leg** — the ERC-4626 asset, supplied to [Morpho Blue](https://github.com/morpho-org/morpho-blue) to create borrowing capacity.
+2. **Debt leg** — a loan token borrowed against that collateral.
+3. **Yield leg** — the loan token swapped into a yield-bearing token (the carry source) on a Uniswap-v3-style AMM.
+
+```mermaid
+flowchart LR
+    User -->|deposit collateral| Vault[FCMVault]
+    Vault -->|redeem collateral| User
+    Vault -->|supply collateral <p> borrow loan| Morpho[Morpho Blue]
+    Vault -->|swap loan <-> yield| AMM[Uniswap v3-style AMM]
+    Vault -.->|holds yield token, accrues yield| Y[Yield token]
+```
+
+A deposit posts collateral, borrows against it, and swaps the proceeds into the yield token, all in one transaction; a redeem reverses this, selling the yield leg, repaying debt, and returning collateral, also in one transaction. Neither takes a slippage-limit argument (per the ERC-4626 spec), so both should be called through a router that adds its own minimum-output check — e.g. the vendored [Yearn ERC4626 Router](https://github.com/yearn/Yearn-ERC4626-Router) — rather than directly.
+
+A permissionless `rebalance()` keeps the position's health factor inside a target band - delevering (selling yield for loan token, repaying debt) when the collateral price falls and levering back up when it rises - so the vault never sells collateral to manage risk.
+A permissionless `harvest()` periodically converts surplus yield back into collateral, so depositors keep full collateral exposure while compounding the yield spread directly into share price. Both entry points are permissionless by design.
+
+Full design rationale - in [Architecture](./docs/architecture.md).
 
 ## Security
 
-See [Risk Disclosures](./docs/risk-disclosures.md) for all ways funds may be lost that are intentional (fees, slippage, liquidation, rounding, etc.), and [Security Surface](./docs/security-surface.md) for dependency/byzantine failure modes.
+### Risks
 
-## Deployment
+FCM runs a levered position, which requires constantly borrowing, repaying, and swapping on the vault's behalf. The costs and risks of those actions are inherent to the strategy itself, not implementation defects. See [Risk Disclosures](./docs/risk-disclosures.md) for the full breakdown.
 
-Deployments are **manual** and target Flow mainnet directly — see the
-`mainnet-*` targets in the [`Makefile`](./Makefile) (every one has a `-dry`
-variant that fork-simulates against live state first). EVM deployments sign with
-a Foundry encrypted keystore account (set it up once with
-`make setup-evm-deployer`); the Cadence rebalancer signs with the
-`mainnet-deployer` Flow account (see below). Dependency addresses used at deploy
-time are pinned in
-[`solidity/deployments/mainnet.json`](./solidity/deployments/mainnet.json).
+### Dependencies
 
-### Cadence contract (VaultRebalancer)
+The vault composes a levered position out of four external systems it does not control: Morpho Blue (the lending market), a Uniswap-v3-style AMM (the swap venue), the yield token's own inner vault, and the Morpho market's price oracle. Each is a separate trust boundary — see [`security-surface.md`](./docs/security-surface.md) for the full per-dependency, per-function failure-mode breakdown.
 
-Automates `FCMVault.rebalance()` on an interval via `FlowTransactionScheduler`.
-The signer is the `mainnet-deployer` account in `flow.mainnet.json`.
-This account becomes the resource owner and pays scheduling fees.
-The overlay is loaded only by the rebalancer `make` targets (via `-f`), so
-`flow test` / `make ci` never touch it. For `-dry`, start a forked emulator in a
-separate terminal with `make mainnet-fork-emulator`.
+### Factory
 
-`VAULT` is the FCMVault EVM address from the EVM deploy above:
-
-```bash
-make mainnet-deploy-rebalancer
-make mainnet-setup-rebalancer VAULT=0x… TICK_INTERVAL=3600.0 EVM_GAS_LIMIT=200000 EXECUTION_EFFORT=20000
-make mainnet-schedule-rebalancer VAULT=0x…
-```
-
-`mainnet-deploy-rebalancer` is idempotent (`--update`): re-running it ships an
-additive contract change in place, subject to Cadence contract-update validation.
-
-To tear a rebalancer down — cancel its pending tick (refunding the fee to the
-deployer's FlowToken vault), destroy the resource, and free its storage path so the
-same target can be re-created — use the remove target. This is the way to stop fee
-drain on an unused or misconfigured rebalancer:
-
-```bash
-make mainnet-remove-rebalancer VAULT=0x…
-```
-
-Calldata is hardcoded to `rebalance()` and scheduler priority to Medium.
-The deployer must hold enough FLOW for the per-tick scheduling fee plus the
-account storage minimum. `rebalance()` only manages leverage; it does not
-harvest surplus yield (`harvest(uint256 maximum_yield)` is a separate,
-independent entry point, not scheduled by this resource — see
-[`docs/vault-rebalancer.md`](./docs/vault-rebalancer.md#future-scope)).
-
-### Development deployment (Flow EVM mainnet)
-
-A pre-release development deployment exists for internal testing. It will be
-redeployed before launch and is not intended for external use — do not deposit.
-Per-deploy records live in the [`mainnet-deploy-*` releases](https://github.com/onflow/flow-credit-markets/releases).
-
-### Deployed contracts (Flow mainnet — Cadence)
-
-| Contract        | Account            |
-| :-------------- | :----------------- |
-| VaultRebalancer | _not yet deployed_ |
-
-Morpho market (WETH collateral / PYUSD0 loan, LLTV 86%):
-`0xe9c0fc2a0c62a6e5cdee4bc4d06d571850a2add3bb7c96d8c3a75997cae6b866`
-
-## Dependencies (Flow EVM mainnet)
-
-### Morpho Blue
-
-| Contract   | Address                                                                                                                                      |
-| :--------- | :------------------------------------------------------------------------------------------------------------------------------------------- |
-| Morpho     | [`0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f`](https://evm.flowscan.io/address/0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f?tab=contract_code) |
-| Morpho IRM | [`0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546`](https://evm.flowscan.io/address/0xdFC4f7951EcDd2D505b6406e9c886c0dB9393546?tab=contract)      |
-
-### Pyth oracles
-
-| Feed                | Address                                                                                                                                            |
-| :------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pyth Oracle Factory | [`0x32130316E1Fc503F8a6c8DEbA8320A9d45B3D135`](https://evm.flowscan.io/address/0x32130316E1Fc503F8a6c8DEbA8320A9d45B3D135?tab=contract)            |
-| WBTC/USD            | [`0x5B3e0BA14443B444D557C0C2F85592d88B88f5c8`](https://evm.flowscan.io/address/0x5B3e0BA14443B444D557C0C2F85592d88B88f5c8?tab=read_write_contract) |
-| WETH/USD            | [`0xD744044044C0Dd0c73BeA440747115674Ebae030`](https://evm.flowscan.io/address/0xD744044044C0Dd0c73BeA440747115674Ebae030?tab=read_contract)       |
-| WFLOW/USD           | [`0xd8848Ccc8beA82046Da0B144844118db17086af4`](https://evm.flowscan.io/address/0xd8848Ccc8beA82046Da0B144844118db17086af4?tab=read_write_contract) |
-
-Update these Pyth feeds with the Foundry script. The script requires `curl`; `--ffi` lets
-Foundry invoke it to fetch the latest update from Hermes. Run without `--broadcast` first to
-simulate the update:
-
-```bash
-cd solidity
-forge script script/UpdatePythPrices.s.sol:UpdatePythPrices \
-  --rpc-url https://mainnet.evm.nodes.onflow.org \
-  --account "$ACCOUNT" \
-  --ffi
-```
-
-Then broadcast it:
-
-```bash
-forge script script/UpdatePythPrices.s.sol:UpdatePythPrices \
-  --rpc-url https://mainnet.evm.nodes.onflow.org \
-  --account "$ACCOUNT" \
-  --ffi \
-  --broadcast
-```
-
-Foundry prompts for the account's keystore password. Add `--sender "$SENDER"` if the sender cannot
-be inferred from the account. The account must hold enough FLOW to cover the dynamic Pyth update
-fee printed by the script plus gas. Per Price Feed is 0.5 FLOW.
-
-### ERC-20 tokens
-
-| Token  | Address                                                                                                                    |
-| :----- | :------------------------------------------------------------------------------------------------------------------------- |
-| WETH   | [`0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590`](https://evm.flowscan.io/address/0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590) |
-| PYUSD0 | [`0x99aF3EeA856556646C98c8B9b2548Fe815240750`](https://evm.flowscan.io/address/0x99aF3EeA856556646C98c8B9b2548Fe815240750) |
-| FUSDEV | [`0xd069d989e2F44B70c65347d1853C0c67e10a9F8D`](https://evm.flowscan.io/address/0xd069d989e2F44B70c65347d1853C0c67e10a9F8D) |
-
-### FlowSwap V3 (Uniswap V3 fork)
-
-| Contract     | Address                                                                                                                    |
-| :----------- | :------------------------------------------------------------------------------------------------------------------------- |
-| Factory      | [`0xca6d7Bb03334bBf135902e1d919a5feccb461632`](https://evm.flowscan.io/address/0xca6d7Bb03334bBf135902e1d919a5feccb461632) |
-| SwapRouter02 | [`0xeEDC6Ff75e1b10B903D9013c358e446a73d35341`](https://evm.flowscan.io/address/0xeEDC6Ff75e1b10B903D9013c358e446a73d35341) |
-| QuoterV2     | [`0x370A8DF17742867a44e56223EC20D82092242C85`](https://evm.flowscan.io/address/0x370A8DF17742867a44e56223EC20D82092242C85) |
-
-Pools used by the vault (fetched via `Factory.getPool(tokenA, tokenB, fee)`):
-
-| Pool                 | Fee tier       |
-| :------------------- | :------------- |
-| PYUSD0 / Yield token | `100` (0.01%)  |
-| WETH / PYUSD0        | `3000` (0.30%) |
-
-## ERC4626 Router
-
-Generic [ERC4626-Alliance](https://github.com/ERC4626-Alliance/ERC4626-Contracts) router for user-facing deposit/redeem slippage. Used by integrators, not a vault dependency — documented per-network rather than under the mainnet dependency list.
-
-| Network | Address                                                                                                                            |
-| :------ | :--------------------------------------------------------------------------------------------------------------------------------- |
-| Mainnet | [`0xDc1A2Bf9E89fA176e56013b54A1377a39C753fA7`](https://evm.flowscan.io/address/0xDc1A2Bf9E89fA176e56013b54A1377a39C753fA7)         |
-| Testnet | [`0x8e44a03b1019D4060c16f04103bB8942029E42bf`](https://evm-testnet.flowscan.io/address/0x8e44a03b1019D4060c16f04103bB8942029E42bf) |
+`FCMVaultFactory` deploys vaults permissionlessly, with arbitrary tokens, swap pool, morpho, oracles, etc. **A vault existing doesn't make it safe.** See [`architecture.md`](./docs/architecture.md#deployment-trust-model--constructor-validation) for what the constructor does and doesn't validate.
