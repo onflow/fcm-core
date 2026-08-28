@@ -46,6 +46,13 @@ contract FCMDependencyFailuresTest is Test, Deployers {
         vault.rebalance();
     }
 
+    /// @dev `_accrueFees` calls `MORPHO.accrueInterest` before marking NAV, so the whole fee clock stalls with Morpho.
+    function test_dependencyFailure_morpho_revertsOnAccrueFees() public {
+        MORPHO.setShouldRevert(true);
+        vm.expectRevert("MOCK_MORPHO_DOWN");
+        vault.accrueFees();
+    }
+
     function test_dependencyFailure_morpho_revertsOnHarvest() public {
         MORPHO.setShouldRevert(true);
         vm.expectRevert("MOCK_MORPHO_DOWN");
@@ -89,6 +96,13 @@ contract FCMDependencyFailuresTest is Test, Deployers {
         COLLATERAL_ORACLE.setShouldRevert(true);
         vm.expectRevert("MOCK_ORACLE_DOWN");
         vault.rebalance();
+    }
+
+    /// @dev `_accrueFees` marks NAV via `totalAssets()`, which reads both oracles unconditionally.
+    function test_dependencyFailure_marketOracle_revertsOnAccrueFees() public {
+        COLLATERAL_ORACLE.setShouldRevert(true);
+        vm.expectRevert("MOCK_ORACLE_DOWN");
+        vault.accrueFees();
     }
 
     function test_dependencyFailure_marketOracle_revertsOnHarvest() public {
@@ -137,6 +151,12 @@ contract FCMDependencyFailuresTest is Test, Deployers {
         vm.prank(alice);
         vm.expectRevert("MOCK_ORACLE_DOWN");
         vault.redeem(aliceShares, alice, alice);
+    }
+
+    function test_dependencyFailure_yieldOracle_revertsOnAccrueFees() public {
+        YIELD_ORACLE.setShouldRevert(true);
+        vm.expectRevert("MOCK_ORACLE_DOWN");
+        vault.accrueFees();
     }
 
     function test_dependencyFailure_yieldOracle_revertsOnRebalance() public {
@@ -212,6 +232,14 @@ contract FCMDependencyFailuresTest is Test, Deployers {
     }
 
     /// @dev `redeemInKind` repays the caller's debt slice directly — no swap involved.
+    /// @dev Fee accrual reads Morpho and both oracles but never a pool, so it survives either pool going down.
+    function test_dependencyFailure_yieldLoanPool_accrueFeesSucceeds() public {
+        YIELD_LOAN_POOL.setShouldRevert(true);
+        skip(30 days);
+        vault.accrueFees();
+        assertEq(vault.lastFeeAccrual(), block.timestamp);
+    }
+
     function test_dependencyFailure_yieldLoanPool_redeemInKindSucceeds() public {
         uint256 shares = vault.balanceOf(alice);
         // Alice holds 100% of shares, so her debt slice is the full position debt (rounded up).
@@ -272,6 +300,43 @@ contract FCMDependencyFailuresTest is Test, Deployers {
         vm.prank(bob);
         vault.deposit(1 ether, bob);
         assertGt(vault.balanceOf(bob), 0);
+    }
+
+    /// @dev The load-bearing one: delever is the safety-critical branch, and it must not depend on the health of the
+    /// collateral/loan pool. That pool is only reached by `harvest` and `redeem`, which is why the two are split.
+    function test_dependencyFailure_collateralLoanPool_deleverSucceeds() public {
+        vm.prank(owner);
+        vault.setMaxSlippageBps(100);
+        setCollateralPrice((COLLATERAL_PRICE * 50) / 100);
+        assertGt(vault.ltv(), LTV_MAX);
+        uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
+
+        COLLATERAL_LOAN_POOL.setShouldRevert(true);
+        vault.rebalance();
+
+        assertLe(vault.ltv(), LTV_MAX);
+        assertLt(YIELD_TOKEN.balanceOf(address(vault)), yieldBefore);
+    }
+
+    function test_dependencyFailure_collateralLoanPool_leverUpSucceeds() public {
+        vm.prank(owner);
+        vault.setMaxSlippageBps(100);
+        setCollateralPrice((COLLATERAL_PRICE * 150) / 100);
+        assertLt(vault.ltv(), LTV_MIN);
+        uint256 yieldBefore = YIELD_TOKEN.balanceOf(address(vault));
+
+        COLLATERAL_LOAN_POOL.setShouldRevert(true);
+        vault.rebalance();
+
+        assertGe(vault.ltv(), LTV_MIN);
+        assertGt(YIELD_TOKEN.balanceOf(address(vault)), yieldBefore);
+    }
+
+    function test_dependencyFailure_collateralLoanPool_accrueFeesSucceeds() public {
+        COLLATERAL_LOAN_POOL.setShouldRevert(true);
+        skip(30 days);
+        vault.accrueFees();
+        assertEq(vault.lastFeeAccrual(), block.timestamp);
     }
 
     function test_dependencyFailure_collateralLoanPool_redeemInKindSucceeds() public {
