@@ -20,7 +20,7 @@ flow_mainnet = "https://mainnet.evm.nodes.onflow.org"
 [profile.ci]
 no_match_path = "^$"
 via_ir = true
-optimizer_runs = 990
+optimizer_runs = 850
 verbosity = 3
 fuzz.runs = 10_000
 deny = "notes"
@@ -28,7 +28,7 @@ deny = "notes"
 [profile.local-ci]
 no_match_path = "^$"
 via_ir = true
-optimizer_runs = 990
+optimizer_runs = 850
 verbosity = 3
 fuzz.runs = 10_000
 deny = "notes"
@@ -44,11 +44,12 @@ docs_style = "line"
 sort_imports = true
 
 [lint]
+ignore = ["lib/**/*.sol", "test/**/*.sol", "script/**/*.sol", "src/interfaces/external/**/*.sol"]
 severity = ["high", "medium", "low", "info", "gas", "codesize"]
 exclude_lints = [
-    "unaliased-plain-import",
-    "asm-keccak256",
-    "block-timestamp",
+    "reentrancy-events",
+    "reentrancy-no-eth",
+    "literal-instead-of-constant",
 ]
 
 

@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import "../src/libraries/ConstantsLib.sol";
 import {FeesLib} from "../src/libraries/FeesLib.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Test} from "forge-std/Test.sol";
 
 /// @dev Tests for FeesLib.feesToMint - verifies fee calculation and logical
@@ -203,8 +204,8 @@ contract FeesLibTest is Test {
         nav = bound(nav, 1e12, 100_000_000e18);
         claims = bound(claims, 1e12, 100_000_000e18);
 
-        managementFeeBps = uint16(bound(managementFeeBps, 1, 1000));
-        performanceFeeBps = uint16(bound(performanceFeeBps, 1, 5000));
+        managementFeeBps = SafeCast.toUint16(bound(managementFeeBps, 1, 1000));
+        performanceFeeBps = SafeCast.toUint16(bound(performanceFeeBps, 1, 5000));
 
         uint256 pricePerShare = nav.mulDiv(LTV_SCALE, claims);
         perfHighWaterMark = bound(perfHighWaterMark, 0, pricePerShare);

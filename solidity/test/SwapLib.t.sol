@@ -20,6 +20,9 @@ contract SwapLibTest is Test, Deployers {
         oraclePrice = bound(oraclePrice, 1e30, 1e40);
         YIELD_LOAN_POOL.setPrice(YIELD_TOKEN, LOAN_TOKEN, oraclePrice);
 
+        bool zeroForOne = address(YIELD_TOKEN) < address(LOAN_TOKEN);
+        (uint256 floorNum, uint256 floorDen, uint256 ceilNum, uint256 ceilDen) = _bounds(zeroForOne, oraclePrice, 1e36);
+
         (uint160 priceLimit, bool ok) = SwapLib.swapLimit({
             pool: YIELD_LOAN_POOL,
             tokenIn: YIELD_TOKEN,
@@ -29,11 +32,8 @@ contract SwapLibTest is Test, Deployers {
             maxSlippageBps: maxSlippageBps
         });
 
-        // Floor bound uses the same single-mulDiv shape swapLimit itself uses (at the loosest bps = 1), instead of
-        // pre-dividing oraclePrice by 9999/10_000 first - pre-dividing floors twice and, at extreme oraclePrice
-        // magnitudes, can round the floor above the actual (single-mulDiv) priceLimit.
-        assertGe(priceLimit, _sqrtPriceX96(1e36 * 10_000, oraclePrice * 9999));
-        assertLe(priceLimit, _sqrtPriceX96(1e36 * 10_000, oraclePrice * (10_000 - maxSlippageBps)));
+        assertGe(priceLimit, _sqrtPriceX96(floorNum, floorDen));
+        assertLe(priceLimit, _sqrtPriceX96(ceilNum, ceilDen));
         assertEq(ok, true);
     }
 
@@ -41,6 +41,9 @@ contract SwapLibTest is Test, Deployers {
         maxSlippageBps = bound(maxSlippageBps, 1, 9999);
         oraclePrice = bound(oraclePrice, 1e30, 1e40);
         YIELD_LOAN_POOL.setPrice(LOAN_TOKEN, YIELD_TOKEN, uint256(1e36).mulDiv(1e36, oraclePrice));
+
+        bool zeroForOne = address(LOAN_TOKEN) < address(YIELD_TOKEN);
+        (uint256 floorNum, uint256 floorDen, uint256 ceilNum, uint256 ceilDen) = _bounds(zeroForOne, 1e36, oraclePrice);
 
         (uint160 priceLimit, bool ok) = SwapLib.swapLimit({
             pool: YIELD_LOAN_POOL,
@@ -51,8 +54,8 @@ contract SwapLibTest is Test, Deployers {
             maxSlippageBps: maxSlippageBps
         });
 
-        assertGe(priceLimit, _sqrtPriceX96(1e36 * (10_000 - maxSlippageBps), oraclePrice * 10_000));
-        assertLe(priceLimit, _sqrtPriceX96(1e36, oraclePrice));
+        assertGe(priceLimit, _sqrtPriceX96(floorNum, floorDen));
+        assertLe(priceLimit, _sqrtPriceX96(ceilNum, ceilDen));
         assertEq(ok, true);
     }
 
@@ -60,6 +63,9 @@ contract SwapLibTest is Test, Deployers {
         maxSlippageBps = uint256(bound(maxSlippageBps, 1, 9999));
         oraclePrice = bound(oraclePrice, 1e30, 1e40);
         COLLATERAL_LOAN_POOL.setPrice(LOAN_TOKEN, COLLATERAL_TOKEN, uint256(1e36).mulDiv(1e36, oraclePrice));
+
+        bool zeroForOne = address(LOAN_TOKEN) < address(COLLATERAL_TOKEN);
+        (uint256 floorNum, uint256 floorDen, uint256 ceilNum, uint256 ceilDen) = _bounds(zeroForOne, 1e36, oraclePrice);
 
         (uint160 priceLimit, bool ok) = SwapLib.swapLimit({
             pool: IUniswapV3Pool(address(COLLATERAL_LOAN_POOL)),
@@ -70,8 +76,8 @@ contract SwapLibTest is Test, Deployers {
             maxSlippageBps: maxSlippageBps
         });
 
-        assertGe(priceLimit, _sqrtPriceX96(oraclePrice * 10_000, 1e36 * (10_000 - 1)));
-        assertLe(priceLimit, _sqrtPriceX96(oraclePrice * 10_000, 1e36 * (10_000 - maxSlippageBps)));
+        assertGe(priceLimit, _sqrtPriceX96(floorNum, floorDen));
+        assertLe(priceLimit, _sqrtPriceX96(ceilNum, ceilDen));
         assertEq(ok, true);
     }
 
@@ -130,6 +136,30 @@ contract SwapLibTest is Test, Deployers {
 
     function _sqrtPriceX96(uint256 num, uint256 den) internal pure returns (uint256) {
         return Math.sqrt(Math.mulDiv(num, 1 << 192, den));
+    }
+
+    /// @dev Computes the floor and ceiling sqrtPriceX96 bounds for `swapLimit`, accounting for which branch
+    /// (`zeroForOne`) the function will take. `num`/`den` are the outPerIn fraction (tokenOut per tokenIn) AS
+    /// PASSED to swapLimit. `swapLimit` internally swaps them to token1/token0 for `zeroForOne=false`, so this
+    /// helper mirrors that swap before computing the bounds. Floor = fair price (slip=0), ceiling = max slip (9999).
+    function _bounds(bool zeroForOne, uint256 num, uint256 den)
+        internal
+        pure
+        returns (uint256 floorNum, uint256 floorDen, uint256 ceilNum, uint256 ceilDen)
+    {
+        if (!zeroForOne) (num, den) = (den, num);
+
+        if (zeroForOne) {
+            floorNum = num;
+            floorDen = den * 10_000;
+            ceilNum = num;
+            ceilDen = den;
+        } else {
+            floorNum = num;
+            floorDen = den;
+            ceilNum = num * 10_000;
+            ceilDen = den;
+        }
     }
 
     function test_swapLib_skipWhenFairRateBelowMinSqrtRatio() public view {

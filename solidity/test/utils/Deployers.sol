@@ -9,26 +9,28 @@ import {MockIrm} from "../mocks/MockIrm.sol";
 import {MockMorpho} from "../mocks/MockMorpho.sol";
 import {MockOracle} from "../mocks/MockOracle.sol";
 import {MockPool} from "../mocks/MockPool.sol";
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
+
+// forge-lint: disable-start(internal-function-used-once,unused-return)
 
 contract Deployers is Test {
     using FCMHelpers for FCMVault;
 
-    MockERC20 immutable COLLATERAL_TOKEN = MockERC20(makeAddr("COLLATERAL_TOKEN"));
-    MockERC20 immutable LOAN_TOKEN = MockERC20(makeAddr("LOAN_TOKEN"));
-    MockERC20 immutable YIELD_TOKEN = MockERC20(makeAddr("YIELD_TOKEN"));
+    MockERC20 immutable COLLATERAL_TOKEN = new MockERC20("COLLATERAL_TOKEN", "COLLATERAL_TOKEN");
+    MockERC20 immutable LOAN_TOKEN = new MockERC20("LOAN_TOKEN", "LOAN_TOKEN");
+    MockERC20 immutable YIELD_TOKEN = new MockERC20("YIELD_TOKEN", "YIELD_TOKEN");
 
     uint128 constant LTV_MIN = 0.6e18;
     uint128 constant LTV_MAX = 0.7e18;
 
-    MockPool immutable COLLATERAL_LOAN_POOL = MockPool(makeAddr("COLLATERAL_LOAN_POOL"));
-    MockPool immutable YIELD_LOAN_POOL = MockPool(makeAddr("YIELD_LOAN_POOL"));
+    MockPool immutable COLLATERAL_LOAN_POOL = new MockPool();
+    MockPool immutable YIELD_LOAN_POOL = new MockPool();
 
-    MockMorpho constant MORPHO = MockMorpho(0x9a094eA4AbE343D908E1bDE9fC478D71b41D665f);
-    MockOracle immutable COLLATERAL_ORACLE = MockOracle(makeAddr("COLLATERAL_ORACLE"));
-    MockIrm immutable MARKET_IRM = MockIrm(makeAddr("MARKET_IRM"));
+    MockMorpho immutable MORPHO = new MockMorpho();
+    MockOracle immutable COLLATERAL_ORACLE = new MockOracle(COLLATERAL_PRICE);
+    MockIrm immutable MARKET_IRM = new MockIrm();
     uint256 constant MARKET_LLTV = 0.86e18;
-    MockOracle immutable YIELD_ORACLE = MockOracle(makeAddr("YIELD_ORACLE"));
+    MockOracle immutable YIELD_ORACLE = new MockOracle(YIELD_PRICE);
 
     uint256 constant COLLATERAL_PRICE = 2000e36;
     uint256 constant YIELD_PRICE = 1e36;
@@ -42,24 +44,22 @@ contract Deployers is Test {
     address internal stranger = address(makeAddr("stranger"));
 
     function deployVault() public {
-        etchMocks();
+        labelMocks();
         setCollateralPrice(COLLATERAL_PRICE);
         setYieldPrice(YIELD_PRICE);
         vault = new FCMVault(defaultInitParams());
     }
 
-    function etchMocks() internal {
-        vm.etch(address(COLLATERAL_TOKEN), address(new MockERC20("COLLATERAL_TOKEN", "COLLATERAL_TOKEN")).code);
-        vm.etch(address(LOAN_TOKEN), address(new MockERC20("LOAN_TOKEN", "LOAN_TOKEN")).code);
-        vm.etch(address(YIELD_TOKEN), address(new MockERC20("YIELD_TOKEN", "YIELD_TOKEN")).code);
-
-        vm.etch(address(COLLATERAL_LOAN_POOL), address(new MockPool()).code);
-        vm.etch(address(YIELD_LOAN_POOL), address(new MockPool()).code);
-
-        vm.etch(address(COLLATERAL_ORACLE), address(new MockOracle(COLLATERAL_PRICE)).code);
-        vm.etch(address(MARKET_IRM), address(new MockIrm()).code);
-        vm.etch(address(YIELD_ORACLE), address(new MockOracle(YIELD_PRICE)).code);
-        vm.etch(address(MORPHO), address(new MockMorpho()).code);
+    function labelMocks() internal {
+        vm.label(address(COLLATERAL_TOKEN), "COLLATERAL_TOKEN");
+        vm.label(address(LOAN_TOKEN), "LOAN_TOKEN");
+        vm.label(address(YIELD_TOKEN), "YIELD_TOKEN");
+        vm.label(address(COLLATERAL_LOAN_POOL), "COLLATERAL_LOAN_POOL");
+        vm.label(address(YIELD_LOAN_POOL), "YIELD_LOAN_POOL");
+        vm.label(address(COLLATERAL_ORACLE), "COLLATERAL_ORACLE");
+        vm.label(address(MARKET_IRM), "MARKET_IRM");
+        vm.label(address(YIELD_ORACLE), "YIELD_ORACLE");
+        vm.label(address(MORPHO), "MORPHO");
     }
 
     function defaultInitParams() public view returns (IFCMVault.InitParams memory initParams) {

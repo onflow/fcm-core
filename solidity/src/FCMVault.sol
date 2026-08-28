@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {IFCMVault} from "./interfaces/IFCMVault.sol";
 import {IUniswapV3Pool} from "./interfaces/external/IUniswapV3Pool.sol";
 import {IUniswapV3SwapCallback} from "./interfaces/external/IUniswapV3SwapCallback.sol";
-import "./libraries/ConstantsLib.sol";
+import {LTV_SCALE, ORACLE_PRICE_SCALE} from "./libraries/ConstantsLib.sol";
 import {FeesLib} from "./libraries/FeesLib.sol";
 import {MorphoLib} from "./libraries/MorphoLib.sol";
 import {SwapLib} from "./libraries/SwapLib.sol";
@@ -187,20 +187,23 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
     function setManagementFeeBps(uint16 newBps) external onlyOwner {
         require(newBps <= MAX_MANAGEMENT_FEE_BPS, MaxFeeRateExceeded());
         _accrueFees();
-        emit ManagementFeeSet(managementFeeBps, newBps);
+        uint16 oldFee = managementFeeBps;
         managementFeeBps = newBps;
+        emit ManagementFeeSet(oldFee, newBps);
     }
 
     /// @inheritdoc IFCMVault
     function setPerformanceFeeBps(uint16 newBps) external onlyOwner {
         require(newBps <= MAX_PERFORMANCE_FEE_BPS, MaxFeeRateExceeded());
         _accrueFees();
-        emit PerformanceFeeSet(performanceFeeBps, newBps);
+        uint16 oldFee = performanceFeeBps;
         performanceFeeBps = newBps;
+        emit PerformanceFeeSet(oldFee, newBps);
     }
 
     /// @inheritdoc IFCMVault
     function setFeeRecipient(address newRecipient) external onlyOwner {
+        require(newRecipient != address(0), ZeroAddress());
         _accrueFees();
         emit FeeRecipientSet(feeRecipient, newRecipient);
         feeRecipient = newRecipient;
@@ -236,6 +239,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
             (uint256 yieldSold, uint256 loanRepaid) =
                 _swapYieldToLoanWithLimit({yieldToSell: 0, loanToGet: debtToRepay});
             if (loanRepaid > 0) {
+                // forge-lint: disable-next-line(unused-return)
                 MORPHO.repay(_market(), loanRepaid, 0, address(this), "");
             }
             emit RebalancedDown(msg.sender, yieldSold, loanRepaid);
@@ -245,10 +249,12 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         uint256 minDebt = collateralInDebtAsset.mulDiv(LTV_MIN, LTV_SCALE);
         if (debt < minDebt && !emergencyRecoveryActive) {
             uint256 debtToBorrow = minDebt - debt;
+            // forge-lint: disable-next-line(unused-return)
             MORPHO.borrow(_market(), debtToBorrow, 0, address(this), address(this));
             (uint256 loanBorrowed, uint256 yieldBought) = _swapLoanToYieldWithLimit({loanToSell: debtToBorrow});
             uint256 leftover = debtToBorrow - loanBorrowed;
             if (leftover > 0) {
+                // forge-lint: disable-next-line(unused-return)
                 MORPHO.repay(_market(), leftover, 0, address(this), "");
             }
             emit RebalancedUp(msg.sender, loanBorrowed, yieldBought);
@@ -299,6 +305,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
     /// @inheritdoc IFCMVault
     function executeEmergencyRecovery() external onlyOwner {
         require(emergencyRecoveryValidAt != 0, EmergencyRecoveryNotReady());
+        // forge-lint: disable-next-line(block-timestamp)
         require(block.timestamp >= emergencyRecoveryValidAt, EmergencyRecoveryNotReady());
         emergencyRecovered = true;
 
@@ -339,6 +346,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
 
         uint256 toBorrow = _depositBorrow(assets);
         if (toBorrow > 0) {
+            // forge-lint: disable-next-line(unused-return)
             MORPHO.borrow(_market(), toBorrow, 0, address(this), address(this));
             SwapLib.swapExactInToLimit(YIELD_LOAN_POOL, LOAN_TOKEN, YIELD_TOKEN, toBorrow, 0);
         }
@@ -395,6 +403,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         if (borrowShares > 0) {
             debtToRepay = MorphoLib.borrowSharesToAssets(MORPHO, _market(), borrowShares);
             LOAN_TOKEN.safeTransferFrom(msg.sender, address(this), debtToRepay);
+            // forge-lint: disable-next-line(unused-return)
             MORPHO.repay(_market(), 0, borrowShares, address(this), "");
         }
 
@@ -525,6 +534,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
             }
             return;
         }
+        // forge-lint: disable-next-line(unused-return)
         MORPHO.repay(_market(), 0, borrowShareSlice, address(this), abi.encode(collSlice, loanOut));
     }
 
@@ -678,6 +688,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         // Advance clock + HWM unconditionally (even when the mint was skipped) so fees meter from when they're enabled,
         // not retroactively - the fee setters accrue first, pinning these to now. Gating them on the mint would
         // back-charge holders from deploy.
+        // casting to 'uint64' is safe because it wouldn't overflow in the next 580 billion years.
+        // forge-lint: disable-next-line(unsafe-typecast)
         lastFeeAccrual = uint64(block.timestamp);
         if (pricePerShare > perfHighWaterMark) perfHighWaterMark = pricePerShare;
     }
@@ -743,7 +755,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
     }
 
     function _totalClaims() internal view returns (uint256) {
-        return totalSupply() + 10 ** _decimalsOffset();
+        return totalSupply() + (10 ** _decimalsOffset());
     }
 
     function _notInRecovery() internal view {

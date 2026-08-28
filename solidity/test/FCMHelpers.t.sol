@@ -11,6 +11,8 @@ import {MorphoLib as MorphoBlueLib} from "@morpho-blue/libraries/periphery/Morph
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
 
+// forge-ignore unused-return
+
 /// @dev Dedicated coverage for `FCMHelpers`. The library's entire reason for existing is to read the vault's own
 /// Morpho position (`address(vault)`) rather than the caller's (`address(this)`), so it is safe to call from a test
 /// contract that holds no Morpho position. The `*_readsVaultPositionNotCaller` tests pin that property directly: they

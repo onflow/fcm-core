@@ -156,8 +156,8 @@ contract ForkDeployers is Test, IUniswapV3SwapCallback {
         // sqrtPriceX96 = sqrt(token1/token0) * Q96. The yield oracle prices loan-per-yield
         // (1e36-scaled), so the sqrt limit depends on which token is token0.
         uint160 targetSpot = address(FUSDEV) < address(PYUSD0)
-            ? uint160(Math.mulDiv(Math.sqrt(yieldPrice), Q96, 1e18))
-            : uint160(Math.mulDiv(1e18, Q96, Math.sqrt(yieldPrice)));
+            ? SafeCast.toUint160(Math.mulDiv(Math.sqrt(yieldPrice), Q96, 1e18))
+            : SafeCast.toUint160(Math.mulDiv(1e18, Q96, Math.sqrt(yieldPrice)));
         if (currentSpot < targetSpot) {
             _directArbSwap(yieldLoanPool, address(FUSDEV), address(PYUSD0), 1e10, targetSpot, arbitrager);
         } else if (currentSpot > targetSpot) {

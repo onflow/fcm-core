@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import "./ConstantsLib.sol";
+import {BPS, LTV_SCALE} from "./ConstantsLib.sol";
 import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -45,8 +45,10 @@ library FeesLib {
         // continuous limit (negligible span <= ~r^2/2: ~0.02% at bps=200,
         // ~0.48% at the 1000 cap).
         uint256 elapsed = block.timestamp - lastFeeAccrual;
+        // forge-lint: disable-next-line(block-timestamp)
         if (elapsed > SECONDS_PER_YEAR) elapsed = SECONDS_PER_YEAR;
 
+        // forge-lint: disable-next-line(block-timestamp)
         if (managementFeeBps > 0 && elapsed > 0) {
             managementFee = nav.mulDiv(managementFeeBps * elapsed, BPS * SECONDS_PER_YEAR);
         }

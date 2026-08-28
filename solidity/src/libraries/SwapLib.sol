@@ -77,6 +77,8 @@ library SwapLib {
         amountOut = zeroForOne ? uint256(-a1) : uint256(-a0);
     }
 
+    // forge-lint: disable-start(boolean-cst)
+
     /// @notice Resolve the `sqrtPriceLimitX96` and a go/skip flag for a swap selling `tokenIn` for `tokenOut` on
     /// `pool`, bounding price impact to `maxSlippageBps` away from a fair rate of `outPerInNum / outPerInDen`.
     /// @param pool The Uniswap V3 pool address for the `tokenIn`/`tokenOut` pair.
@@ -86,7 +88,6 @@ library SwapLib {
     /// @param outPerInDen Denominator of the fair `tokenOut`-per-`tokenIn` rate.
     /// @param maxSlippageBps Maximum slippage allowed in basis points.
     /// @return limit The Q64.96 price limit to pass to the pool.
-    /// @return ok Whether a swap should be attempted.
     function swapLimit(
         IUniswapV3Pool pool,
         IERC20 tokenIn,
@@ -119,6 +120,7 @@ library SwapLib {
         // The limit must sit on the side the price moves toward: below spot for a
         // price-decreasing swap, above spot for a price-increasing one. If the pool
         // is already past it, there is no room to trade within tolerance.
+        // forge-lint: disable-next-line(unused-return)
         (uint160 spot,,,,,,) = pool.slot0();
         if (zeroForOne && raw >= spot) return (0, false);
         if (!zeroForOne && raw <= spot) return (0, false);

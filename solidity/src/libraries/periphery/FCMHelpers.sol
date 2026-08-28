@@ -2,11 +2,13 @@
 pragma solidity ^0.8.24;
 
 import {IFCMVault} from "../../interfaces/IFCMVault.sol";
-import "../ConstantsLib.sol";
+import {LTV_SCALE, ORACLE_PRICE_SCALE} from "../ConstantsLib.sol";
 import {MorphoLib} from "../MorphoLib.sol";
 import {IMorpho, MarketParams, Position} from "@morpho-blue/interfaces/IMorpho.sol";
 import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+
+// forge-lint: disable-start(internal-function-used-once)
 
 /// @title FCMHelpers
 /// @author Flow Foundation

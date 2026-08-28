@@ -2,13 +2,11 @@
 pragma solidity ^0.8.24;
 
 import {YieldTokenOracle} from "../src/YieldTokenOracle.sol";
+import "../src/libraries/ConstantsLib.sol";
 import {MockERC4626} from "./mocks/MockERC4626.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
-
-// Morpho's ORACLE_PRICE_SCALE.
-uint256 constant ORACLE_PRICE_SCALE = 1e36;
 
 // Default conversion sample: large enough that the vault's convertToAssets floor is ~1e-18 relative, so it stays
 // negligible for any realistic position size.

@@ -178,7 +178,7 @@ contract SandwichForkTest is ForkDeployers {
         (uint160 currentSpot,,,,,,) = yieldLoanPool.slot0();
 
         uint256 sqrtFactor = Math.sqrt((10_000 - pushBps) * 1e36 / 10_000);
-        uint160 targetSpot = uint160(Math.mulDiv(currentSpot, sqrtFactor, 1e18));
+        uint160 targetSpot = SafeCast.toUint160(Math.mulDiv(currentSpot, sqrtFactor, 1e18));
 
         uint256 loanBefore = PYUSD0.balanceOf(attacker);
 
@@ -201,6 +201,6 @@ contract SandwichForkTest is ForkDeployers {
             _directArbSwap(yieldLoanPool, address(FUSDEV), address(PYUSD0), yieldGotFront, 0, attacker);
         }
 
-        r.attackerProfit = int256(int256(PYUSD0.balanceOf(attacker)) - SafeCast.toInt256(loanBefore));
+        r.attackerProfit = SafeCast.toInt256(PYUSD0.balanceOf(attacker)) - SafeCast.toInt256(loanBefore);
     }
 }

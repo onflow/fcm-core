@@ -174,7 +174,7 @@ contract FCMEmergencyRecoveryTest is Test, Deployers {
 
         uint256 collateralOut = COLLATERAL_TOKEN.balanceOf(owner);
         uint256 yieldOut = YIELD_TOKEN.balanceOf(owner);
-        vm.revertToState(snap);
+        require(vm.revertToState(snap));
 
         vm.expectEmit(false, false, false, true);
         emit IFCMVault.EmergencyRecoveryExecuted(collateralOut, yieldOut, 0);

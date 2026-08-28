@@ -7,6 +7,8 @@ import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {SharesMathLib} from "@morpho-blue/libraries/SharesMathLib.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
+// forge-lint: disable-start(internal-function-used-once)
+
 /// @title MorphoLib
 /// @author Flow Foundation
 /// @notice Helpers around a Morpho Blue market.
