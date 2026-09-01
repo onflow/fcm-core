@@ -46,6 +46,10 @@ library Errors {
         return abi.encodeWithSelector(IFCMVault.MaxSlippageExceeded.selector);
     }
 
+    function slippageExceeded(uint256 recieved, uint256 minExpected) public pure returns (bytes memory) {
+        return abi.encodeWithSelector(IFCMVault.SlippageExceeded.selector, recieved, minExpected);
+    }
+
     function maxFeeRateExceeded() public pure returns (bytes memory) {
         return abi.encodeWithSelector(IFCMVault.MaxFeeRateExceeded.selector);
     }
@@ -79,6 +83,6 @@ library Errors {
     }
 
     function erc4626ExceededMaxDeposit(uint256 assets, uint256 maxDeposit) public pure returns (bytes memory) {
-        return abi.encodeWithSelector(IFCMVault.ERC4626ExceededMaxDeposit.selector, assets, maxDeposit);
+        return abi.encodeWithSelector(IFCMVault.ExceededMaxDeposit.selector, assets, maxDeposit);
     }
 }

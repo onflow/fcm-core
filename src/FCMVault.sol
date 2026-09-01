@@ -310,7 +310,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         emergencyRecovered = true;
 
         uint256 marketCollateral = _collateral();
-        if (marketCollateral > 0) MORPHO.withdrawCollateral(_market(), marketCollateral, address(this), address(this));
+        if (marketCollateral > 0) {
+            MORPHO.withdrawCollateral(_market(), marketCollateral, address(this), address(this));
+        }
 
         address to = owner();
         uint256 collateralOut = COLLATERAL_TOKEN.balanceOf(address(this));
@@ -324,8 +326,15 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
     }
 
     /// @inheritdoc IFCMVault
+    function deposit(uint256 assets, address receiver, uint256 minSharesOut) external returns (uint256 shares) {
+        shares = deposit(assets, receiver);
+        require(shares >= minSharesOut, SlippageExceeded(shares, minSharesOut));
+        return shares;
+    }
+
+    /// @inheritdoc IFCMVault
     function deposit(uint256 assets, address receiver)
-        external
+        public
         override
         nonReentrant
         notInRecovery
@@ -339,7 +348,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         if (navBefore == 0 && totalSupply() > 0) revert VaultUnderwater();
         uint256 maxAssets = Math.saturatingSub(maxTvl, navBefore);
         if (assets > maxAssets) {
-            revert ERC4626ExceededMaxDeposit(assets, maxAssets);
+            revert ExceededMaxDeposit(assets, maxAssets);
         }
         COLLATERAL_TOKEN.safeTransferFrom(msg.sender, address(this), assets);
         MORPHO.supplyCollateral(_market(), assets, address(this), "");
@@ -359,8 +368,18 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
     }
 
     /// @inheritdoc IFCMVault
-    function redeem(uint256 shares, address receiver, address owner)
+    function redeem(uint256 shares, address receiver, address owner, uint256 minAssetsOut)
         external
+        returns (uint256 assets)
+    {
+        assets = redeem(shares, receiver, owner);
+        require(assets >= minAssetsOut, SlippageExceeded(assets, minAssetsOut));
+        return assets;
+    }
+
+    /// @inheritdoc IFCMVault
+    function redeem(uint256 shares, address receiver, address owner)
+        public
         override
         nonReentrant
         notRecovered
@@ -691,7 +710,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         // casting to 'uint64' is safe because it wouldn't overflow in the next 580 billion years.
         // forge-lint: disable-next-line(unsafe-typecast)
         lastFeeAccrual = uint64(block.timestamp);
-        if (pricePerShare > perfHighWaterMark) perfHighWaterMark = pricePerShare;
+        if (pricePerShare > perfHighWaterMark) {
+            perfHighWaterMark = pricePerShare;
+        }
     }
 
     function _logVaultState() internal {

@@ -279,7 +279,7 @@ contract FCMRedeemTest is Test, Deployers {
         vm.prank(alice);
         uint256 shares = vault.deposit(1 ether, alice);
         // Deep shortfall: burn 60% of the vault's yield so the held yield can't cover the slice.
-        YIELD_TOKEN.burn(address(vault), YIELD_TOKEN.balanceOf(address(vault)) * 6 / 10);
+        YIELD_TOKEN.burn(address(vault), (YIELD_TOKEN.balanceOf(address(vault)) * 6) / 10);
         // Buffer only collateral in the singleton; keep loan at zero.
         COLLATERAL_TOKEN.mint(address(MORPHO), 2 ether);
         assertEq(LOAN_TOKEN.balanceOf(address(MORPHO)), 0);

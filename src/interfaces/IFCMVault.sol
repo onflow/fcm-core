@@ -87,7 +87,9 @@ interface IFCMVault is IERC4626 {
     event EarlyAccessRevoked(address indexed account);
 
     /// @notice Thrown when despositing more assets than the remaining headroom.
-    error ERC4626ExceededMaxDeposit(uint256 assets, uint256 headroom);
+    error ExceededMaxDeposit(uint256 assets, uint256 headroom);
+    /// @notice Thrown on custom deposit and redeem overloads when the min output is not met.
+    error SlippageExceeded(uint256 output, uint256 minOutput);
     /// @notice Thrown when performing an action that is not allowed while a recovery is pending.
     error EmergencyRecoveryActive();
     /// @notice Thrown when executing a recovery that is not ready.
@@ -263,6 +265,12 @@ interface IFCMVault is IERC4626 {
     function convertToAssets(uint256 shares) external view override(IERC4626) returns (uint256 assets);
     /// @notice Remaining headroom under the TVL limit, clamped to 0 when deposits are disabled.
     function maxDeposit(address receiver) external view override(IERC4626) returns (uint256 maxAssets);
+    /// @notice Deposit `assets` of the underlying into the vault and mint vault shares to `receiver`, reverting if
+    /// fewer than `minSharesOut` shares are minted.
+    /// @dev Slippage-protected wrapper around the standard `deposit`. Use this overload (or a router enforcing
+    /// `minSharesOut`) to protect against sandwich attacks.
+    /// @return shares Vault shares minted to `receiver`.
+    function deposit(uint256 assets, address receiver, uint256 minSharesOut) external returns (uint256 shares);
     /// @notice Deposit `assets` of the underlying into the vault and mint vault shares to `receiver`. The assets are
     /// supplied as collateral to Morpho, a loan is borrowed at the deposit-target LTV and swapped into yield, and
     /// shares are minted in proportion to the depositor's contribution to NAV.
@@ -274,6 +282,15 @@ interface IFCMVault is IERC4626 {
     /// @dev While the vault is healthy, the owner can redeem all their shares.
     /// When the vault is unhealthy no shares can be redeemed.
     function maxRedeem(address owner) external view returns (uint256 maxShares);
+    /// @notice Redeem `shares` of this vault for the underlying asset, reverting if fewer than `minAssetsOut` assets
+    /// are returned.
+    /// @dev Slippage-protected wrapper around the standard `redeem`. Use this overload (or a router enforcing
+    /// `minAssetsOut`) to protect against sandwich attacks.
+    /// @dev Reverts with `VaultUnhealthy` if the position's LTV exceeds `LTV_MAX`.
+    /// @return assets Asset actually delivered to `receiver`.
+    function redeem(uint256 shares, address receiver, address owner, uint256 minAssetsOut)
+        external
+        returns (uint256 assets);
     /// @notice Redeem `shares` of this vault for the underlying asset. The owner's shares are burned, a proportional
     /// slice of the underlying leveraged position is unwound through the AMM, and the resulting asset is delivered to
     /// `receiver`.
