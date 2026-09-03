@@ -2,30 +2,27 @@
 pragma solidity ^0.8.24;
 
 import {BPS, LTV_SCALE} from "./ConstantsLib.sol";
-import {MarketParams} from "@morpho-blue/interfaces/IMorpho.sol";
-import {MarketParamsLib} from "@morpho-blue/libraries/MarketParamsLib.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title FeesLib
 /// @author Flow Foundation
-/// @notice Library for calculating fees for the FCMVault.
+/// @notice Fee maths for the FCMVault.
 library FeesLib {
     using Math for uint256;
-    using MarketParamsLib for MarketParams;
 
     uint256 private constant SECONDS_PER_YEAR = 365 days;
 
-    /// @notice Calculates the fee shares to mint for the given parameters
-    /// @dev Pure calculation only; the caller is responsible for emitting `FeesAccrued` with the returned components.
-    /// @param nav The net asset value of the vault.
-    /// @param claims The claims of the vault.
-    /// @param managementFeeBps The management fee in basis points.
-    /// @param performanceFeeBps The performance fee in basis points.
-    /// @param perfHighWaterMark The performance high water mark.
-    /// @param lastFeeAccrual The last fee accrual.
-    /// @return managementFee The management fee.
-    /// @return performanceFee The performance fee.
-    /// @return feeShares The fee shares to mint.
+    /// @notice Calculates the fee shares to mint for the given parameters.
+    /// @dev Pure calculation; the caller mints the shares and emits `FeesAccrued`.
+    /// @param nav Net asset value, in collateral-token units.
+    /// @param claims Total supply plus the virtual shares from the decimals offset.
+    /// @param managementFeeBps Annual management fee rate.
+    /// @param performanceFeeBps Performance fee rate on gains above the high-water mark.
+    /// @param perfHighWaterMark All-time peak price-per-share, 1e18-scaled.
+    /// @param lastFeeAccrual Timestamp the management fee was last billed to.
+    /// @return managementFee Management fee for this accrual, in asset terms.
+    /// @return performanceFee Performance fee for this accrual, in asset terms.
+    /// @return feeShares Shares to mint to the fee recipient.
     function feesToMint(
         uint256 nav,
         uint256 claims,
@@ -35,15 +32,10 @@ library FeesLib {
         uint256 lastFeeAccrual
     ) external view returns (uint256 managementFee, uint256 performanceFee, uint256 feeShares) {
         uint256 pricePerShare = nav.mulDiv(LTV_SCALE, claims);
-        // Bill exactly `rate * elapsed` since the last accrual, then advance the clock
-        // (accrual is irregular: every interaction + permissionless accrueFees).
-        // The billable gap is capped at one year, so the fee is
-        // provably <= the annual rate `r` (= bps/1e4) however long the vault
-        // sits unaccrued - idle time past a year is forgiven, bounding a single
-        // catch-up dilution after long dormancy. Within a year the realized drag
-        // lies in `[1 - e^(-r), r]`: `r` at one accrual/year, `1 - e^(-r)` in the
-        // continuous limit (negligible span <= ~r^2/2: ~0.02% at bps=200,
-        // ~0.48% at the 1000 cap).
+
+        // Accrual is irregular (every interaction, plus permissionless `accrueFees`), so bill `rate * elapsed`.
+        // Capping the gap at a year forgives longer idle stretches, which holds the realized drag at or below the
+        // nominal annual rate and bounds a single catch-up dilution after dormancy.
         uint256 elapsed = block.timestamp - lastFeeAccrual;
         // forge-lint: disable-next-line(block-timestamp)
         if (elapsed > SECONDS_PER_YEAR) elapsed = SECONDS_PER_YEAR;
@@ -54,24 +46,18 @@ library FeesLib {
         }
 
         if (performanceFeeBps > 0 && pricePerShare > perfHighWaterMark) {
-            // Fee on the gain in pps above the all-time HWM. pps is UNREALIZED and
-            // oracle-marked, so a transient mark move can crystallize a fee on paper
-            // profit that later reverses - kept, not refunded. The mint goes to the
-            // recipient, not the triggerer, so a permissionless accrueFees call can't
-            // pay its caller; the strict HWM charges net all-time highs only.
+            // pps is unrealized and oracle-marked, so a transient mark can crystallize a fee on paper profit - kept,
+            // not refunded. The strict all-time HWM is what stops the same gain being charged twice.
             uint256 gain = (pricePerShare - perfHighWaterMark).mulDiv(claims, LTV_SCALE);
             performanceFee = gain.mulDiv(performanceFeeBps, BPS);
         }
 
         uint256 feeAssets = managementFee + performanceFee;
         if (feeAssets > 0) {
-            if (feeAssets > nav) {
-                // unreachable with MAX_MANAGEMENT_FEE_BPS and MAX_PERFORMANCE_FEE_BPS.
-                // prefer to not take fees over reverting the protocol
-                return (0, 0, 0);
-            }
+            // Unreachable under the vault's fee caps; skipping beats reverting every entry point that accrues.
+            if (feeAssets > nav) return (0, 0, 0);
+            // Dilution: price the mint at the post-fee NAV. `+1` mirrors the virtual asset in the share conversion.
             uint256 navAfterFee = nav + 1 - feeAssets;
-            // Mint shares worth `feeAssets` at the post-mint price (dilution).
             feeShares = feeAssets.mulDiv(claims, navAfterFee);
         }
         return (managementFee, performanceFee, feeShares);

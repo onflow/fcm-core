@@ -15,27 +15,22 @@ contract YieldTokenOracle is IOracle {
     /// @dev Morpho's ORACLE_PRICE_SCALE.
     uint256 internal constant PRICE_SCALE = 1e36;
 
-    /// @notice The FCMVault being priced.
+    /// @notice The ERC4626 yield vault whose shares are being priced.
     IERC4626 public immutable VAULT;
 
-    /// @notice The asset being priced.
+    /// @notice The vault's underlying asset, i.e. the token prices are quoted in.
     address public immutable ASSET;
 
-    /// @notice The sample amount of vault shares used to derive the share-to-asset price, set at construction.
+    /// @notice Share amount `price()` converts, to spread `convertToAssets`'s rounding floor over many shares.
     uint256 public immutable CONVERSION_SAMPLE;
 
     error AssetMismatch();
     error ZeroAddress();
     error ZeroConversionSample();
 
-    /// @notice Constructs a new YieldTokenOracle.
-    /// @param vault The ERC4626 vault whose shares are being priced.
     /// @param asset The vault's underlying asset; must match `vault.asset()`.
-    /// @param conversionSample The sample amount of vault shares used to convert to the underlying asset. Should be
-    /// chosen such that converting `conversionSample` to assets has enough precision. A larger sample spreads the
-    /// vault's `convertToAssets` floor over more shares, reducing the per-share rounding error that accumulates when
-    /// pricing large positions; too small a sample understates the value of large holdings. Must not be so large that
-    /// `vault.convertToAssets(conversionSample)` overflows inside the vault.
+    /// @param conversionSample Too small understates large holdings, because `convertToAssets(1)` floors away most of
+    /// the precision on a share worth more than one unit of its asset. Too large overflows inside the vault.
     constructor(IERC4626 vault, address asset, uint256 conversionSample) {
         require(asset != address(0), ZeroAddress());
         require(conversionSample != 0, ZeroConversionSample());
