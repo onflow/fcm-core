@@ -1,0 +1,8 @@
+FCMForkGasSnapshotsTest:test_gasFork_deposit() (gas: 256488)
+FCMForkGasSnapshotsTest:test_gasFork_harvest() (gas: 96677)
+FCMForkGasSnapshotsTest:test_gasFork_rebalance() (gas: 147485)
+FCMForkGasSnapshotsTest:test_gasFork_redeem() (gas: 281816)
+FCMGasSnapshotsTest:test_gas_deposit() (gas: 345766)
+FCMGasSnapshotsTest:test_gas_harvest() (gas: 204901)
+FCMGasSnapshotsTest:test_gas_rebalance() (gas: 151470)
+FCMGasSnapshotsTest:test_gas_redeem() (gas: 174853)
