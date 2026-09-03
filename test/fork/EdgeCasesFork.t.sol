@@ -107,7 +107,7 @@ contract RedeemForkTest is ForkDeployers {
     }
 
     function _expectedAssetsOut(uint256 assetsIn) internal returns (uint256) {
-        uint256 snapshotId = vm.snapshot();
+        uint256 snapshotId = vm.snapshotState();
         vm.startPrank(alice);
         uint256 shares = vault.deposit(assetsIn, alice);
         uint256 assetsOut = vault.redeem(shares, alice, alice);

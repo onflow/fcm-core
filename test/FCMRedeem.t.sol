@@ -7,8 +7,8 @@ import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
 import {Position} from "@morpho-blue/interfaces/IMorpho.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 contract FCMRedeemTest is Test, Deployers {
     using FCMHelpers for FCMVault;
@@ -403,6 +403,18 @@ contract FCMRedeemTest is Test, Deployers {
         assertGt(vault.totalAssets(), 0);
 
         // only way to withdraw is to use redeemInKind
+        vm.expectRevert(Errors.vaultUnhealthy());
+        vm.prank(alice);
+        vault.redeem(shares, alice, alice);
+    }
+
+    function test_redeem_underwater() public {
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1 ether, alice);
+
+        setYieldPrice(YIELD_PRICE / 2);
+        MORPHO.liquidate(vault.market(), address(vault), vault.collateral(), 0);
+
         vm.expectRevert(Errors.vaultUnhealthy());
         vm.prank(alice);
         vault.redeem(shares, alice, alice);

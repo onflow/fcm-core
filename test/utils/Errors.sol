@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IFCMVault} from "../../src/interfaces/IFCMVault.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IERC20Errors} from "openzeppelin-contracts/contracts/interfaces/draft-IERC6093.sol";
+import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 
 library Errors {
     function unauthorized() public pure returns (bytes memory) {

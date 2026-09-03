@@ -2,6 +2,12 @@
 snapshot:
 	FOUNDRY_PROFILE=ci forge snapshot --match-path "test/gas/*.sol"
 
+.PHONY: coverage
+coverage:
+	forge coverage --report lcov --report summary
+	genhtml lcov.info -o coverage --branch-coverage --ignore-errors inconsistent --ignore-errors corrupt
+	open coverage/index.html
+
 # CI pipeline
 
 .PHONY: ci
