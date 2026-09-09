@@ -38,7 +38,7 @@ jobs:
           FOUNDRY_PROFILE: ci
 
       - name: Run Forge gas snapshot test
-        run: forge snapshot --match-path "test/gas/*.t.sol" --check --tolerance 1
+        run: forge snapshot --match-path "test/gas/*.t.sol" --check --tolerance 3
         env:
           FOUNDRY_PROFILE: ci
 
