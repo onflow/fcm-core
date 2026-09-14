@@ -19,7 +19,7 @@ flow_mainnet = "https://mainnet.evm.nodes.onflow.org"
 [profile.ci]
 no_match_path = "^$"
 via_ir = true
-optimizer_runs = 850
+optimizer_runs = 830
 verbosity = 3
 fuzz.runs = 10_000
 deny = "notes"
@@ -27,7 +27,7 @@ deny = "notes"
 [profile.local-ci]
 no_match_path = "^$"
 via_ir = true
-optimizer_runs = 850
+optimizer_runs = 830
 verbosity = 3
 fuzz.runs = 10_000
 deny = "notes"

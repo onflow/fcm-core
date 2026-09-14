@@ -8,7 +8,8 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title SwapLib
 /// @author Flow Foundation
-/// @notice Thin wrapper around SwapRouter02. Recipient is always `address(this)`.
+/// @notice Thin wrapper around a Uniswap V3 pool's `swap`. The vault calls the pool directly - there is no router -
+/// so the caller must implement `IUniswapV3SwapCallback`. Recipient is always `address(this)`.
 library SwapLib {
     /// @dev Uniswap V3 tick-math bound on a valid `sqrtPriceLimitX96`.
     uint160 internal constant MIN_SQRT_RATIO = 4_295_128_739;
@@ -17,13 +18,10 @@ library SwapLib {
     /// @dev Q64.96 fixed-point one squared (`2**192`)
     uint256 internal constant ONE_X192 = 1 << 192;
 
-    /// @notice Swap tokenIn for tokenOut
-    /// @dev The caller of this method receives a callback in the form of IUniswapV3SwapCallback#uniswapV3SwapCallback
-    /// @param tokenIn Token being sold.
-    /// @param tokenOut Token being bought.
-    /// @param amountInRequested Maximum amount of `tokenIn` to sell.
-    /// @param sqrtPriceLimitX96 The Q64.96 sqrt price limit. If zero for one, the price cannot move beyond this limit.
-    /// @return amountIn Realized amount of `tokenIn` spent (<= `amountInRequested` on a partial fill).
+    /// @notice Sell up to `amountInRequested` of `tokenIn`, stopping early if the price limit is reached.
+    /// @dev The caller receives an `IUniswapV3SwapCallback#uniswapV3SwapCallback` and must pay the pool there.
+    /// @param sqrtPriceLimitX96 Q64.96 marginal-price bound; pass 0 for no bound (fills to the tick range's edge).
+    /// @return amountIn Realized amount of `tokenIn` spent (< `amountInRequested` on a partial fill).
     /// @return amountOut Realized amount of `tokenOut` received.
     function swapExactInToLimit(
         IUniswapV3Pool pool,
@@ -38,9 +36,9 @@ library SwapLib {
         // casting is safe because will only use tokens with supply well below 2**256
         // forge-lint: disable-next-line(unsafe-typecast)
         (int256 a0, int256 a1) = pool.swap(address(this), zeroForOne, int256(amountInRequested), limit, data);
-        // Positive delta = pool received (input consumed); negative delta = pool sent (output).
-        // On a partial fill the consumed input is LESS than `amountInRequested` - the unspent input stays with the
-        // caller. casting to 'uint256' is safe because uniswap return convention
+        // Uniswap sign convention: positive delta = pool received (input), negative = pool sent (output). A partial
+        // fill consumes less than requested and leaves the remainder with the caller.
+        // casting to 'uint256' is safe because uniswap return convention
         // forge-lint: disable-next-line(unsafe-typecast)
         amountIn = zeroForOne ? uint256(a0) : uint256(a1);
         // casting to 'uint256' is safe because uniswap return convention
@@ -48,14 +46,11 @@ library SwapLib {
         amountOut = zeroForOne ? uint256(-a1) : uint256(-a0);
     }
 
-    /// @notice Swap tokenIn for tokenOut
-    /// @dev The caller of this method receives a callback in the form of IUniswapV3SwapCallback#uniswapV3SwapCallback
-    /// @param tokenIn Token being sold.
-    /// @param tokenOut Token being bought.
-    /// @param amountOutRequested Maximum amount of `tokenOut` to receive.
-    /// @param sqrtPriceLimitX96 The Q64.96 sqrt price limit. If zero for one, the price cannot move beyond this limit.
+    /// @notice Buy up to `amountOutRequested` of `tokenOut`, stopping early if the price limit is reached.
+    /// @dev The caller receives an `IUniswapV3SwapCallback#uniswapV3SwapCallback` and must pay the pool there.
+    /// @param sqrtPriceLimitX96 Q64.96 marginal-price bound; pass 0 for no bound (fills to the tick range's edge).
     /// @return amountIn Realized amount of `tokenIn` spent.
-    /// @return amountOut Realized amount of `tokenOut` received.
+    /// @return amountOut Realized amount of `tokenOut` received (< `amountOutRequested` on a partial fill).
     function swapExactOutToLimit(
         IUniswapV3Pool pool,
         IERC20 tokenIn,
@@ -81,13 +76,12 @@ library SwapLib {
 
     /// @notice Resolve the `sqrtPriceLimitX96` and a go/skip flag for a swap selling `tokenIn` for `tokenOut` on
     /// `pool`, bounding price impact to `maxSlippageBps` away from a fair rate of `outPerInNum / outPerInDen`.
-    /// @param pool The Uniswap V3 pool address for the `tokenIn`/`tokenOut` pair.
-    /// @param tokenIn The token the swap sells.
-    /// @param tokenOut The token the swap buys.
+    /// @dev The bound is on the pool's marginal price, i.e. on price impact only - the LP fee is taken on the input
+    /// and sits outside it.
     /// @param outPerInNum Numerator of the fair `tokenOut`-per-`tokenIn` rate.
     /// @param outPerInDen Denominator of the fair `tokenOut`-per-`tokenIn` rate.
-    /// @param maxSlippageBps Maximum slippage allowed in basis points.
     /// @return limit The Q64.96 price limit to pass to the pool.
+    /// @return ok False when the pool is already priced past the bound, i.e. the caller should skip the swap.
     function swapLimit(
         IUniswapV3Pool pool,
         IERC20 tokenIn,

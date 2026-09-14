@@ -16,6 +16,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -57,6 +58,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
     IERC20 public immutable LOAN_TOKEN;
     /// @inheritdoc IFCMVault
     IERC20 public immutable YIELD_TOKEN;
+
+    /// @dev Decimals of `COLLATERAL_TOKEN`, read once at construction to scale `decimals()`.
+    uint8 internal immutable UNDERLYING_DECIMALS;
 
     /// @inheritdoc IFCMVault
     uint128 public immutable LTV_MIN;
@@ -152,6 +156,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         COLLATERAL_TOKEN = IERC20(p.collateralToken);
         LOAN_TOKEN = IERC20(p.loanToken);
         YIELD_TOKEN = IERC20(p.yieldToken);
+        // No fallback: a collateral token without ERC20 metadata should fail at deploy rather than mis-scale shares.
+        UNDERLYING_DECIMALS = IERC20Metadata(p.collateralToken).decimals();
 
         LTV_MIN = p.ltvMin;
         LTV_MAX = p.ltvMax;
@@ -272,6 +278,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
 
         (, uint256 loanOut) = _swapYieldToLoanWithLimit({yieldToSell: yieldToHarvest, loanToGet: 0});
         (uint256 loanIn, uint256 collateralOut) = _swapLoanToCollateralWithLimit(loanOut);
+        // Loan tokens are invisible to `totalAssets`, so a partial fill here would silently burn value: revert and let
+        // the caller retry with a `maximumYield` the collateral/loan pool can absorb. Leg 1 may partial-fill freely.
         require(loanIn == loanOut, LeftoverLoanTokens());
         if (collateralOut > 0) {
             MORPHO.supplyCollateral(_market(), collateralOut, address(this), "");
@@ -359,6 +367,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
             SwapLib.swapExactInToLimit(YIELD_LOAN_POOL, LOAN_TOKEN, YIELD_TOKEN, toBorrow, 0);
         }
 
+        // Price the mint off the NAV the deposit actually produced, not the assets handed in - so the depositor's own
+        // swap cost lands on their share count instead of being socialized.
         uint256 contributed = totalAssets() - navBefore;
         shares = contributed.mulDiv(_totalClaims(), navBefore + 1, Math.Rounding.Floor);
         _mint(receiver, shares);
@@ -389,6 +399,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         if (msg.sender != owner) _spendAllowance(owner, msg.sender, shares);
 
         _accrueFees();
+        // Above the band the yield slice no longer covers the debt slice, so every exit would have to raise the gap on
+        // the collateral/loan pool - blocked so redeemers don't race the rebalancer for it. A vault with no yield left
+        // has nothing to race over. `redeemInKind` is never gated.
         if (!_isHealthy() && _yield() != 0) revert VaultUnhealthy();
         uint256 assetBefore = COLLATERAL_TOKEN.balanceOf(address(this));
 
@@ -448,6 +461,11 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
     /// @inheritdoc IFCMVault
     function asset() external view returns (address) {
         return address(COLLATERAL_TOKEN);
+    }
+
+    /// @inheritdoc IFCMVault
+    function decimals() public view override(ERC20, IFCMVault) returns (uint8) {
+        return UNDERLYING_DECIMALS + _decimalsOffset();
     }
 
     /// @inheritdoc IFCMVault
@@ -543,6 +561,7 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         uint256 borrowShareSlice = borrowShares.mulDiv(shares, totalSupply, Math.Rounding.Ceil);
         uint256 collSlice = _collateral().mulDiv(shares, totalSupply, Math.Rounding.Floor);
 
+        // No debt to repay means no callback to reconcile in, so do the same work inline.
         if (borrowShareSlice == 0) {
             if (collSlice > 0) {
                 MORPHO.withdrawCollateral(_market(), collSlice, address(this), address(this));
@@ -556,7 +575,9 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         MORPHO.repay(_market(), 0, borrowShareSlice, address(this), abi.encode(collSlice, loanOut));
     }
 
-    /// @dev Morpho callback from _unwindSlice.
+    /// @dev Morpho callback from `_unwindSlice`, invoked after the debt shares are burned but before Morpho pulls the
+    /// loan tokens. That ordering is what makes the collateral withdrawal below health-neutral at any LTV.
+    /// Not `nonReentrant`: the guard is already ENTERED from `redeem`, so `msg.sender` is the authentication instead.
     function onMorphoRepay(uint256 debtSlice, bytes calldata data) external {
         require(msg.sender == address(MORPHO), Unauthorized());
         (uint256 collSlice, uint256 loanOut) = abi.decode(data, (uint256, uint256));
@@ -578,6 +599,8 @@ contract FCMVault is IFCMVault, ERC20, Ownable2Step, ReentrancyGuard, IMorphoRep
         IERC20(tokenIn).safeTransfer(msg.sender, amountToPay);
     }
 
+    /// @dev Pass `yieldToSell` to sell an exact amount (harvest), or `loanToGet` to buy an exact amount (delever).
+    /// Returns (0, 0) rather than reverting when the pool is already priced past the oracle bound.
     function _swapYieldToLoanWithLimit(uint256 yieldToSell, uint256 loanToGet)
         internal
         returns (uint256 yieldIn, uint256 loanOut)

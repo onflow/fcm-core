@@ -6,6 +6,7 @@ import {IMorpho} from "@morpho-blue/interfaces/IMorpho.sol";
 import {IOracle} from "@morpho-blue/interfaces/IOracle.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 /// @title IFCMVault
 /// @author Flow Foundation
@@ -112,7 +113,7 @@ interface IFCMVault is IERC4626 {
     error InvalidLtv();
     /// @notice Thrown when unaccounted loan tokens remain in the vault.
     error LeftoverLoanTokens();
-    /// @notice Thrown when redeeming while the vault is underwater.
+    /// @notice Thrown when redeeming while LTV exceeds `LTV_MAX` and the vault still holds yield.
     error VaultUnhealthy();
 
     /// @notice Permissionlessly accrue fees up to the current block.
@@ -126,7 +127,8 @@ interface IFCMVault is IERC4626 {
     /// @param maximumYield Maximum yield tokens to sell in this harvest.
     function harvest(uint256 maximumYield) external;
 
-    /// @notice Schedule a timelocked emergency recovery. Executable after `recoveryDelay`
+    /// @notice Schedule a timelocked emergency recovery. Executable after `EMERGENCY_RECOVERY_DELAY`.
+    /// @dev Freezes `deposit`/`harvest` and lever-up immediately; `redeem`/`redeemInKind` stay open for the window.
     function scheduleEmergencyRecovery() external;
     /// @notice Cancel a pending recovery during its timelock window.
     /// @dev Its not possible to cancel after the emergency recovery has been executed.
@@ -136,6 +138,8 @@ interface IFCMVault is IERC4626 {
     /// @dev The position is fully unwound and all assets are swept to the owner. Oracle-independent by construction:
     /// fees are never accrued here (no NAV mark), and `withdrawCollateral` after the debt is cleared short-circuits
     /// Morpho's health check.
+    /// @dev IRREVERSIBLE: `redeem`, `redeemInKind` and `rebalance` revert forever after this. Shares survive with no
+    /// on-chain claim; distribution to holders is off-chain.
     function executeEmergencyRecovery() external;
 
     /// @notice Swap-free, in-kind redemption: the sender repays `owner`'s pro-rata debt slice in `loanToken` and burns
@@ -252,10 +256,18 @@ interface IFCMVault is IERC4626 {
     /// @notice Mapping of addresses to their early access status.
     function earlyAccess(address account) external view returns (bool hasEarlyAccess);
 
+    /// @notice Decimals of the share token: the collateral token's, plus the virtual-share offset.
+    /// @dev Absorbing the offset here keeps one whole share worth roughly one whole asset at inception, so a balance
+    /// formatted with this value reads on the same scale `convertToAssets` works in.
+    /// @dev The collateral token's decimals are read once at construction; a collateral token without ERC20 metadata
+    /// reverts the deployment rather than mis-scaling shares.
+    function decimals() external view override(IERC20Metadata) returns (uint8);
     /// @notice The underlying asset managed by the vault (the collateral token).
     function asset() external view override(IERC4626) returns (address);
     /// @notice Returns the vault's net asset value (NAV) denominated in the underlying asset (collateral token).
-    /// @dev NAV = collateral + yield - debt.
+    /// @dev NAV = collateral + yield - debt, with the yield leg marked down and the debt marked up.
+    /// @dev Values only those three legs; a raw loan-token balance is deliberately excluded so a donation cannot move
+    /// NAV, and with it share minting, fee accrual and the high-water mark.
     /// @dev Returns 0 if debt exceeds gross value (an underwater position).
     /// @dev This is a stale read by default - senders that need an up-to-the-block NAV must accrue interest first.
     function totalAssets() external view override(IERC4626) returns (uint256 assets);

@@ -5,6 +5,8 @@ import {FCMVault} from "../src/FCMVault.sol";
 import {FCMHelpers} from "../src/libraries/periphery/FCMHelpers.sol";
 import {Deployers} from "./utils/Deployers.sol";
 import {Errors} from "./utils/Errors.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -22,6 +24,18 @@ contract FCMMiscTest is Test, Deployers {
 
     function test_misc_assetReturnsCollateralToken() public view {
         assertEq(address(vault.asset()), address(COLLATERAL_TOKEN));
+    }
+
+    /// @dev Shares are scaled by the decimals offset, so `decimals()` must absorb it - otherwise a UI formatting a
+    /// balance with this value is off by `10 ** offset` and one whole share does not read as one whole asset.
+    function test_misc_decimalsAbsorbTheOffset() public {
+        uint8 assetDecimals = IERC20Metadata(address(COLLATERAL_TOKEN)).decimals();
+        assertEq(vault.decimals(), assetDecimals + 6);
+
+        // One whole asset in must mint ~one whole share, measured at each token's own reported scale.
+        vm.prank(alice);
+        uint256 shares = vault.deposit(10 ** assetDecimals, alice);
+        assertApproxEqRel(shares, 10 ** vault.decimals(), 0.01e18);
     }
 
     function test_misc_convertToShares() public {
